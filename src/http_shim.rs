@@ -195,7 +195,7 @@ function _parseOptions(input, options) {
     }
   }
   if (input && typeof input === 'object' && !(input instanceof URL)) {
-    return input;
+    return { ...input };
   }
   if (input instanceof URL) {
     return {
