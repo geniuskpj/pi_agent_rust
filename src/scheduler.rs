@@ -351,21 +351,26 @@ impl<C: Clock> Scheduler<C> {
     }
 
     fn allocate_timer_id(&mut self) -> u64 {
-        if self.next_timer_id < u64::MAX {
-            let timer_id = self.next_timer_id;
-            self.next_timer_id += 1;
-            return timer_id;
-        }
+        let start = self.next_timer_id;
+        let mut candidate = start;
+        
+        loop {
+            // Calculate the next ID to try after this one
+            self.next_timer_id = if candidate == u64::MAX {
+                1
+            } else {
+                candidate + 1
+            };
 
-        if !self.timer_id_in_use(u64::MAX) {
-            self.next_timer_id = 1;
-            return u64::MAX;
-        }
-
-        for candidate in 1..u64::MAX {
             if !self.timer_id_in_use(candidate) {
-                self.next_timer_id = candidate.saturating_add(1);
                 return candidate;
+            }
+
+            candidate = self.next_timer_id;
+
+            // If we've looped all the way around back to where we started, we're exhausted.
+            if candidate == start {
+                break;
             }
         }
 
