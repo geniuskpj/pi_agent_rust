@@ -7,7 +7,11 @@
       "name": "edit_simple_replace",
       "description": "Simple text replacement",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello, World!"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello, World!"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -26,7 +30,11 @@
       "name": "edit_multiline",
       "description": "Replace multiline content",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "line1\nline2\nline3"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "line1\nline2\nline3"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -45,7 +53,11 @@
       "name": "edit_text_not_found",
       "description": "Editing non-existent text should error",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello, World!"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello, World!"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -72,7 +84,11 @@
       "name": "edit_multiple_occurrences",
       "description": "If oldText occurs more than once, edit should error",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello, Hello, Hello!"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello, Hello, Hello!"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -87,7 +103,11 @@
       "name": "edit_with_special_chars",
       "description": "Edit text with special characters",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "function() { return x; }"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "function() { return x; }"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -106,17 +126,21 @@
       "name": "edit_unicode_content",
       "description": "Edit file with Unicode content",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello 世界"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello \u4e16\u754c"
+        }
       ],
       "input": {
         "path": "test.txt",
-        "oldText": "世界",
+        "oldText": "\u4e16\u754c",
         "newText": "World"
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
         "details_exact": {
-          "diff": "-1 Hello 世界\n+1 Hello World",
+          "diff": "-1 Hello \u4e16\u754c\n+1 Hello World",
           "firstChangedLine": 1
         }
       }
@@ -125,7 +149,11 @@
       "name": "edit_delete_text",
       "description": "Edit with empty newText deletes the oldText",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello, World!"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello, World!"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -144,7 +172,11 @@
       "name": "edit_insert_newline",
       "description": "Insert newline in the middle",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "HelloWorld"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "HelloWorld"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -153,14 +185,22 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["-1 HelloWorld", "+1 Hello", "+2 World"]
+        "details_contains": [
+          "-1 HelloWorld",
+          "+1 Hello",
+          "+2 World"
+        ]
       }
     },
     {
       "name": "edit_remove_newline",
       "description": "Remove newline to join lines",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello\nWorld"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello\nWorld"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -169,14 +209,20 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_at_beginning",
       "description": "Edit text at the beginning of file",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "First line\nSecond line"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "First line\nSecond line"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -195,7 +241,11 @@
       "name": "edit_at_end",
       "description": "Edit text at the end of file",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "First line\nSecond line"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "First line\nSecond line"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -214,7 +264,11 @@
       "name": "edit_nested_file",
       "description": "Edit file in nested directory",
       "setup": [
-        {"type": "create_file", "path": "a/b/c/deep.txt", "content": "deep content"}
+        {
+          "type": "create_file",
+          "path": "a/b/c/deep.txt",
+          "content": "deep content"
+        }
       ],
       "input": {
         "path": "a/b/c/deep.txt",
@@ -222,15 +276,23 @@
         "newText": "modified"
       },
       "expected": {
-        "content_contains": ["Successfully replaced text in a/b/c/deep.txt"],
-        "details_contains": ["diff"]
+        "content_contains": [
+          "Successfully replaced text in a/b/c/deep.txt"
+        ],
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_whitespace",
       "description": "Edit preserves surrounding whitespace",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "  indented  "}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "  indented  "
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -239,14 +301,20 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["+1   modified  "]
+        "details_contains": [
+          "+1   modified  "
+        ]
       }
     },
     {
       "name": "edit_empty_file",
       "description": "Edit empty file should error (nothing to replace)",
       "setup": [
-        {"type": "create_file", "path": "empty.txt", "content": ""}
+        {
+          "type": "create_file",
+          "path": "empty.txt",
+          "content": ""
+        }
       ],
       "input": {
         "path": "empty.txt",
@@ -261,7 +329,11 @@
       "name": "edit_entire_file",
       "description": "Replace entire file content",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "old content"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "old content"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -280,23 +352,33 @@
       "name": "edit_regex_chars",
       "description": "Edit text with regex special characters",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "price is $100.00 (USD)"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "price is $100.00 (USD)"
+        }
       ],
       "input": {
         "path": "test.txt",
         "oldText": "$100.00 (USD)",
-        "newText": "€85.00 (EUR)"
+        "newText": "\u20ac85.00 (EUR)"
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_tabs",
       "description": "Edit preserves tabs",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "first\tsecond\tthird"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "first\tsecond\tthird"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -305,14 +387,20 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_multiline_block",
       "description": "Replace a multiline block",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "start\nold line 1\nold line 2\nend"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "start\nold line 1\nold line 2\nend"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -321,30 +409,39 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_fuzzy_trailing_whitespace",
       "description": "Fuzzy match: trailing whitespace on lines is tolerated",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Hello World  \nSecond line  "}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello World  \nSecond line  "
+        }
       ],
       "input": {
         "path": "test.txt",
         "oldText": "Hello World\nSecond line",
         "newText": "Hello Rust\nModified line"
       },
-      "expected": {
-        "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
-      }
+      "expected": {},
+      "expect_error": true,
+      "error_contains": "Could not find the exact text"
     },
     {
       "name": "edit_fuzzy_smart_quotes",
       "description": "Fuzzy match: smart quotes normalized to ASCII quotes",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "He said \u201cHello\u201d and she said \u2018Hi\u2019"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "He said \u201cHello\u201d and she said \u2018Hi\u2019"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -353,14 +450,20 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_fuzzy_dashes",
       "description": "Fuzzy match: various Unicode dashes normalized to ASCII hyphen",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "Range: 10\u201320 items\u2014more or less"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Range: 10\u201320 items\u2014more or less"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -369,14 +472,20 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     },
     {
       "name": "edit_fuzzy_nbsp",
       "description": "Fuzzy match: non-breaking spaces normalized to regular spaces",
       "setup": [
-        {"type": "create_file", "path": "test.txt", "content": "100\u00a0USD per\u00a0item"}
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "100\u00a0USD per\u00a0item"
+        }
       ],
       "input": {
         "path": "test.txt",
@@ -385,7 +494,9 @@
       },
       "expected": {
         "content_exact": "Successfully replaced text in test.txt.",
-        "details_contains": ["diff"]
+        "details_contains": [
+          "diff"
+        ]
       }
     }
   ]

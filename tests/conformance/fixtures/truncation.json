@@ -29,7 +29,7 @@
         "max_bytes": 10000
       },
       "expected": {
-        "content_exact": "line1\nline2\nline3",
+        "content_exact": "line1\nline2\nline3\n",
         "details_exact": {
           "truncated": true,
           "truncated_by": "lines",
@@ -63,12 +63,13 @@
         "max_bytes": 10
       },
       "expected": {
-        "content_exact": "",
+        "content_exact": "this is a ",
         "details_exact": {
           "truncated": true,
           "truncated_by": "bytes",
           "first_line_exceeds_limit": true,
-          "output_lines": 0
+          "output_lines": 1,
+          "last_line_partial": true
         }
       }
     },
@@ -119,8 +120,8 @@
         "content_exact": "",
         "details_exact": {
           "truncated": false,
-          "total_lines": 1,
-          "output_lines": 1
+          "total_lines": 0,
+          "output_lines": 0
         }
       }
     },

@@ -14283,7 +14283,14 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                     checked_path.starts_with(&canonical_root)
                                 })
                             });
-                            let allowed = checked_path.starts_with(&workspace_root) || in_ext_root;
+
+                            let in_temp = checked_path.starts_with(crate::extensions::safe_canonicalize(&std::env::temp_dir()));
+                            let in_pi_dir = dirs::home_dir().is_some_and(|home| {
+                                checked_path.starts_with(crate::extensions::safe_canonicalize(&home.join(".pi"))) 
+                                || checked_path.starts_with(crate::extensions::safe_canonicalize(&home.join(".wakatime")))
+                            });
+
+                            let allowed = checked_path.starts_with(&workspace_root) || in_ext_root || in_temp || in_pi_dir;
 
                             if allowed {
                                 Ok(())
