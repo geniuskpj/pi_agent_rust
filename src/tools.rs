@@ -238,16 +238,20 @@ pub fn truncate_head(
     let first_line_bytes = first_newline.unwrap_or(content.len());
     
     if first_line_bytes > max_bytes {
-        content.truncate(0);
+        let mut valid_bytes = max_bytes;
+        while valid_bytes > 0 && !content.is_char_boundary(valid_bytes) {
+            valid_bytes -= 1;
+        }
+        content.truncate(valid_bytes);
         return TruncationResult {
             content,
             truncated: true,
             truncated_by: Some(TruncatedBy::Bytes),
             total_lines,
             total_bytes,
-            output_lines: 0,
-            output_bytes: 0,
-            last_line_partial: false,
+            output_lines: usize::from(valid_bytes > 0),
+            output_bytes: valid_bytes,
+            last_line_partial: true,
             first_line_exceeds_limit: true,
             max_lines,
             max_bytes,
@@ -266,14 +270,8 @@ pub fn truncate_head(
         }
 
         let next_newline = memchr::memchr(b'\n', &content.as_bytes()[current_offset..]);
-        let line_end_without_nl = match next_newline {
-            Some(idx) => current_offset + idx,
-            None => content.len(),
-        };
-        let line_end_with_nl = match next_newline {
-            Some(idx) => current_offset + idx + 1,
-            None => content.len(),
-        };
+        let line_end_without_nl = next_newline.map_or(content.len(), |idx| current_offset + idx);
+        let line_end_with_nl = next_newline.map_or(content.len(), |idx| current_offset + idx + 1);
 
         if line_end_without_nl > max_bytes {
             truncated_by = Some(TruncatedBy::Bytes);

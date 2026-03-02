@@ -1446,10 +1446,22 @@ impl PiApp {
                 };
 
                 let write_fallback = |text: &str| -> std::io::Result<std::path::PathBuf> {
+                    use std::io::Write;
                     let dir = std::env::temp_dir();
                     let filename = format!("pi_copy_{}.txt", Utc::now().timestamp_millis());
                     let path = dir.join(filename);
-                    std::fs::write(&path, text)?;
+                    
+                    let mut options = std::fs::OpenOptions::new();
+                    options.write(true).create_new(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        options.mode(0o600);
+                    }
+                    
+                    let mut file = options.open(&path)?;
+                    file.write_all(text.as_bytes())?;
+                    
                     Ok(path)
                 };
 
