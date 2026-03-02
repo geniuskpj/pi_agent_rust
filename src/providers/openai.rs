@@ -539,6 +539,9 @@ where
             self.partial.usage.input = usage.prompt_tokens;
             self.partial.usage.output = usage.completion_tokens.unwrap_or(0);
             self.partial.usage.total_tokens = usage.total_tokens;
+            if let Some(details) = usage.prompt_tokens_details {
+                self.partial.usage.cache_read = details.cached_tokens.unwrap_or(0);
+            }
         }
 
         if let Some(error) = chunk.error {
@@ -961,6 +964,14 @@ struct OpenAIUsage {
     #[serde(default)]
     completion_tokens: Option<u64>,
     total_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAIPromptTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
