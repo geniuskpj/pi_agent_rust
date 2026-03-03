@@ -1465,10 +1465,13 @@ pub fn has_v2_sidecar(jsonl_path: &Path) -> bool {
 }
 
 fn append_jsonl_line<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let mut file = secure_open_options().create(true).append(true).open(path)?;
-    // Serialize directly to file — avoids intermediate Vec<u8> allocation.
-    serde_json::to_writer(&mut file, value)?;
-    file.write_all(b"\n")?;
+    let file = secure_open_options().create(true).append(true).open(path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    // Serialize directly to buffered file — avoids intermediate Vec<u8> allocation
+    // while preventing excessive write syscalls.
+    serde_json::to_writer(&mut writer, value)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
     Ok(())
 }
 

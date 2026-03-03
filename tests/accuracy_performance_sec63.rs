@@ -462,7 +462,7 @@ fn decision_throughput_under_load() {
             let _ = dispatch_host_call_shared(&ctx, call).await;
             let elapsed = start_dispatch.elapsed().as_micros();
             if idx % 10 == 0 || elapsed > 1000 {
-                println!("dispatch {} took {}us", idx, elapsed);
+                println!("dispatch {idx} took {elapsed}us");
             }
         }
     });
