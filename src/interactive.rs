@@ -1398,6 +1398,13 @@ pub struct PiApp {
 }
 
 impl PiApp {
+    fn initial_window_size_cmd() -> Cmd {
+        Cmd::new(|| {
+            let (width, height) = terminal::size().unwrap_or((80, 24));
+            Message::new(WindowSizeMsg { width, height })
+        })
+    }
+
     /// Create a new Pi application.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
@@ -1738,9 +1745,10 @@ impl PiApp {
         } else {
             Some(Cmd::new(|| Message::new(PiMsg::RunPending)))
         };
+        let size_cmd = Some(Self::initial_window_size_cmd());
 
         // Batch commands
-        batch(vec![input_cmd, pending_cmd])
+        batch(vec![input_cmd, pending_cmd, size_cmd])
     }
 
     fn spinner_init_cmd(&self) -> Option<Cmd> {

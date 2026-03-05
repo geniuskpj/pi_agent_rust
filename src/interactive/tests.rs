@@ -66,6 +66,19 @@ fn tool_progress_update_from_no_details() {
 }
 
 #[test]
+fn initial_window_size_cmd_emits_window_size_message() {
+    let msg = PiApp::initial_window_size_cmd()
+        .execute()
+        .expect("window size message");
+    let size = msg
+        .downcast::<WindowSizeMsg>()
+        .expect("window size message type");
+
+    assert!(size.width > 0);
+    assert!(size.height > 0);
+}
+
+#[test]
 fn tool_message_auto_collapse_threshold() {
     // Small output: not collapsed.
     let small = ConversationMessage::tool("Tool bash:\nline1\nline2".to_string());
