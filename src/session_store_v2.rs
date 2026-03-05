@@ -1079,7 +1079,7 @@ impl SessionStoreV2 {
                         frame
                     }
                     Err(err) => {
-                        let at_eof = reader.fill_buf()?.is_empty();
+                        let at_eof = reader.fill_buf().map(|b| b.is_empty()).unwrap_or(false);
                         tracing::warn!(
                             segment = %seg_path.display(),
                             line_number,
