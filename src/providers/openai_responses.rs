@@ -424,6 +424,7 @@ where
     text_blocks: HashMap<TextKey, usize>,
     reasoning_blocks: HashMap<ReasoningKey, usize>,
     tool_calls_by_item_id: HashMap<String, ToolCallState>,
+    orphan_tool_call_arguments: HashMap<String, String>,
     /// Consecutive WriteZero errors seen without a successful event in between.
     write_zero_count: usize,
 }
@@ -451,6 +452,7 @@ where
             text_blocks: HashMap::new(),
             reasoning_blocks: HashMap::new(),
             tool_calls_by_item_id: HashMap::new(),
+            orphan_tool_call_arguments: HashMap::new(),
             write_zero_count: 0,
         }
     }
@@ -551,6 +553,12 @@ where
                 {
                     self.ensure_started();
 
+                    let mut buffered_arguments = self
+                        .orphan_tool_call_arguments
+                        .remove(&id)
+                        .unwrap_or_default();
+                    buffered_arguments.insert_str(0, &arguments);
+
                     let content_index = self.partial.content.len();
                     self.partial.content.push(ContentBlock::ToolCall(ToolCall {
                         id: call_id.clone(),
@@ -565,17 +573,17 @@ where
                             content_index,
                             call_id,
                             name,
-                            arguments: arguments.clone(),
+                            arguments: buffered_arguments.clone(),
                         },
                     );
 
                     self.pending_events
                         .push_back(StreamEvent::ToolCallStart { content_index });
 
-                    if !arguments.is_empty() {
+                    if !buffered_arguments.is_empty() {
                         self.pending_events.push_back(StreamEvent::ToolCallDelta {
                             content_index,
-                            delta: arguments,
+                            delta: buffered_arguments,
                         });
                     }
                 }
@@ -588,6 +596,11 @@ where
                         content_index: tc.content_index,
                         delta,
                     });
+                } else {
+                    self.orphan_tool_call_arguments
+                        .entry(item_id)
+                        .or_default()
+                        .push_str(&delta);
                 }
             }
             OpenAIResponsesChunk::OutputItemDone { item } => {
@@ -670,7 +683,10 @@ where
                         content_index,
                         call_id: call_id.to_string(),
                         name: name.to_string(),
-                        arguments: String::new(),
+                        arguments: self
+                            .orphan_tool_call_arguments
+                            .remove(item_id)
+                            .unwrap_or_default(),
                     },
                     true,
                 )
@@ -1410,6 +1426,57 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn test_stream_preserves_orphan_tool_call_deltas_until_done() {
+        let events = vec![
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_4",
+                "delta": "{\"text\":\"buffered\"}"
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_4",
+                    "call_id": "call_4",
+                    "name": "echo",
+                    "arguments": "",
+                    "status": "completed"
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "incomplete_details": null,
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }
+            }),
+        ];
+
+        let out = collect_events(&events);
+        assert!(out.iter().any(
+            |event| matches!(event, StreamEvent::ToolCallStart { .. })
+        ));
+        assert!(out.iter().any(
+            |event| matches!(event, StreamEvent::ToolCallDelta { delta, .. } if delta == "{\"text\":\"buffered\"}")
+        ));
+
+        let tool_end = out
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::ToolCallEnd { tool_call, .. } => Some(tool_call),
+                _ => None,
+            })
+            .expect("tool call end");
+        assert_eq!(tool_end.id, "call_4");
+        assert_eq!(tool_end.arguments, json!({ "text": "buffered" }));
     }
 
     #[test]

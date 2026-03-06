@@ -5089,7 +5089,7 @@ impl AgentSession {
                     cwd,
                     Arc::clone(&tools),
                     manager.clone(),
-                    resolved_policy,
+                    resolved_policy.clone(),
                     runtime_repair_mode,
                     memory_limit_bytes,
                 )
@@ -5100,7 +5100,7 @@ impl AgentSession {
                     cwd,
                     Arc::clone(&tools),
                     manager.clone(),
-                    resolved_policy,
+                    resolved_policy.clone(),
                     runtime_repair_mode,
                     memory_limit_bytes,
                 )
@@ -5806,7 +5806,10 @@ mod tests {
     #[test]
     fn enable_extensions_policy_resolution_defaults_to_permissive() {
         let policy = AgentSession::resolve_extension_policy_for_enable(None, None);
-        assert_eq!(policy.mode, crate::extensions::ExtensionPolicyMode::Permissive);
+        assert_eq!(
+            policy.mode,
+            crate::extensions::ExtensionPolicyMode::Permissive
+        );
     }
 
     #[test]
@@ -5836,7 +5839,10 @@ mod tests {
         let explicit = crate::extensions::PolicyProfile::Permissive.to_policy();
         let policy =
             AgentSession::resolve_extension_policy_for_enable(Some(&config), Some(explicit));
-        assert_eq!(policy.mode, crate::extensions::ExtensionPolicyMode::Permissive);
+        assert_eq!(
+            policy.mode,
+            crate::extensions::ExtensionPolicyMode::Permissive
+        );
     }
 
     #[test]
