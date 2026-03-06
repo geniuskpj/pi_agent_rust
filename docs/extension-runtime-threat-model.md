@@ -89,7 +89,7 @@ Attacker goals:
 - Vector: ambiguous defaults or unknown profile names.
 - Impact: accidental `exec`/`env` exposure.
 - Control:
-  - default profile changed to `safe`.
+  - default profile changed to `permissive`; strict mode remains an explicit opt-in.
   - unknown profile tokens fail closed to `safe`.
   - explicit opt-in path for dangerous caps (`allowDangerous`, profile overrides).
 - Evidence:
@@ -115,7 +115,7 @@ Attacker goals:
 | Traversal read `/fake/../etc/hostname` | denied | `tests/security_fs_escape.rs::read_file_traversal_with_dot_dot` |
 | Stat/exists outside root via host fallback | denied/false | `tests/extensions_fs_shim.rs::fs_stat_host_fallback` |
 | `exec` denied under safe defaults | deny | `tests/extensions_policy_negative.rs::exec_tool_denied_by_default_policy` |
-| Non-dangerous default caps in safe mode | allow | `tests/capability_policy_scoped.rs::default_config_resolves_to_safe` |
+| Default config resolves to permissive mode | allow-most | `tests/capability_policy_scoped.rs::default_config_resolves_to_permissive` |
 
 ## 7. Residual Gaps and Owners
 

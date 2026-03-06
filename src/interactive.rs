@@ -39,7 +39,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::agent::{AbortHandle, Agent, AgentEvent, QueueMode};
 use crate::autocomplete::{AutocompleteCatalog, AutocompleteItem, AutocompleteItemKind};
-use crate::config::{Config, SettingsScope, parse_queue_mode_or_default};
+use crate::config::{Config, ExtensionPolicyConfig, SettingsScope, parse_queue_mode_or_default};
 use crate::extension_events::{InputEventOutcome, apply_input_event_response};
 use crate::extensions::{
     EXTENSION_EVENT_TIMEOUT_MS, ExtensionDeliverAs, ExtensionEventName, ExtensionHostActions,
@@ -347,6 +347,14 @@ impl PiApp {
         })
     }
 
+    fn effective_default_permissive(&self) -> bool {
+        self.config
+            .extension_policy
+            .as_ref()
+            .and_then(|policy| policy.default_permissive)
+            .unwrap_or(true)
+    }
+
     fn apply_hardware_cursor(show: bool) {
         let mut stdout = std::io::stdout();
         if show {
@@ -361,6 +369,23 @@ impl PiApp {
         match entry {
             SettingsUiEntry::SteeringMode | SettingsUiEntry::FollowUpMode => {
                 self.toggle_queue_mode_setting(entry);
+            }
+            SettingsUiEntry::DefaultPermissive => {
+                let next = !self.effective_default_permissive();
+                if self.persist_project_settings_patch(
+                    "extensionPolicy.defaultPermissive",
+                    json!({ "extensionPolicy": { "defaultPermissive": next } }),
+                ) {
+                    let policy = self
+                        .config
+                        .extension_policy
+                        .get_or_insert_with(ExtensionPolicyConfig::default);
+                    policy.default_permissive = Some(next);
+                    self.status_message = Some(format!(
+                        "Updated extensionPolicy.defaultPermissive: {}",
+                        bool_label(next)
+                    ));
+                }
             }
             SettingsUiEntry::QuietStartup => {
                 let next = !self.config.quiet_startup.unwrap_or(false);
@@ -559,6 +584,7 @@ impl PiApp {
         let keep_recent = self.config.compaction_keep_recent_tokens();
         let steering = self.config.steering_queue_mode();
         let follow_up = self.config.follow_up_queue_mode();
+        let default_permissive = self.effective_default_permissive();
         let quiet_startup = self.config.quiet_startup.unwrap_or(false);
         let collapse_changelog = self.config.collapse_changelog.unwrap_or(false);
         let hide_thinking_block = self.config.hide_thinking_block.unwrap_or(false);
@@ -583,6 +609,11 @@ impl PiApp {
         );
         let _ = writeln!(output, "  steeringMode: {}", steering.as_str());
         let _ = writeln!(output, "  followUpMode: {}", follow_up.as_str());
+        let _ = writeln!(
+            output,
+            "  extensionPolicy.defaultPermissive: {}",
+            bool_label(default_permissive)
+        );
         let _ = writeln!(output, "  quietStartup: {}", bool_label(quiet_startup));
         let _ = writeln!(
             output,

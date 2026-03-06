@@ -608,9 +608,12 @@ fn e2e_cli_explain_extension_policy_outputs_remediation() {
         payload["dangerous_capability_opt_in"]["config_example"]["extensionPolicy"]["allowDangerous"],
         true
     );
-    assert_eq!(payload["migration_guardrails"]["default_profile"], "safe");
+    assert_eq!(
+        payload["migration_guardrails"]["default_profile"],
+        "permissive"
+    );
     assert!(
-        payload["migration_guardrails"]["opt_in_cli"]["balanced_prompt_mode"]
+        payload["migration_guardrails"]["override_cli"]["balanced_prompt_mode"]
             .as_str()
             .is_some_and(|value| value.contains("--extension-policy balanced"))
     );
@@ -668,9 +671,10 @@ fn e2e_cli_explain_extension_policy_supports_legacy_standard_alias() {
 }
 
 #[test]
-fn e2e_cli_explain_extension_policy_default_is_safe_with_guardrails() {
-    let harness =
-        CliTestHarness::new("e2e_cli_explain_extension_policy_default_is_safe_with_guardrails");
+fn e2e_cli_explain_extension_policy_default_is_permissive_with_guardrails() {
+    let harness = CliTestHarness::new(
+        "e2e_cli_explain_extension_policy_default_is_permissive_with_guardrails",
+    );
     let result = harness.run(&["--explain-extension-policy"]);
 
     assert_exit_code(&harness.harness, &result, 0);
@@ -678,10 +682,13 @@ fn e2e_cli_explain_extension_policy_default_is_safe_with_guardrails() {
 
     let payload: serde_json::Value =
         serde_json::from_str(&result.stdout).expect("explain output should be valid JSON");
-    assert_eq!(payload["requested_profile"], "safe");
-    assert_eq!(payload["effective_profile"], "safe");
+    assert_eq!(payload["requested_profile"], "permissive");
+    assert_eq!(payload["effective_profile"], "permissive");
     assert_eq!(payload["profile_source"], "default");
-    assert_eq!(payload["migration_guardrails"]["default_profile"], "safe");
+    assert_eq!(
+        payload["migration_guardrails"]["default_profile"],
+        "permissive"
+    );
     assert_eq!(
         payload["migration_guardrails"]["active_default_profile"],
         true

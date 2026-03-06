@@ -101,13 +101,13 @@ mod config_resolution {
     use super::*;
 
     #[test]
-    fn default_config_resolves_to_safe() {
+    fn default_config_resolves_to_permissive() {
         let config = Config::default();
         let policy = config.resolve_extension_policy(None);
-        let safe = PolicyProfile::Safe.to_policy();
-        assert_eq!(policy.mode, safe.mode);
-        assert_eq!(policy.default_caps, safe.default_caps);
-        assert_eq!(policy.deny_caps, safe.deny_caps);
+        let permissive = PolicyProfile::Permissive.to_policy();
+        assert_eq!(policy.mode, permissive.mode);
+        assert_eq!(policy.default_caps, permissive.default_caps);
+        assert_eq!(policy.deny_caps, permissive.deny_caps);
     }
 
     #[test]
@@ -169,6 +169,7 @@ mod config_resolution {
         let config = Config {
             extension_policy: Some(ExtensionPolicyConfig {
                 profile: Some("safe".to_string()),
+                default_permissive: None,
                 allow_dangerous: None,
             }),
             ..Default::default()
@@ -182,6 +183,7 @@ mod config_resolution {
         let config = Config {
             extension_policy: Some(ExtensionPolicyConfig {
                 profile: Some("safe".to_string()),
+                default_permissive: None,
                 allow_dangerous: None,
             }),
             ..Default::default()
@@ -196,6 +198,7 @@ mod config_resolution {
         let config = Config {
             extension_policy: Some(ExtensionPolicyConfig {
                 profile: None,
+                default_permissive: Some(false),
                 allow_dangerous: Some(true),
             }),
             ..Default::default()
@@ -216,6 +219,7 @@ mod config_resolution {
         let config = Config {
             extension_policy: Some(ExtensionPolicyConfig {
                 profile: None,
+                default_permissive: Some(false),
                 allow_dangerous: Some(false),
             }),
             ..Default::default()
@@ -231,6 +235,7 @@ mod config_resolution {
         let config = Config {
             extension_policy: Some(ExtensionPolicyConfig {
                 profile: Some("safe".to_string()),
+                default_permissive: None,
                 allow_dangerous: Some(true),
             }),
             ..Default::default()
@@ -250,9 +255,9 @@ mod config_resolution {
             ..Default::default()
         };
         let policy = config.resolve_extension_policy(None);
-        let safe = PolicyProfile::Safe.to_policy();
-        assert_eq!(policy.mode, safe.mode);
-        assert_eq!(policy.default_caps, safe.default_caps);
+        let permissive = PolicyProfile::Permissive.to_policy();
+        assert_eq!(policy.mode, permissive.mode);
+        assert_eq!(policy.default_caps, permissive.default_caps);
     }
 }
 
@@ -265,19 +270,21 @@ mod config_deserialization {
 
     #[test]
     fn extension_policy_config_from_json() {
-        let json = r#"{"extensionPolicy": {"profile": "safe", "allowDangerous": true}}"#;
+        let json = r#"{"extensionPolicy": {"profile": "safe", "defaultPermissive": false, "allowDangerous": true}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
         let epc = config.extension_policy.expect("should have policy config");
         assert_eq!(epc.profile, Some("safe".to_string()));
+        assert_eq!(epc.default_permissive, Some(false));
         assert_eq!(epc.allow_dangerous, Some(true));
     }
 
     #[test]
     fn extension_policy_config_snake_case() {
-        let json = r#"{"extension_policy": {"profile": "permissive", "allow_dangerous": false}}"#;
+        let json = r#"{"extension_policy": {"profile": "permissive", "default_permissive": true, "allow_dangerous": false}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
         let epc = config.extension_policy.expect("should have policy config");
         assert_eq!(epc.profile, Some("permissive".to_string()));
+        assert_eq!(epc.default_permissive, Some(true));
         assert_eq!(epc.allow_dangerous, Some(false));
     }
 
@@ -294,6 +301,7 @@ mod config_deserialization {
         let config: Config = serde_json::from_str(json).unwrap();
         let epc = config.extension_policy.expect("should have policy config");
         assert_eq!(epc.profile, Some("safe".to_string()));
+        assert_eq!(epc.default_permissive, None);
         assert_eq!(epc.allow_dangerous, None);
     }
 
@@ -302,6 +310,7 @@ mod config_deserialization {
         let config = Config {
             extension_policy: Some(ExtensionPolicyConfig {
                 profile: Some("safe".to_string()),
+                default_permissive: Some(false),
                 allow_dangerous: Some(true),
             }),
             ..Default::default()
@@ -310,6 +319,7 @@ mod config_deserialization {
         let back: Config = serde_json::from_str(&json).unwrap();
         let epc = back.extension_policy.expect("roundtrip");
         assert_eq!(epc.profile, Some("safe".to_string()));
+        assert_eq!(epc.default_permissive, Some(false));
         assert_eq!(epc.allow_dangerous, Some(true));
     }
 }

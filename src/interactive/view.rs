@@ -1299,6 +1299,10 @@ impl PiApp {
                         "followUpMode: {}",
                         self.config.follow_up_queue_mode().as_str()
                     ),
+                    SettingsUiEntry::DefaultPermissive => format!(
+                        "extensionPolicy.defaultPermissive: {}",
+                        bool_label(self.effective_default_permissive())
+                    ),
                     SettingsUiEntry::QuietStartup => format!(
                         "quietStartup: {}",
                         bool_label(self.config.quiet_startup.unwrap_or(false))

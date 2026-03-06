@@ -421,13 +421,26 @@ fn patch_settings_deep_merges_nested_objects() {
 // ─── Extension and repair policy resolution ─────────────────────────────────
 
 #[test]
-fn extension_policy_defaults_to_safe() {
+fn extension_policy_defaults_to_permissive() {
     let _lock = config_lock();
     let config = Config::default();
     let resolved = config.resolve_extension_policy_with_metadata(None);
-    assert_eq!(resolved.effective_profile, "safe");
+    assert_eq!(resolved.requested_profile, "permissive");
+    assert_eq!(resolved.effective_profile, "permissive");
     assert_eq!(resolved.profile_source, "default");
     assert!(!resolved.allow_dangerous);
+}
+
+#[test]
+fn extension_policy_default_permissive_toggle_false_restores_safe() {
+    let _lock = config_lock();
+    let config: Config =
+        serde_json::from_str(r#"{"extensionPolicy": {"defaultPermissive": false}}"#)
+            .expect("parse");
+    let resolved = config.resolve_extension_policy_with_metadata(None);
+    assert_eq!(resolved.requested_profile, "safe");
+    assert_eq!(resolved.effective_profile, "safe");
+    assert_eq!(resolved.profile_source, "config");
 }
 
 #[test]

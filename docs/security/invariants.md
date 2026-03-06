@@ -201,7 +201,7 @@ Embedded copy:
       "tests": [
         "src/config.rs::extension_policy_metadata_unknown_profile_falls_back_to_safe",
         "tests/config_edge_cases.rs::extension_policy_unknown_profile_falls_back_to_safe",
-        "tests/capability_policy_scoped.rs::default_config_resolves_to_safe"
+        "tests/config_edge_cases.rs::extension_policy_default_permissive_toggle_false_restores_safe"
       ]
     },
     {

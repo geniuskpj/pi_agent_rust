@@ -126,7 +126,7 @@ pub struct Config {
 /// ```json
 /// {
 ///   "extensionPolicy": {
-///     "profile": "safe",
+///     "defaultPermissive": true,
 ///     "allowDangerous": false
 ///   }
 /// }
@@ -134,9 +134,12 @@ pub struct Config {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExtensionPolicyConfig {
-    /// Policy profile: "safe" (default), "balanced", or "permissive".
+    /// Policy profile: "safe", "balanced", or "permissive".
     /// Legacy alias "standard" is also accepted.
     pub profile: Option<String>,
+    /// Toggle the fallback profile when `profile` is omitted.
+    #[serde(alias = "defaultPermissive")]
+    pub default_permissive: Option<bool>,
     /// Allow dangerous capabilities (exec, env). Overrides profile's deny list.
     #[serde(alias = "allowDangerous")]
     pub allow_dangerous: Option<bool>,
@@ -630,7 +633,8 @@ impl Config {
     /// 1. `cli_override` (from `--extension-policy` flag)
     /// 2. `PI_EXTENSION_POLICY` environment variable
     /// 3. `extension_policy.profile` from settings.json
-    /// 4. Default: "safe"
+    /// 4. `extension_policy.default_permissive` from settings.json
+    /// 5. Default: "permissive"
     ///
     /// If `allow_dangerous` is true (from config or env), exec/env are removed
     /// from the policy's deny list.
@@ -649,7 +653,25 @@ impl Config {
                             .as_ref()
                             .and_then(|p| p.profile.clone())
                             .map_or_else(
-                                || ("safe".to_string(), "default"),
+                                || {
+                                    self.extension_policy
+                                        .as_ref()
+                                        .and_then(|p| p.default_permissive)
+                                        .map_or_else(
+                                            || ("permissive".to_string(), "default"),
+                                            |default_permissive| {
+                                                (
+                                                    if default_permissive {
+                                                        "permissive"
+                                                    } else {
+                                                        "safe"
+                                                    }
+                                                    .to_string(),
+                                                    "config",
+                                                )
+                                            },
+                                        )
+                                },
                                 |value| (value, "config"),
                             )
                     },
@@ -1086,6 +1108,7 @@ fn merge_extension_policy(
     match (base, other) {
         (Some(base), Some(other)) => Some(ExtensionPolicyConfig {
             profile: other.profile.or(base.profile),
+            default_permissive: other.default_permissive.or(base.default_permissive),
             allow_dangerous: other.allow_dangerous.or(base.allow_dangerous),
         }),
         (None, Some(other)) => Some(other),
@@ -1974,13 +1997,14 @@ mod tests {
     // ====================================================================
 
     #[test]
-    fn extension_policy_defaults_to_safe_behavior() {
+    fn extension_policy_defaults_to_permissive_behavior() {
         let config = Config::default();
         let policy = config.resolve_extension_policy(None);
-        assert_eq!(policy.mode, crate::extensions::ExtensionPolicyMode::Strict);
-        // Safe mode: dangerous capabilities are denied by default.
-        assert!(policy.deny_caps.contains(&"exec".to_string()));
-        assert!(policy.deny_caps.contains(&"env".to_string()));
+        assert_eq!(
+            policy.mode,
+            crate::extensions::ExtensionPolicyMode::Permissive
+        );
+        assert!(policy.deny_caps.is_empty());
     }
 
     #[test]
@@ -2029,6 +2053,26 @@ mod tests {
         assert_eq!(
             resolved.policy.mode,
             crate::extensions::ExtensionPolicyMode::Prompt
+        );
+    }
+
+    #[test]
+    fn extension_policy_default_permissive_toggle_false_restores_safe_behavior() {
+        let config = Config {
+            extension_policy: Some(ExtensionPolicyConfig {
+                profile: None,
+                default_permissive: Some(false),
+                allow_dangerous: None,
+            }),
+            ..Default::default()
+        };
+        let resolved = config.resolve_extension_policy_with_metadata(None);
+        assert_eq!(resolved.profile_source, "config");
+        assert_eq!(resolved.requested_profile, "safe");
+        assert_eq!(resolved.effective_profile, "safe");
+        assert_eq!(
+            resolved.policy.mode,
+            crate::extensions::ExtensionPolicyMode::Strict
         );
     }
 
@@ -2091,12 +2135,12 @@ mod tests {
         let global_dir = temp.path().join("global");
         write_file(
             &global_dir.join("settings.json"),
-            r#"{ "extensionPolicy": { "allowDangerous": true } }"#,
+            r#"{ "extensionPolicy": { "defaultPermissive": false, "allowDangerous": true } }"#,
         );
 
         let config = Config::load_with_roots(None, &global_dir, &cwd).expect("load");
         let policy = config.resolve_extension_policy(None);
-        // Safe mode still drops explicit deny-caps when allowDangerous=true.
+        // Safe fallback still drops explicit deny-caps when allowDangerous=true.
         assert!(!policy.deny_caps.contains(&"exec".to_string()));
         assert!(!policy.deny_caps.contains(&"env".to_string()));
     }
@@ -2132,11 +2176,15 @@ mod tests {
 
     #[test]
     fn extension_policy_deserializes_camel_case() {
-        let json = r#"{ "extensionPolicy": { "profile": "safe", "allowDangerous": false } }"#;
+        let json = r#"{ "extensionPolicy": { "profile": "safe", "defaultPermissive": false, "allowDangerous": false } }"#;
         let config: Config = serde_json::from_str(json).expect("parse");
         assert_eq!(
             config.extension_policy.as_ref().unwrap().profile.as_deref(),
             Some("safe")
+        );
+        assert_eq!(
+            config.extension_policy.as_ref().unwrap().default_permissive,
+            Some(false)
         );
         assert_eq!(
             config.extension_policy.as_ref().unwrap().allow_dangerous,
@@ -2961,14 +3009,28 @@ mod tests {
             #[test]
             fn extension_policy_other_overrides(
                 b_profile in prop::option::of(string_regex("[a-z]{3,10}").unwrap()),
+                b_default_permissive in prop::option::of(any::<bool>()),
                 b_danger in prop::option::of(any::<bool>()),
                 o_profile in prop::option::of(string_regex("[a-z]{3,10}").unwrap()),
+                o_default_permissive in prop::option::of(any::<bool>()),
                 o_danger in prop::option::of(any::<bool>()),
             ) {
-                let base = ExtensionPolicyConfig { profile: b_profile.clone(), allow_dangerous: b_danger };
-                let other = ExtensionPolicyConfig { profile: o_profile.clone(), allow_dangerous: o_danger };
+                let base = ExtensionPolicyConfig {
+                    profile: b_profile.clone(),
+                    default_permissive: b_default_permissive,
+                    allow_dangerous: b_danger,
+                };
+                let other = ExtensionPolicyConfig {
+                    profile: o_profile.clone(),
+                    default_permissive: o_default_permissive,
+                    allow_dangerous: o_danger,
+                };
                 let result = merge_extension_policy(Some(base), Some(other)).unwrap();
                 assert_eq!(result.profile, o_profile.or(b_profile));
+                assert_eq!(
+                    result.default_permissive,
+                    o_default_permissive.or(b_default_permissive)
+                );
                 assert_eq!(result.allow_dangerous, o_danger.or(b_danger));
             }
 

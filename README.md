@@ -2107,19 +2107,22 @@ pi --extension-policy standard --explain-extension-policy
 PI_EXTENSION_ALLOW_DANGEROUS=1 pi --extension-policy balanced --explain-extension-policy
 ```
 
-Operator rollout playbook (safe local + CI adoption):
+Operator rollout playbook (compatibility-first local defaults + explicit lock-down):
 
 ```bash
-# 1) Baseline: verify defaults are fail-closed (`safe`)
+# 1) Baseline: verify defaults are compatibility-first (`permissive`)
 pi --explain-extension-policy
 
 # 2) Staging: use balanced prompting, dangerous caps still denied by default
 pi --extension-policy balanced --explain-extension-policy
 
-# 3) Narrow opt-in for dangerous capabilities (preferred path)
+# 3) Explicit lock-down for strict local/CI runs
+pi --extension-policy safe --explain-extension-policy
+
+# 4) Narrow opt-in for dangerous capabilities (preferred path)
 PI_EXTENSION_ALLOW_DANGEROUS=1 pi --extension-policy balanced --explain-extension-policy
 
-# 4) Emergency troubleshooting only (short-lived)
+# 5) Explicit permissive mode when you want to be unambiguous
 pi --extension-policy permissive --explain-extension-policy
 ```
 
@@ -2128,11 +2131,22 @@ pi --extension-policy permissive --explain-extension-policy
 ```json
 {
   "extensionPolicy": {
-    "profile": "balanced",
-    "allowDangerous": false
+    "defaultPermissive": true
   }
 }
 ```
+
+Use this to restore the stricter fallback without CLI flags:
+
+```json
+{
+  "extensionPolicy": {
+    "defaultPermissive": false
+  }
+}
+```
+
+Interactive TUI: open `/settings` and toggle `extensionPolicy.defaultPermissive`.
 
 CI guidance:
 
@@ -2145,7 +2159,8 @@ PI_EXTENSION_ALLOW_DANGEROUS=1 pi --extension-policy balanced --explain-extensio
 ```
 
 Rollback rule: remove `PI_EXTENSION_ALLOW_DANGEROUS`, set `extensionPolicy.profile`
-back to `safe`, and re-run `pi --explain-extension-policy` to confirm deny decisions.
+back to `safe` or set `extensionPolicy.defaultPermissive` to `false`, and re-run
+`pi --explain-extension-policy` to confirm deny decisions.
 
 See [EXTENSIONS.md](EXTENSIONS.md) for the full architecture, runtime contract,
 and conformance results.

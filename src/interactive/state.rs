@@ -379,6 +379,7 @@ pub(super) enum SettingsUiEntry {
     Theme,
     SteeringMode,
     FollowUpMode,
+    DefaultPermissive,
     QuietStartup,
     CollapseChangelog,
     HideThinkingBlock,
@@ -459,6 +460,7 @@ impl SettingsUiState {
                 SettingsUiEntry::Theme,
                 SettingsUiEntry::SteeringMode,
                 SettingsUiEntry::FollowUpMode,
+                SettingsUiEntry::DefaultPermissive,
                 SettingsUiEntry::QuietStartup,
                 SettingsUiEntry::CollapseChangelog,
                 SettingsUiEntry::HideThinkingBlock,
@@ -1038,5 +1040,11 @@ mod tests {
         // Selected suggestion no longer present after refresh.
         state.open_with(response(0..6, ["gpt-4o"]));
         assert!(state.selected_item().is_none());
+    }
+
+    #[test]
+    fn settings_ui_includes_default_permissive_toggle() {
+        let state = SettingsUiState::new();
+        assert!(state.entries.contains(&SettingsUiEntry::DefaultPermissive));
     }
 }
