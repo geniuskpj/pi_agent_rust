@@ -526,26 +526,24 @@ impl PackageManager {
     /// Ensure all packages in settings are installed.
     /// Returns the list of packages that were newly installed.
     pub async fn ensure_packages_installed(&self) -> Result<Vec<PackageEntry>> {
-        // This method combines multiple async calls, so we don't need to wrap it in spawn
-        // assuming list_packages and install are properly offloaded.
-        // However, iterating and installing sequentially might be slow.
-        // For now, simple sequential await is fine.
-
         let packages = self.list_packages().await?;
+        self.ensure_package_entries_installed(packages).await
+    }
+
+    async fn ensure_package_entries_installed(
+        &self,
+        packages: Vec<PackageEntry>,
+    ) -> Result<Vec<PackageEntry>> {
         let mut installed = Vec::new();
 
         for entry in packages {
-            // Check if already installed
-            if let Ok(Some(path)) = self.installed_path(&entry.source, entry.scope).await {
-                if path.exists() {
-                    continue;
-                }
+            match self.installed_path(&entry.source, entry.scope).await? {
+                Some(path) if path.exists() => continue,
+                _ => {}
             }
 
-            // Install the package
-            if self.install(&entry.source, entry.scope).await.is_ok() {
-                installed.push(entry);
-            }
+            self.install(&entry.source, entry.scope).await?;
+            installed.push(entry);
         }
 
         Ok(installed)
@@ -5244,6 +5242,29 @@ mod tests {
 
         let deduped = manager.dedupe_packages(packages);
         assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn ensure_packages_installed_propagates_install_errors() {
+        run_async(async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let manager = PackageManager::new(dir.path().to_path_buf());
+            let missing_local_package = dir.path().join("missing-package");
+
+            let err = manager
+                .ensure_package_entries_installed(vec![PackageEntry {
+                    scope: PackageScope::Project,
+                    source: missing_local_package.to_string_lossy().into_owned(),
+                    filter: None,
+                }])
+                .await
+                .expect_err("missing package install should fail");
+
+            assert!(
+                err.to_string().contains("does not exist"),
+                "unexpected error: {err}"
+            );
+        });
     }
 
     // ======================================================================

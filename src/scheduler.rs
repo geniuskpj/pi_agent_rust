@@ -319,7 +319,10 @@ impl<C: Clock> Scheduler<C> {
     /// Get the number of pending timers.
     #[must_use]
     pub fn timer_count(&self) -> usize {
-        self.timer_heap.len()
+        self.timer_heap
+            .iter()
+            .filter(|entry| !self.cancelled_timers.contains(&entry.timer_id))
+            .count()
     }
 
     /// Schedule a timer to fire at the given deadline.
@@ -2352,6 +2355,26 @@ mod tests {
         let timer = sched.set_timeout(10_000);
         assert!(sched.clear_timeout(timer));
         assert!(!sched.has_pending());
+        assert_eq!(sched.timer_count(), 0);
+    }
+
+    #[test]
+    fn timer_count_ignores_cancelled_timers_before_they_are_reaped() {
+        let mut sched = Scheduler::with_clock(DeterministicClock::new(0));
+        let live = sched.set_timeout(50);
+        let cancelled = sched.set_timeout(100);
+
+        assert!(sched.clear_timeout(cancelled));
+        assert_eq!(sched.timer_count(), 1);
+        assert_eq!(sched.next_timer_deadline(), Some(50));
+
+        sched.clock.advance(60);
+        let task = sched.tick().expect("live timer should fire");
+        match task.kind {
+            MacrotaskKind::TimerFired { timer_id } => assert_eq!(timer_id, live),
+            other => unreachable!("Expected live timer, got {other:?}"),
+        }
+        assert_eq!(sched.timer_count(), 0);
     }
 
     // ── WallClock ────────────────────────────────────────────────────
