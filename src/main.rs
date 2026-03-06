@@ -491,38 +491,43 @@ fn policy_config_example(profile: &str, allow_dangerous: bool) -> serde_json::Va
     })
 }
 
+fn policy_default_toggle_example(default_permissive: bool) -> serde_json::Value {
+    serde_json::json!({
+        "extensionPolicy": {
+            "defaultPermissive": default_permissive,
+        }
+    })
+}
+
 fn extension_policy_migration_guardrails(
     resolved: &pi::config::ResolvedExtensionPolicy,
 ) -> serde_json::Value {
     serde_json::json!({
-        "default_profile": "safe",
-        "active_default_profile": resolved.profile_source == "default" && resolved.effective_profile == "safe",
+        "default_profile": "permissive",
+        "active_default_profile": resolved.profile_source == "default" && resolved.effective_profile == "permissive",
         "profile_source": resolved.profile_source,
-        "safe_by_default_reason": "Fresh installs deny dangerous capabilities unless explicitly opted in.",
-        "opt_in_cli": {
+        "permissive_by_default_reason": "Fresh installs favor extension compatibility and custom UI out of the box.",
+        "override_cli": {
+            "safe_strict_mode": "pi --extension-policy safe <your command>",
             "balanced_prompt_mode": "pi --extension-policy balanced <your command>",
             "balanced_with_dangerous_caps": "PI_EXTENSION_ALLOW_DANGEROUS=1 pi --extension-policy balanced <your command>",
-            "temporary_permissive": "pi --extension-policy permissive <your command>",
+            "explicit_permissive": "pi --extension-policy permissive <your command>",
         },
         "settings_examples": {
-            "safe_default": policy_config_example("safe", false),
+            "default_permissive": policy_default_toggle_example(true),
+            "default_safe": policy_default_toggle_example(false),
+            "safe_strict_mode": policy_config_example("safe", false),
             "balanced_prompt_mode": policy_config_example("balanced", false),
             "balanced_with_dangerous_caps": policy_config_example("balanced", true),
-            "temporary_permissive": policy_config_example("permissive", false),
+            "explicit_permissive": policy_config_example("permissive", false),
         },
         "revert_to_safe_cli": "pi --extension-policy safe <your command>",
     })
 }
 
-fn maybe_print_extension_policy_migration_notice(resolved: &pi::config::ResolvedExtensionPolicy) {
-    if resolved.profile_source == "default" && resolved.effective_profile == "safe" {
-        eprintln!(
-            "Note: extension policy now defaults to `safe` (dangerous capabilities denied by default)."
-        );
-        eprintln!(
-            "If an extension needs broader access, try `--extension-policy balanced` and optionally `PI_EXTENSION_ALLOW_DANGEROUS=1`."
-        );
-    }
+const fn maybe_print_extension_policy_migration_notice(
+    _resolved: &pi::config::ResolvedExtensionPolicy,
+) {
 }
 
 fn policy_reason_detail(reason: &str) -> &'static str {
@@ -670,7 +675,7 @@ fn print_resolved_extension_policy(resolved: &pi::config::ResolvedExtensionPolic
         },
         {
             "profile": "permissive",
-            "summary": "Allow-most profile for temporary troubleshooting.",
+            "summary": "Allow-most profile for compatibility-first workflows.",
             "cli": "pi --extension-policy permissive <your command>",
             "config_example": policy_config_example("permissive", false),
         },
@@ -769,7 +774,10 @@ async fn run(
     let resources = match resources_result {
         Ok(resources) => resources,
         Err(err) => {
-            eprintln!("Warning: Failed to load skills/prompts: {err}");
+            if resource_cli.has_explicit_paths() {
+                return Err(anyhow::Error::new(err));
+            }
+            eprintln!("Warning: Failed to load skills/prompts/themes/extensions: {err}");
             ResourceLoader::empty(config.enable_skill_commands())
         }
     };

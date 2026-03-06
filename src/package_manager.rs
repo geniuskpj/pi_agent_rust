@@ -482,7 +482,8 @@ impl PackageManager {
                         &mut accumulator,
                         entry.pkg.filter.as_ref(),
                         &mut metadata,
-                    );
+                        entry.scope == PackageScope::Temporary,
+                    )?;
                 }
                 ParsedSource::Npm { name, .. } => {
                     let installed_path = self
@@ -1602,7 +1603,8 @@ impl PackageManager {
                         accumulator,
                         entry.pkg.filter.as_ref(),
                         &mut metadata,
-                    );
+                        entry.scope == PackageScope::Temporary,
+                    )?;
                 }
                 ParsedSource::Npm { spec, name, pinned } => {
                     // Offload installed_path check
@@ -1675,32 +1677,58 @@ impl PackageManager {
         accumulator: &mut ResourceAccumulator,
         filter: Option<&PackageFilter>,
         metadata: &mut PathMetadata,
-    ) {
+        strict: bool,
+    ) -> Result<()> {
         if !resolved.exists() {
-            return;
+            if strict {
+                return Err(Error::config(format!(
+                    "Extension source '{}' does not exist",
+                    resolved.display()
+                )));
+            }
+            return Ok(());
         }
 
-        let Ok(stats) = fs::metadata(resolved) else {
-            return;
+        let stats = match fs::metadata(resolved) {
+            Ok(stats) => stats,
+            Err(err) => {
+                if strict {
+                    return Err(Error::config(format!(
+                        "Failed to inspect extension source '{}': {err}",
+                        resolved.display()
+                    )));
+                }
+                return Ok(());
+            }
         };
 
         if stats.is_file() {
             if !is_supported_extension_file(resolved) {
-                warn!(
-                    path = %resolved.display(),
-                    "Ignoring unsupported extension source file; use extension.json, JS/TS entrypoints, *.native.json, or *.wasm"
+                let message = format!(
+                    "Unsupported extension source file '{}'; use extension.json, JS/TS entrypoints, *.native.json, or *.wasm",
+                    resolved.display()
                 );
-                return;
+                if strict {
+                    return Err(Error::config(message));
+                }
+                warn!(path = %resolved.display(), "{message}");
+                return Ok(());
             }
             metadata.base_dir = resolved.parent().map(Path::to_path_buf);
             accumulator
                 .extensions
                 .add(resolved.to_path_buf(), metadata, true);
-            return;
+            return Ok(());
         }
 
         if !stats.is_dir() {
-            return;
+            if strict {
+                return Err(Error::config(format!(
+                    "Extension source '{}' is neither a file nor a directory",
+                    resolved.display()
+                )));
+            }
+            return Ok(());
         }
 
         metadata.base_dir = Some(resolved.to_path_buf());
@@ -1710,6 +1738,7 @@ impl PackageManager {
                 .extensions
                 .add(resolved.to_path_buf(), metadata, true);
         }
+        Ok(())
     }
 
     fn resolve_local_entries(
@@ -3975,6 +4004,58 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_extension_sources_rejects_missing_local_path() {
+        run_async(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let missing_path = temp_dir.path().join("missing.native.json");
+
+            let manager = PackageManager::new(temp_dir.path().to_path_buf());
+            let err = manager
+                .resolve_extension_sources(
+                    &[missing_path.to_string_lossy().to_string()],
+                    ResolveExtensionSourcesOptions {
+                        local: false,
+                        temporary: true,
+                    },
+                )
+                .await
+                .expect_err("missing CLI extension path should fail");
+
+            assert!(
+                err.to_string().contains("does not exist"),
+                "unexpected error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_extension_sources_rejects_unsupported_local_file() {
+        run_async(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let unsupported_path = temp_dir.path().join("notes.txt");
+            fs::write(&unsupported_path, "not an extension").expect("write unsupported file");
+
+            let manager = PackageManager::new(temp_dir.path().to_path_buf());
+            let err = manager
+                .resolve_extension_sources(
+                    &[unsupported_path.to_string_lossy().to_string()],
+                    ResolveExtensionSourcesOptions {
+                        local: false,
+                        temporary: true,
+                    },
+                )
+                .await
+                .expect_err("unsupported CLI extension file should fail");
+
+            assert!(
+                err.to_string()
+                    .contains("Unsupported extension source file"),
+                "unexpected error: {err}"
+            );
+        });
+    }
+
+    #[test]
     fn test_resolve_local_path_normalizes_dot_segments() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let resolved = resolve_local_path("./foo/../bar", temp_dir.path());
@@ -4004,7 +4085,9 @@ mod tests {
             &mut accumulator,
             None,
             &mut metadata,
-        );
+            true,
+        )
+        .expect("resolve symlink extension source");
 
         assert_eq!(accumulator.extensions.items.len(), 1);
         assert_eq!(accumulator.extensions.items[0].path, symlink_path);

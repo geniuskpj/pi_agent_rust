@@ -19,14 +19,15 @@ use serde_json::json;
 // Helpers
 // ============================================================================
 
-fn context_for(prompt: &str) -> Context {
+fn context_for(prompt: &str) -> Context<'_> {
     Context {
         system_prompt: None,
         messages: vec![Message::User(UserMessage {
             content: UserContent::Text(prompt.to_string()),
             timestamp: 0,
-        })],
-        tools: Vec::new(),
+        })]
+        .into(),
+        tools: Vec::new().into(),
     }
 }
 
