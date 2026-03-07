@@ -24,6 +24,17 @@ use std::process::{Command, Stdio};
 use std::thread;
 use tracing::{info, warn};
 
+fn finish_package_task<T, E>(
+    handle: thread::JoinHandle<()>,
+    recv_result: std::result::Result<Result<T>, E>,
+    cancelled_message: &'static str,
+) -> Result<T> {
+    if let Err(panic_payload) = handle.join() {
+        std::panic::resume_unwind(panic_payload);
+    }
+    recv_result.map_err(|_| Error::tool("package_manager", cancelled_message))?
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageScope {
     User,
@@ -244,16 +255,15 @@ impl PackageManager {
         let source = source.to_string();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.install_sync(&source, scope);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Install task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Install task cancelled")
     }
 
     fn install_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -287,16 +297,15 @@ impl PackageManager {
         let source = source.to_string();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.remove_sync(&source, scope);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Remove task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Remove task cancelled")
     }
 
     fn remove_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -315,16 +324,15 @@ impl PackageManager {
         let source = source.to_string();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.update_source_sync(&source, scope);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Update task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Update task cancelled")
     }
 
     fn update_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -361,16 +369,15 @@ impl PackageManager {
         let source = source.to_string();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.installed_path_sync(&source, scope);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Installed path lookup cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Installed path lookup cancelled")
     }
 
     /// Synchronous variant of [`Self::installed_path`] for startup fast paths.
@@ -397,16 +404,15 @@ impl PackageManager {
         let this = self.clone();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.list_packages_sync();
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "List packages task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "List packages task cancelled")
     }
 
     /// Synchronous variant of [`Self::list_packages`] for startup fast paths.
@@ -566,7 +572,7 @@ impl PackageManager {
         let (tx, rx) = oneshot::channel();
 
         // Offload the heavy lifting (sync I/O) to a thread
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res: Result<(SettingsSnapshot, SettingsSnapshot, Vec<ScopedPackage>)> = (|| {
                 let global = read_settings_snapshot(&roots_for_setup.global_settings_path)?;
                 let project = read_settings_snapshot(&roots_for_setup.project_settings_path)?;
@@ -590,10 +596,9 @@ impl PackageManager {
         });
 
         let cx = AgentCx::for_request();
-        let (global, project, package_sources) = rx
-            .recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Resolve setup task cancelled"))??;
+        let recv_result = rx.recv(cx.cx()).await;
+        let (global, project, package_sources) =
+            finish_package_task(handle, recv_result, "Resolve setup task cancelled")?;
 
         let mut accumulator = ResourceAccumulator::new();
 
@@ -606,7 +611,7 @@ impl PackageManager {
         let (tx, rx) = oneshot::channel();
         let accumulator = std::sync::Mutex::new(accumulator);
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let mut accumulator = accumulator
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -658,9 +663,8 @@ impl PackageManager {
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Resolve processing task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Resolve processing task cancelled")
     }
 
     /// Resolve resources for extension sources specified via CLI `-e/--extension`.
@@ -696,7 +700,7 @@ impl PackageManager {
         let (tx, rx) = oneshot::channel();
         let accumulator = std::sync::Mutex::new(accumulator);
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let resolved = {
                 let accumulator = accumulator
                     .lock()
@@ -709,9 +713,8 @@ impl PackageManager {
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Resolve extensions task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Resolve extensions task cancelled")
     }
 
     pub async fn add_package_source(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -719,16 +722,15 @@ impl PackageManager {
         let source = source.to_string();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.add_package_source_sync(&source, scope);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Add source task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Add source task cancelled")
     }
 
     fn add_package_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -749,16 +751,15 @@ impl PackageManager {
         let source = source.to_string();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = this.remove_package_source_sync(&source, scope);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::tool("package_manager", "Remove source task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Remove source task cancelled")
     }
 
     fn remove_package_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -3720,6 +3721,44 @@ mod tests {
             .build()
             .expect("build runtime");
         runtime.block_on(future)
+    }
+
+    #[test]
+    fn test_finish_package_task_propagates_panic_before_cancellation() {
+        let handle = std::thread::spawn(|| -> () {
+            panic!("package manager worker panic");
+        });
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<()> = finish_package_task(handle, Err(()), "Install task cancelled");
+        }));
+
+        assert!(
+            panic.is_err(),
+            "worker panic should not be masked as cancellation"
+        );
+    }
+
+    #[test]
+    fn test_finish_package_task_maps_nonpanic_cancellation_to_tool_error() {
+        let handle = std::thread::spawn(|| {});
+
+        let err =
+            finish_package_task(handle, Err(()), "Install task cancelled").expect_err("error");
+
+        assert!(
+            err.to_string().contains("Install task cancelled"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_finish_package_task_returns_success_payload() {
+        let handle = std::thread::spawn(|| {});
+
+        let value = finish_package_task(handle, Ok(Ok(7usize)), "task cancelled").unwrap();
+
+        assert_eq!(value, 7);
     }
 
     #[test]

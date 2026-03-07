@@ -33,6 +33,25 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// Current session file format version.
 pub const SESSION_VERSION: u8 = 3;
 
+fn finish_worker_result<T, E>(
+    handle: thread::JoinHandle<()>,
+    recv_result: std::result::Result<Result<T>, E>,
+    cancelled_message: &'static str,
+) -> Result<T> {
+    if let Err(panic_payload) = handle.join() {
+        std::panic::resume_unwind(panic_payload);
+    }
+    recv_result.map_err(|_| crate::Error::session(cancelled_message))?
+}
+
+fn finish_jsonl_worker_result<E>(
+    handle: thread::JoinHandle<()>,
+    recv_result: std::result::Result<Result<()>, E>,
+    cancelled_message: &'static str,
+) -> Result<()> {
+    finish_worker_result(handle, recv_result, cancelled_message)
+}
+
 /// Handle to a thread-safe shared session.
 #[derive(Clone, Debug)]
 pub struct SessionHandle(pub Arc<Mutex<Session>>);
@@ -1210,32 +1229,30 @@ impl Session {
         let path_buf = path.to_path_buf();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = crate::session::open_from_v2_store_blocking(path_buf);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| crate::Error::session("V2 open task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_worker_result(handle, recv_result, "V2 open task cancelled")
     }
 
     async fn open_jsonl_with_diagnostics(path: &Path) -> Result<(Self, SessionOpenDiagnostics)> {
         let path_buf = path.to_path_buf();
         let (tx, rx) = oneshot::channel();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let res = open_jsonl_blocking(path_buf);
             let cx = AgentCx::for_request();
             let _ = tx.send(cx.cx(), res);
         });
 
         let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| crate::Error::session("Open task cancelled"))?
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_worker_result(handle, recv_result, "Open task cancelled")
     }
 
     #[cfg(feature = "sqlite-sessions")]
@@ -1644,17 +1661,9 @@ impl Session {
                     });
 
                     let cx = AgentCx::for_request();
-                    let result = rx
-                        .recv(cx.cx())
-                        .await
-                        .map_err(|_| crate::Error::session("Save task cancelled"))?;
+                    let recv_result = rx.recv(cx.cx()).await;
 
-                    // Ensure background thread cleans up
-                    if let Err(e) = handle.join() {
-                        std::panic::resume_unwind(e); // Propagate panic if child panicked
-                    }
-
-                    match result {
+                    match finish_jsonl_worker_result(handle, recv_result, "Save task cancelled") {
                         Ok(_) => {
                             // Keep derived caches as-is: save path does not mutate entry ordering/content.
                             self.persisted_entry_count
@@ -1726,15 +1735,12 @@ impl Session {
                         });
 
                         let cx = AgentCx::for_request();
-                        let result = rx
-                            .recv(cx.cx())
-                            .await
-                            .map_err(|_| crate::Error::session("Append task cancelled"))?;
-
-                        // Ensure background thread cleans up
-                        if let Err(e) = handle.join() {
-                            std::panic::resume_unwind(e); // Propagate panic if child panicked
-                        }
+                        let recv_result = rx.recv(cx.cx()).await;
+                        let result = finish_jsonl_worker_result(
+                            handle,
+                            recv_result,
+                            "Append task cancelled",
+                        );
 
                         if result.is_ok() {
                             self.persisted_entry_count
@@ -2708,7 +2714,7 @@ async fn scan_sessions_on_disk(
     let path_buf = project_session_dir.to_path_buf();
     let (tx, rx) = oneshot::channel();
 
-    thread::Builder::new()
+    let handle = thread::Builder::new()
         .name("session-scan".to_string())
         .spawn(move || {
             let res = (|| -> Result<Vec<SessionPickEntry>> {
@@ -2758,9 +2764,8 @@ async fn scan_sessions_on_disk(
         .map_err(|e| Error::session(format!("Failed to spawn session scan thread: {e}")))?;
 
     let cx = AgentCx::for_request();
-    rx.recv(cx.cx())
-        .await
-        .map_err(|_| Error::session("Scan task cancelled"))?
+    let recv_result = rx.recv(cx.cx()).await;
+    finish_worker_result(handle, recv_result, "Scan task cancelled")
 }
 
 fn is_session_file_path(path: &Path) -> bool {
@@ -8224,6 +8229,44 @@ mod tests {
         queue.finish_flush(ticket, true);
 
         assert!(queue.begin_flush(AutosaveFlushTrigger::Manual).is_none());
+    }
+
+    #[test]
+    fn crash_finish_jsonl_worker_result_propagates_panic_before_cancellation() {
+        let handle = thread::spawn(|| -> () {
+            panic!("jsonl worker panic");
+        });
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<()> = finish_jsonl_worker_result(handle, Err(()), "Save task cancelled");
+        }));
+
+        assert!(
+            panic.is_err(),
+            "worker panic should not be masked as cancellation"
+        );
+    }
+
+    #[test]
+    fn crash_finish_jsonl_worker_result_maps_nonpanic_cancellation_to_session_error() {
+        let handle = thread::spawn(|| {});
+
+        let err =
+            finish_jsonl_worker_result(handle, Err(()), "Save task cancelled").expect_err("error");
+
+        assert!(
+            err.to_string().contains("Save task cancelled"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn crash_finish_worker_result_returns_success_payload() {
+        let handle = thread::spawn(|| {});
+
+        let value = finish_worker_result(handle, Ok(Ok(7usize)), "task cancelled").unwrap();
+
+        assert_eq!(value, 7);
     }
 
     #[test]
