@@ -1631,6 +1631,89 @@ fn migrate_jsonl_to_v2_creates_verified_sidecar() -> PiResult<()> {
 }
 
 #[test]
+fn migrate_jsonl_to_v2_preserves_existing_sidecar_on_rebuild_failure() -> PiResult<()> {
+    let dir = tempdir()?;
+    let entries = vec![
+        make_message_entry("keep1", None, "first"),
+        make_message_entry("keep2", Some("keep1"), "second"),
+    ];
+    let jsonl = build_test_jsonl(dir.path(), &entries);
+
+    let initial_event = pi::session::migrate_jsonl_to_v2(&jsonl, "initial-corr")?;
+    let v2_root = pi::session_store_v2::v2_sidecar_path(&jsonl);
+    let baseline_store = SessionStoreV2::create(&v2_root, 64 * 1024 * 1024)?;
+    let baseline_ids = frame_ids(&baseline_store.read_all_entries()?);
+
+    let mut file = fs::OpenOptions::new().append(true).open(&jsonl)?;
+    file.write_all(b"{ definitely-not-json }\n")?;
+
+    let err = pi::session::migrate_jsonl_to_v2(&jsonl, "retry-corr")
+        .expect_err("invalid JSONL should abort remigration");
+    assert!(
+        err.to_string().contains("Bad JSONL entry"),
+        "unexpected error: {err}"
+    );
+
+    let recovered_store = SessionStoreV2::create(&v2_root, 64 * 1024 * 1024)?;
+    assert_eq!(
+        frame_ids(&recovered_store.read_all_entries()?),
+        baseline_ids
+    );
+
+    let ledger = recovered_store.read_migration_events()?;
+    assert_eq!(ledger.len(), 1, "failed remigration must keep prior ledger");
+    assert_eq!(ledger[0].correlation_id, initial_event.correlation_id);
+
+    Ok(())
+}
+
+#[test]
+fn migrate_jsonl_to_v2_failure_does_not_leave_partial_sidecars() -> PiResult<()> {
+    let dir = tempdir()?;
+    let entries = vec![make_message_entry("bad1", None, "first")];
+    let jsonl = build_test_jsonl(dir.path(), &entries);
+    let v2_root = pi::session_store_v2::v2_sidecar_path(&jsonl);
+    let file_name = v2_root
+        .file_name()
+        .expect("sidecar path must have a file name")
+        .to_string_lossy()
+        .to_string();
+
+    let mut file = fs::OpenOptions::new().append(true).open(&jsonl)?;
+    file.write_all(b"{ invalid-json }\n")?;
+
+    let err = pi::session::migrate_jsonl_to_v2(&jsonl, "bad-corr")
+        .expect_err("invalid JSONL should fail first migration");
+    assert!(
+        err.to_string().contains("Bad JSONL entry"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !pi::session_store_v2::has_v2_sidecar(&jsonl),
+        "failed migration must not leave a live sidecar"
+    );
+    assert!(
+        !v2_root.exists(),
+        "failed migration must clean final sidecar path"
+    );
+
+    let parent = v2_root
+        .parent()
+        .expect("sidecar path must have a parent directory");
+    let staging_prefix = format!("{file_name}.staging.");
+    let backup_prefix = format!("{file_name}.backup.");
+    for entry in fs::read_dir(parent)? {
+        let name = entry?.file_name().to_string_lossy().to_string();
+        assert!(
+            !name.starts_with(&staging_prefix) && !name.starts_with(&backup_prefix),
+            "failed migration left transient sidecar directory: {name}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn verify_v2_against_jsonl_detects_matching_entries() -> PiResult<()> {
     let dir = tempdir()?;
     let entries = vec![

@@ -3887,39 +3887,69 @@ fn open_from_v2_store_blocking(jsonl_path: PathBuf) -> Result<(Session, SessionO
 /// into the V2 segmented store with offset index. Subsequent opens can then
 /// use `open_from_v2_store_blocking` for O(index+tail) resume.
 pub fn create_v2_sidecar_from_jsonl(jsonl_path: &Path) -> Result<SessionStoreV2> {
+    let v2_root = session_store_v2::v2_sidecar_path(jsonl_path);
+    build_v2_sidecar_from_jsonl_into(jsonl_path, &v2_root)
+}
+
+fn build_v2_sidecar_from_jsonl_into(jsonl_path: &Path, v2_root: &Path) -> Result<SessionStoreV2> {
     use std::io::BufRead;
 
-    let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
-    let mut reader = std::io::BufReader::new(file);
+    let build_result = (|| -> Result<SessionStoreV2> {
+        let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
+        let mut reader = std::io::BufReader::new(file);
 
-    let mut header_line = String::new();
-    reader
-        .read_line(&mut header_line)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?;
+        let mut header_line = String::new();
+        reader
+            .read_line(&mut header_line)
+            .map_err(|e| crate::Error::Io(Box::new(e)))?;
 
-    if header_line.trim().is_empty() {
-        return Err(crate::Error::session("Empty JSONL session file"));
-    }
-
-    let v2_root = session_store_v2::v2_sidecar_path(jsonl_path);
-    if v2_root.exists() {
-        std::fs::remove_dir_all(&v2_root).map_err(|e| crate::Error::Io(Box::new(e)))?;
-    }
-    let mut store = SessionStoreV2::create(&v2_root, 64 * 1024 * 1024)?;
-
-    for line_res in reader.lines() {
-        let line = line_res.map_err(|e| crate::Error::Io(Box::new(e)))?;
-        if line.trim().is_empty() {
-            continue;
+        if header_line.trim().is_empty() {
+            return Err(crate::Error::session("Empty JSONL session file"));
         }
-        let entry: SessionEntry = serde_json::from_str(&line)
-            .map_err(|e| crate::Error::session(format!("Bad JSONL entry: {e}")))?;
-        let (entry_id, parent_entry_id, entry_type, payload) =
-            session_store_v2::session_entry_to_frame_args(&entry)?;
-        store.append_entry(entry_id, parent_entry_id, entry_type, payload)?;
+
+        if v2_root.exists() {
+            std::fs::remove_dir_all(v2_root).map_err(|e| crate::Error::Io(Box::new(e)))?;
+        }
+        let mut store = SessionStoreV2::create(v2_root, 64 * 1024 * 1024)?;
+
+        for line_res in reader.lines() {
+            let line = line_res.map_err(|e| crate::Error::Io(Box::new(e)))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: SessionEntry = serde_json::from_str(&line)
+                .map_err(|e| crate::Error::session(format!("Bad JSONL entry: {e}")))?;
+            let (entry_id, parent_entry_id, entry_type, payload) =
+                session_store_v2::session_entry_to_frame_args(&entry)?;
+            store.append_entry(entry_id, parent_entry_id, entry_type, payload)?;
+        }
+
+        Ok(store)
+    })();
+
+    if build_result.is_err() && v2_root.exists() {
+        let _ = std::fs::remove_dir_all(v2_root);
     }
 
-    Ok(store)
+    build_result
+}
+
+fn unique_sidecar_aux_path(v2_root: &Path, suffix: &str) -> PathBuf {
+    let file_name = v2_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("session.v2");
+    v2_root.with_file_name(format!(
+        "{file_name}.{suffix}.{}",
+        uuid::Uuid::new_v4().simple()
+    ))
+}
+
+fn cleanup_sidecar_root(path: &Path) -> Result<()> {
+    if path.exists() {
+        std::fs::remove_dir_all(path).map_err(|e| crate::Error::Io(Box::new(e)))?;
+    }
+    Ok(())
 }
 
 /// Migrate a JSONL session to V2 with full verification and event logging.
@@ -3931,20 +3961,31 @@ pub fn migrate_jsonl_to_v2(
     jsonl_path: &Path,
     correlation_id: &str,
 ) -> Result<session_store_v2::MigrationEvent> {
-    let store = create_v2_sidecar_from_jsonl(jsonl_path)?;
+    let v2_root = session_store_v2::v2_sidecar_path(jsonl_path);
+    let staging_root = unique_sidecar_aux_path(&v2_root, "staging");
+    let store = match build_v2_sidecar_from_jsonl_into(jsonl_path, &staging_root) {
+        Ok(store) => store,
+        Err(err) => {
+            let _ = cleanup_sidecar_root(&staging_root);
+            return Err(err);
+        }
+    };
 
     // Verify fidelity.
-    let verification = verify_v2_against_jsonl(jsonl_path, &store)?;
+    let verification = match verify_v2_against_jsonl(jsonl_path, &store) {
+        Ok(verification) => verification,
+        Err(err) => {
+            let _ = cleanup_sidecar_root(&staging_root);
+            return Err(err);
+        }
+    };
 
     if !(verification.entry_count_match
         && verification.hash_chain_match
         && verification.index_consistent)
     {
         // Verification failed — remove the sidecar.
-        let v2_root = session_store_v2::v2_sidecar_path(jsonl_path);
-        if v2_root.exists() {
-            std::fs::remove_dir_all(&v2_root).map_err(|e| crate::Error::Io(Box::new(e)))?;
-        }
+        cleanup_sidecar_root(&staging_root)?;
         return Err(crate::Error::session(format!(
             "V2 migration verification failed: count={} hash={} index={}",
             verification.entry_count_match,
@@ -3969,7 +4010,39 @@ pub fn migrate_jsonl_to_v2(
         error_class: None,
         correlation_id: correlation_id.to_string(),
     };
-    store.append_migration_event(event.clone())?;
+    if let Err(err) = store.append_migration_event(event.clone()) {
+        let _ = cleanup_sidecar_root(&staging_root);
+        return Err(err);
+    }
+
+    let backup_root = if v2_root.exists() {
+        let backup_root = unique_sidecar_aux_path(&v2_root, "backup");
+        if let Err(err) = std::fs::rename(&v2_root, &backup_root) {
+            let _ = cleanup_sidecar_root(&staging_root);
+            return Err(crate::Error::Io(Box::new(err)));
+        }
+        Some(backup_root)
+    } else {
+        None
+    };
+
+    if let Err(err) = std::fs::rename(&staging_root, &v2_root) {
+        if let Some(backup_root) = backup_root.as_ref() {
+            let _ = std::fs::rename(backup_root, &v2_root);
+        }
+        let _ = cleanup_sidecar_root(&staging_root);
+        return Err(crate::Error::Io(Box::new(err)));
+    }
+
+    if let Some(backup_root) = backup_root {
+        if let Err(err) = cleanup_sidecar_root(&backup_root) {
+            tracing::warn!(
+                path = %backup_root.display(),
+                error = %err,
+                "V2 migration left backup sidecar after successful swap"
+            );
+        }
+    }
 
     Ok(event)
 }
