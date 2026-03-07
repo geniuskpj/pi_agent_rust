@@ -3,7 +3,9 @@
 mod common;
 
 use common::{TestHarness, run_async};
-use pi::package_manager::{PackageManager, ResolveRoots};
+use pi::package_manager::{
+    PackageManager, PackageScope, ResolveRoots, ResolvedResource, ResourceOrigin,
+};
 use pi::resources::{
     DiagnosticKind, LoadPromptTemplatesOptions, LoadSkillsOptions, LoadThemesOptions,
     dedupe_prompts, dedupe_themes, load_prompt_templates, load_skills, load_themes,
@@ -107,7 +109,7 @@ fn load_skills_defaults_and_collision_diagnostics() {
         .iter()
         .find(|s| s.name == "alpha")
         .expect("alpha skill present");
-    assert_eq!(alpha.file_path, user_alpha);
+    assert_eq!(alpha.file_path, project_alpha);
 
     let collision = result
         .diagnostics
@@ -119,8 +121,8 @@ fn load_skills_defaults_and_collision_diagnostics() {
     let info = collision.collision.as_ref().expect("collision info");
     assert_eq!(info.resource_type, "skill");
     assert_eq!(info.name, "alpha");
-    assert_eq!(info.winner_path, user_alpha);
-    assert_eq!(info.loser_path, project_alpha);
+    assert_eq!(info.winner_path, project_alpha);
+    assert_eq!(info.loser_path, user_alpha);
 
     // Sanity: project beta should be detected under defaults.
     assert!(project_beta.exists());
@@ -418,6 +420,34 @@ fn copy_fixture_dir(src: &Path, dest: &Path) {
     }
 }
 
+fn precedence_sorted_paths(resources: &[ResolvedResource]) -> Vec<PathBuf> {
+    let mut enabled = resources
+        .iter()
+        .filter(|resource| resource.enabled)
+        .cloned()
+        .collect::<Vec<_>>();
+    enabled.sort_by(|left, right| {
+        resource_precedence(left)
+            .cmp(&resource_precedence(right))
+            .then_with(|| {
+                left.path
+                    .to_string_lossy()
+                    .cmp(&right.path.to_string_lossy())
+            })
+    });
+    enabled.into_iter().map(|resource| resource.path).collect()
+}
+
+fn resource_precedence(resource: &ResolvedResource) -> u8 {
+    match (resource.metadata.scope, resource.metadata.origin) {
+        (PackageScope::Temporary, _) => 0,
+        (PackageScope::Project, ResourceOrigin::TopLevel) => 1,
+        (PackageScope::User, ResourceOrigin::TopLevel) => 2,
+        (PackageScope::Project, ResourceOrigin::Package) => 3,
+        (PackageScope::User, ResourceOrigin::Package) => 4,
+    }
+}
+
 #[test]
 fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
     let harness =
@@ -442,12 +472,7 @@ fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
     let resolved = run_async(async move { manager.resolve_with_roots(&roots).await })
         .expect("resolve_with_roots");
 
-    let skill_paths = resolved
-        .skills
-        .iter()
-        .filter(|r| r.enabled)
-        .map(|r| r.path.clone())
-        .collect::<Vec<_>>();
+    let skill_paths = precedence_sorted_paths(&resolved.skills);
     let skills_result = load_skills(LoadSkillsOptions {
         cwd: cwd.clone(),
         agent_dir: global_base_dir.clone(),
@@ -478,8 +503,8 @@ fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
     assert!(
         alpha
             .file_path
-            .ends_with(Path::new("global/skills/alpha/SKILL.md")),
-        "expected global alpha skill to win collision"
+            .ends_with(Path::new("project/.pi/skills/alpha/SKILL.md")),
+        "expected project alpha skill to win collision"
     );
     assert!(
         skills_result
@@ -489,12 +514,7 @@ fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
         "expected alpha collision diagnostic"
     );
 
-    let prompt_paths = resolved
-        .prompts
-        .iter()
-        .filter(|r| r.enabled)
-        .map(|r| r.path.clone())
-        .collect::<Vec<_>>();
+    let prompt_paths = precedence_sorted_paths(&resolved.prompts);
     let templates = load_prompt_templates(LoadPromptTemplatesOptions {
         cwd,
         agent_dir: global_base_dir,
@@ -525,8 +545,8 @@ fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
     assert!(
         collision
             .file_path
-            .ends_with(Path::new("global/prompts/collision.md")),
-        "expected global collision prompt to win"
+            .ends_with(Path::new("project/.pi/prompts/collision.md")),
+        "expected project collision prompt to win"
     );
 
     let collision_diag = diagnostics
@@ -538,12 +558,12 @@ fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
     assert_eq!(info.name, "collision");
     assert!(
         info.winner_path
-            .ends_with(Path::new("global/prompts/collision.md")),
-        "expected winner path to be global collision prompt"
+            .ends_with(Path::new("project/.pi/prompts/collision.md")),
+        "expected winner path to be project collision prompt"
     );
     assert!(
         info.loser_path
-            .ends_with(Path::new("project/.pi/prompts/collision.md")),
-        "expected loser path to be project collision prompt"
+            .ends_with(Path::new("global/prompts/collision.md")),
+        "expected loser path to be global collision prompt"
     );
 }

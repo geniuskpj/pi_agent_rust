@@ -7,7 +7,9 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::package_manager::{PackageManager, ResolveExtensionSourcesOptions};
+use crate::package_manager::{
+    PackageManager, PackageScope, ResolveExtensionSourcesOptions, ResolvedResource, ResourceOrigin,
+};
 use crate::theme::Theme;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -221,11 +223,6 @@ impl ResourceLoader {
         ))
         .await?;
 
-        // Helper: extract enabled paths from a resolved resource set.
-        let enabled_paths = |v: Vec<crate::package_manager::ResolvedResource>| {
-            v.into_iter().filter(|r| r.enabled).map(|r| r.path)
-        };
-
         let explicit_skill_paths = dedupe_paths(
             cli.skill_paths
                 .iter()
@@ -250,41 +247,41 @@ impl ResourceLoader {
         );
         validate_explicit_resource_paths(&explicit_theme_paths, ExplicitResourceKind::Theme)?;
 
-        // Merge paths with pi-mono semantics:
-        // - `--no-skills` disables configured + auto skills, but still loads CLI `-e` and explicit `--skill`
-        // - `--no-prompt-templates` disables configured + auto prompts, but still loads CLI `-e` and explicit `--prompt-template`
-        let mut skill_paths = Vec::new();
-        if !cli.no_skills {
-            skill_paths.extend(enabled_paths(resolved.skills));
-        }
-        skill_paths.extend(enabled_paths(cli_extensions.skills));
-        skill_paths.extend(explicit_skill_paths.iter().cloned());
-        let skill_paths = dedupe_paths(skill_paths);
+        // Merge paths with documented precedence semantics:
+        // - explicit CLI resources win over everything else
+        // - CLI `-e` resources outrank configured/project/global/package resources
+        // - project directories outrank global directories, which outrank installed packages
+        // - `--no-skills` / `--no-prompt-templates` / `--no-themes` only disable configured
+        //   resources; explicit CLI paths and CLI `-e` resources still participate
+        let skill_paths = merge_resource_paths(
+            &explicit_skill_paths,
+            cli_extensions.skills,
+            resolved.skills,
+            !cli.no_skills,
+        );
 
-        let mut prompt_paths = Vec::new();
-        if !cli.no_prompt_templates {
-            prompt_paths.extend(enabled_paths(resolved.prompts));
-        }
-        prompt_paths.extend(enabled_paths(cli_extensions.prompts));
-        prompt_paths.extend(explicit_prompt_paths.iter().cloned());
-        let prompt_paths = dedupe_paths(prompt_paths);
+        let prompt_paths = merge_resource_paths(
+            &explicit_prompt_paths,
+            cli_extensions.prompts,
+            resolved.prompts,
+            !cli.no_prompt_templates,
+        );
 
-        let mut theme_paths = Vec::new();
-        if !cli.no_themes {
-            theme_paths.extend(enabled_paths(resolved.themes));
-        }
-        theme_paths.extend(enabled_paths(cli_extensions.themes));
-        theme_paths.extend(explicit_theme_paths.iter().cloned());
-        let theme_paths = dedupe_paths(theme_paths);
+        let theme_paths = merge_resource_paths(
+            &explicit_theme_paths,
+            cli_extensions.themes,
+            resolved.themes,
+            !cli.no_themes,
+        );
 
         // Extension entries:
         // - `--no-extensions` disables configured + auto discovery but still allows CLI `-e` sources.
-        let mut extension_entries = Vec::new();
-        if !cli.no_extensions {
-            extension_entries.extend(enabled_paths(resolved.extensions));
-        }
-        extension_entries.extend(enabled_paths(cli_extensions.extensions));
-        let extension_entries = dedupe_paths(extension_entries);
+        let extension_entries = merge_resource_paths(
+            &[],
+            cli_extensions.extensions,
+            resolved.extensions,
+            !cli.no_extensions,
+        );
 
         // Load skills, prompt templates, and themes in parallel — they are independent
         // filesystem walks that benefit from overlapped I/O on multi-core machines.
@@ -659,18 +656,18 @@ pub fn load_skills(options: LoadSkillsOptions) -> LoadSkillsResult {
 
     if options.include_defaults {
         merge_skills(
-            load_skills_from_dir(options.agent_dir.join("skills"), "user".to_string(), true),
+            load_skills_from_dir(
+                options.cwd.join(Config::project_dir()).join("skills"),
+                "project".to_string(),
+                true,
+            ),
             &mut skill_map,
             &mut real_paths,
             &mut diagnostics,
             &mut collisions,
         );
         merge_skills(
-            load_skills_from_dir(
-                options.cwd.join(Config::project_dir()).join("skills"),
-                "project".to_string(),
-                true,
-            ),
+            load_skills_from_dir(options.agent_dir.join("skills"), "user".to_string(), true),
             &mut skill_map,
             &mut real_paths,
             &mut diagnostics,
@@ -1044,12 +1041,12 @@ pub fn load_prompt_templates(options: LoadPromptTemplatesOptions) -> Vec<PromptT
     let project_dir = options.cwd.join(Config::project_dir()).join("prompts");
 
     if options.include_defaults {
-        templates.extend(load_templates_from_dir(&user_dir, "user", "(user)"));
         templates.extend(load_templates_from_dir(
             &project_dir,
             "project",
             "(project)",
         ));
+        templates.extend(load_templates_from_dir(&user_dir, "user", "(user)"));
     }
 
     for path in options.prompt_paths {
@@ -1169,15 +1166,15 @@ pub fn load_themes(options: LoadThemesOptions) -> LoadThemesResult {
 
     if options.include_defaults {
         themes.extend(load_themes_from_dir(
-            &user_dir,
-            "user",
-            "(user)",
-            &mut diagnostics,
-        ));
-        themes.extend(load_themes_from_dir(
             &project_dir,
             "project",
             "(project)",
+            &mut diagnostics,
+        ));
+        themes.extend(load_themes_from_dir(
+            &user_dir,
+            "user",
+            "(user)",
             &mut diagnostics,
         ));
     }
@@ -1667,6 +1664,58 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ResourcePathPrecedence {
+    CliExtension,
+    ProjectDirectory,
+    GlobalDirectory,
+    ProjectPackage,
+    GlobalPackage,
+}
+
+fn precedence_sorted_enabled_paths(resources: Vec<ResolvedResource>) -> Vec<PathBuf> {
+    let mut enabled = resources
+        .into_iter()
+        .filter(|resource| resource.enabled)
+        .collect::<Vec<_>>();
+    enabled.sort_by(|left, right| {
+        resource_path_precedence(left)
+            .cmp(&resource_path_precedence(right))
+            .then_with(|| {
+                left.path
+                    .to_string_lossy()
+                    .cmp(&right.path.to_string_lossy())
+            })
+    });
+    enabled.into_iter().map(|resource| resource.path).collect()
+}
+
+fn merge_resource_paths(
+    explicit_paths: &[PathBuf],
+    cli_resources: Vec<ResolvedResource>,
+    resolved_resources: Vec<ResolvedResource>,
+    include_resolved: bool,
+) -> Vec<PathBuf> {
+    let mut merged = explicit_paths.to_vec();
+    merged.extend(precedence_sorted_enabled_paths(cli_resources));
+    if include_resolved {
+        merged.extend(precedence_sorted_enabled_paths(resolved_resources));
+    }
+    dedupe_paths(merged)
+}
+
+const fn resource_path_precedence(resource: &ResolvedResource) -> ResourcePathPrecedence {
+    match (resource.metadata.scope, resource.metadata.origin) {
+        (PackageScope::Temporary, _) => ResourcePathPrecedence::CliExtension,
+        (PackageScope::Project, ResourceOrigin::TopLevel) => {
+            ResourcePathPrecedence::ProjectDirectory
+        }
+        (PackageScope::User, ResourceOrigin::TopLevel) => ResourcePathPrecedence::GlobalDirectory,
+        (PackageScope::Project, ResourceOrigin::Package) => ResourcePathPrecedence::ProjectPackage,
+        (PackageScope::User, ResourceOrigin::Package) => ResourcePathPrecedence::GlobalPackage,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2311,6 +2360,135 @@ still frontmatter",
                 PathBuf::from("/a"),
                 PathBuf::from("/b"),
                 PathBuf::from("/c"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_precedence_sorted_enabled_paths_orders_by_documented_resource_priority() {
+        let resources = vec![
+            ResolvedResource {
+                path: PathBuf::from("/global/package/review.md"),
+                enabled: true,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "pkg:user".to_string(),
+                    scope: PackageScope::User,
+                    origin: ResourceOrigin::Package,
+                    base_dir: None,
+                },
+            },
+            ResolvedResource {
+                path: PathBuf::from("/project/.pi/prompts/review.md"),
+                enabled: true,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "local:project".to_string(),
+                    scope: PackageScope::Project,
+                    origin: ResourceOrigin::TopLevel,
+                    base_dir: None,
+                },
+            },
+            ResolvedResource {
+                path: PathBuf::from("/global/.pi/prompts/review.md"),
+                enabled: true,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "local:user".to_string(),
+                    scope: PackageScope::User,
+                    origin: ResourceOrigin::TopLevel,
+                    base_dir: None,
+                },
+            },
+            ResolvedResource {
+                path: PathBuf::from("/project/package/review.md"),
+                enabled: true,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "pkg:project".to_string(),
+                    scope: PackageScope::Project,
+                    origin: ResourceOrigin::Package,
+                    base_dir: None,
+                },
+            },
+            ResolvedResource {
+                path: PathBuf::from("/tmp/cli-ext/review.md"),
+                enabled: true,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "cli-extension".to_string(),
+                    scope: PackageScope::Temporary,
+                    origin: ResourceOrigin::Package,
+                    base_dir: None,
+                },
+            },
+            ResolvedResource {
+                path: PathBuf::from("/disabled/ignored.md"),
+                enabled: false,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "ignored".to_string(),
+                    scope: PackageScope::Project,
+                    origin: ResourceOrigin::TopLevel,
+                    base_dir: None,
+                },
+            },
+        ];
+
+        let sorted = precedence_sorted_enabled_paths(resources);
+        assert_eq!(
+            sorted,
+            vec![
+                PathBuf::from("/tmp/cli-ext/review.md"),
+                PathBuf::from("/project/.pi/prompts/review.md"),
+                PathBuf::from("/global/.pi/prompts/review.md"),
+                PathBuf::from("/project/package/review.md"),
+                PathBuf::from("/global/package/review.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_resource_paths_keeps_explicit_cli_paths_first() {
+        let explicit_path = PathBuf::from("/cli/direct/review.md");
+        let merged = merge_resource_paths(
+            &[explicit_path.clone()],
+            vec![ResolvedResource {
+                path: PathBuf::from("/tmp/cli-ext/review.md"),
+                enabled: true,
+                metadata: crate::package_manager::PathMetadata {
+                    source: "cli-extension".to_string(),
+                    scope: PackageScope::Temporary,
+                    origin: ResourceOrigin::Package,
+                    base_dir: None,
+                },
+            }],
+            vec![
+                ResolvedResource {
+                    path: PathBuf::from("/project/.pi/prompts/review.md"),
+                    enabled: true,
+                    metadata: crate::package_manager::PathMetadata {
+                        source: "local:project".to_string(),
+                        scope: PackageScope::Project,
+                        origin: ResourceOrigin::TopLevel,
+                        base_dir: None,
+                    },
+                },
+                ResolvedResource {
+                    path: PathBuf::from("/global/.pi/prompts/review.md"),
+                    enabled: true,
+                    metadata: crate::package_manager::PathMetadata {
+                        source: "local:user".to_string(),
+                        scope: PackageScope::User,
+                        origin: ResourceOrigin::TopLevel,
+                        base_dir: None,
+                    },
+                },
+            ],
+            true,
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                explicit_path,
+                PathBuf::from("/tmp/cli-ext/review.md"),
+                PathBuf::from("/project/.pi/prompts/review.md"),
+                PathBuf::from("/global/.pi/prompts/review.md"),
             ]
         );
     }
