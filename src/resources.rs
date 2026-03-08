@@ -1402,11 +1402,13 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut in_quote: Option<char> = None;
+    let mut just_closed_quote = false;
 
     for ch in args.chars() {
         if let Some(quote) = in_quote {
             if ch == quote {
                 in_quote = None;
+                just_closed_quote = true;
             } else {
                 current.push(ch);
             }
@@ -1416,16 +1418,18 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
         if ch == '"' || ch == '\'' {
             in_quote = Some(ch);
         } else if ch == ' ' || ch == '\t' {
-            if !current.is_empty() {
+            if !current.is_empty() || just_closed_quote {
                 out.push(current.clone());
                 current.clear();
             }
+            just_closed_quote = false;
         } else {
             current.push(ch);
+            just_closed_quote = false;
         }
     }
 
-    if !current.is_empty() {
+    if !current.is_empty() || just_closed_quote {
         out.push(current);
     }
 
@@ -2694,6 +2698,16 @@ still frontmatter",
         assert_eq!(parse_command_args("foo \"bar"), vec!["foo", "bar"]);
     }
 
+    #[test]
+    fn test_parse_command_args_preserves_empty_quoted_args() {
+        assert_eq!(parse_command_args("\"\""), vec![""]);
+        assert_eq!(parse_command_args("''"), vec![""]);
+        assert_eq!(
+            parse_command_args("foo \"\" bar ''"),
+            vec!["foo", "", "bar", ""]
+        );
+    }
+
     // ── substitute_args edge cases ─────────────────────────────────────
 
     #[test]
@@ -2740,6 +2754,48 @@ still frontmatter",
     fn test_expand_prompt_template_unknown_command_returns_as_is() {
         let result = expand_prompt_template("/nonexistent foo", &[]);
         assert_eq!(result, "/nonexistent foo");
+    }
+
+    #[test]
+    fn test_expand_prompt_template_preserves_empty_positional_arguments() {
+        let template = PromptTemplate {
+            name: "review".to_string(),
+            description: "review prompt".to_string(),
+            content: "first=[$1] second=[$2] rest=[${@:2}]".to_string(),
+            source: "test".to_string(),
+            file_path: PathBuf::from("/review.md"),
+        };
+
+        let result = expand_prompt_template("/review \"\" foo", &[template]);
+        assert_eq!(result, "first=[] second=[foo] rest=[foo]");
+    }
+
+    #[test]
+    fn test_expand_prompt_template_preserves_trailing_empty_positional_arguments() {
+        let template = PromptTemplate {
+            name: "review".to_string(),
+            description: "review prompt".to_string(),
+            content: "first=[$1] second=[$2] third=[$3]".to_string(),
+            source: "test".to_string(),
+            file_path: PathBuf::from("/review.md"),
+        };
+
+        let result = expand_prompt_template("/review foo \"\"", &[template]);
+        assert_eq!(result, "first=[foo] second=[] third=[]");
+    }
+
+    #[test]
+    fn test_expand_prompt_template_preserves_repeated_empty_quoted_arguments() {
+        let template = PromptTemplate {
+            name: "review".to_string(),
+            description: "review prompt".to_string(),
+            content: "first=[$1] second=[$2] third=[$3] fourth=[$4]".to_string(),
+            source: "test".to_string(),
+            file_path: PathBuf::from("/review.md"),
+        };
+
+        let result = expand_prompt_template("/review foo \"\" \"\" bar", &[template]);
+        assert_eq!(result, "first=[foo] second=[] third=[] fourth=[bar]");
     }
 
     // ── parse_frontmatter edge cases ───────────────────────────────────

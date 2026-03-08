@@ -19,7 +19,8 @@ use pi::compaction::ResolvedCompactionSettings;
 use pi::error::{Error, Result};
 use pi::extensions::SecurityAlertCategory;
 use pi::model::{
-    AssistantMessage, ContentBlock, StopReason, StreamEvent, TextContent, ToolCall, Usage,
+    AssistantMessage, ContentBlock, Message, StopReason, StreamEvent, TextContent, ToolCall, Usage,
+    UserContent, UserMessage,
 };
 use pi::provider::{Context, Provider, StreamOptions};
 use pi::sdk::{
@@ -1205,4 +1206,146 @@ fn sdk_conformance_combined_callback_ordering() {
         .info_ctx("sdk", "combined callback ordering conforms", |ctx| {
             ctx.push(("entries".to_string(), format!("{entries:?}")));
         });
+}
+
+// ============================================================================
+// 18. Continuation wrappers on AgentSessionHandle
+// ============================================================================
+
+#[test]
+fn sdk_continue_turn_uses_combined_listener_path() {
+    use pi::sdk::EventListeners;
+
+    let harness = TestHarness::new("sdk_continue_turn_uses_combined_listener_path");
+    let cwd = harness.temp_dir().to_path_buf();
+    let subscriber_events: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let per_call_events: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let subscriber_events_ref = Arc::clone(&subscriber_events);
+    let per_call_events_ref = Arc::clone(&per_call_events);
+
+    run_async(async move {
+        let provider: Arc<dyn Provider> = Arc::new(ScriptedProvider::new(Script::SingleText(
+            "continued response".to_string(),
+        )));
+        let tools = ToolRegistry::new(&["read"], &cwd, None);
+        let config = AgentConfig {
+            system_prompt: None,
+            max_tool_iterations: 10,
+            stream_options: StreamOptions {
+                api_key: Some("test-key".to_string()),
+                ..StreamOptions::default()
+            },
+            block_images: false,
+        };
+        let agent = pi::agent::Agent::new(provider, tools, config);
+        let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
+            Some(cwd),
+        )));
+        let agent_session = AgentSession::new(
+            agent,
+            Arc::clone(&session),
+            true,
+            ResolvedCompactionSettings::default(),
+        );
+
+        {
+            let cx = pi::agent_cx::AgentCx::for_request();
+            let mut guard = session.lock(cx.cx()).await.expect("lock session");
+            guard.append_model_message(Message::User(UserMessage {
+                content: UserContent::Text("prior user message".to_string()),
+                timestamp: 0,
+            }));
+        }
+
+        let listeners = EventListeners::default();
+        listeners.subscribe(Arc::new(move |event| {
+            let name = match event {
+                AgentEvent::AgentStart { .. } => Some("AgentStart"),
+                AgentEvent::AgentEnd { .. } => Some("AgentEnd"),
+                _ => None,
+            };
+            if let Some(name) = name {
+                subscriber_events_ref.lock().expect("lock").push(name);
+            }
+        }));
+
+        let mut handle = AgentSessionHandle::from_session_with_listeners(agent_session, listeners);
+        handle
+            .session_mut()
+            .agent
+            .add_message(Message::User(UserMessage {
+                content: UserContent::Text("prior user message".to_string()),
+                timestamp: 0,
+            }));
+
+        let message = handle
+            .continue_turn(move |event| {
+                let name = match event {
+                    AgentEvent::AgentStart { .. } => Some("AgentStart"),
+                    AgentEvent::AgentEnd { .. } => Some("AgentEnd"),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    per_call_events_ref.lock().expect("lock").push(name);
+                }
+            })
+            .await
+            .expect("continue turn");
+
+        assert_eq!(message.stop_reason, StopReason::Stop);
+    });
+
+    let subscriber = subscriber_events.lock().expect("lock").clone();
+    let per_call = per_call_events.lock().expect("lock").clone();
+
+    assert_eq!(subscriber, vec!["AgentStart", "AgentEnd"]);
+    assert_eq!(per_call, vec!["AgentStart", "AgentEnd"]);
+}
+
+#[test]
+fn sdk_continue_turn_with_abort_returns_aborted_message() {
+    use pi::sdk::EventListeners;
+
+    let harness = TestHarness::new("sdk_continue_turn_with_abort_returns_aborted_message");
+    let cwd = harness.temp_dir().to_path_buf();
+
+    run_async(async move {
+        let provider: Arc<dyn Provider> = Arc::new(ScriptedProvider::new(Script::SingleText(
+            "should not complete".to_string(),
+        )));
+        let tools = ToolRegistry::new(&["read"], &cwd, None);
+        let config = AgentConfig {
+            system_prompt: None,
+            max_tool_iterations: 10,
+            stream_options: StreamOptions {
+                api_key: Some("test-key".to_string()),
+                ..StreamOptions::default()
+            },
+            block_images: false,
+        };
+        let agent = pi::agent::Agent::new(provider, tools, config);
+        let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
+            Some(cwd),
+        )));
+        let agent_session = AgentSession::new(
+            agent,
+            Arc::clone(&session),
+            true,
+            ResolvedCompactionSettings::default(),
+        );
+        let listeners = EventListeners::default();
+        let mut handle = AgentSessionHandle::from_session_with_listeners(agent_session, listeners);
+
+        let (abort_handle, abort_signal) = AgentSessionHandle::new_abort_handle();
+        abort_handle.abort();
+
+        let message = handle
+            .continue_turn_with_abort(abort_signal, |_event| {})
+            .await
+            .expect("continue turn with pre-aborted signal");
+
+        assert_eq!(message.stop_reason, StopReason::Aborted);
+        assert_eq!(message.error_message.as_deref(), Some("Aborted"));
+    });
 }

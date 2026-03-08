@@ -1156,6 +1156,35 @@ impl AgentSessionHandle {
             .await
     }
 
+    /// Continue the current agent loop without adding a new user prompt.
+    ///
+    /// This is useful for retry/continuation flows where session history or
+    /// injected messages should drive the next turn without synthesizing a new
+    /// user message through [`Self::prompt`].
+    pub async fn continue_turn(
+        &mut self,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<AssistantMessage> {
+        let combined = self.make_combined_callback(on_event);
+        self.session
+            .agent
+            .run_continue_with_abort(None, combined)
+            .await
+    }
+
+    /// Continue the current agent loop with an explicit abort signal.
+    pub async fn continue_turn_with_abort(
+        &mut self,
+        abort_signal: AbortSignal,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<AssistantMessage> {
+        let combined = self.make_combined_callback(on_event);
+        self.session
+            .agent
+            .run_continue_with_abort(Some(abort_signal), combined)
+            .await
+    }
+
     /// Create a new abort handle/signal pair for prompt cancellation.
     pub fn new_abort_handle() -> (AbortHandle, AbortSignal) {
         AbortHandle::new()
