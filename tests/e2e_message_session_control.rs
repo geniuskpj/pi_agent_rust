@@ -8,22 +8,31 @@
 //! - Model control (`setModel`, `getModel`, `setThinkingLevel`, `getThinkingLevel`)
 //!
 //! Session state is backed by a real `Session` + `SessionHandle`, exercising the
-//! full JSONL persistence plumbing. `RecordingHostActions` is retained because
-//! host-action delivery (sendMessage/sendUserMessage) requires an agent loop
-//! that these focused E2E tests intentionally do not run.
+//! full JSONL persistence plumbing. `RecordingHostActions` is retained for the
+//! manager-only tests below, while separate AgentSession-backed tests cover the
+//! idle replay path where `sendMessage(triggerTurn)` and `sendUserMessage()`
+//! drive a real agent turn.
 
 mod common;
 
 use async_trait::async_trait;
+use futures::Stream;
+use pi::agent::{Agent, AgentConfig, AgentSession};
+use pi::compaction::ResolvedCompactionSettings;
 use pi::error::Result;
 use pi::extensions::{
     ExtensionHostActions, ExtensionManager, ExtensionSendMessage, ExtensionSendUserMessage,
     ExtensionSession, JsExtensionLoadSpec, JsExtensionRuntimeHandle,
 };
 use pi::extensions_js::PiJsRuntimeConfig;
-use pi::session::{Session, SessionHandle};
+use pi::model::{
+    AssistantMessage, ContentBlock, StopReason, StreamEvent, TextContent, Usage, UserContent,
+};
+use pi::provider::{Context, Provider, StreamOptions};
+use pi::session::{Session, SessionHandle, SessionMessage};
 use pi::tools::ToolRegistry;
 use serde_json::Value;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 // ─── RecordingHostActions ───────────────────────────────────────────────────
@@ -50,11 +59,71 @@ impl ExtensionHostActions for RecordingHostActions {
     }
 }
 
+#[derive(Debug)]
+struct IdleReplayProvider;
+
+#[async_trait]
+#[allow(clippy::unnecessary_literal_bound)]
+impl Provider for IdleReplayProvider {
+    fn name(&self) -> &str {
+        "test-provider"
+    }
+
+    fn api(&self) -> &str {
+        "test-api"
+    }
+
+    fn model_id(&self) -> &str {
+        "test-model"
+    }
+
+    async fn stream(
+        &self,
+        _context: &Context<'_>,
+        _options: &StreamOptions,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        let partial = AssistantMessage {
+            content: Vec::new(),
+            api: self.api().to_string(),
+            provider: self.name().to_string(),
+            model: self.model_id().to_string(),
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp: 0,
+        };
+        let done = AssistantMessage {
+            content: vec![ContentBlock::Text(TextContent::new(
+                "resumed-response-0".to_string(),
+            ))],
+            api: self.api().to_string(),
+            provider: self.name().to_string(),
+            model: self.model_id().to_string(),
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp: 0,
+        };
+        Ok(Box::pin(futures::stream::iter(vec![
+            Ok(StreamEvent::Start { partial }),
+            Ok(StreamEvent::Done {
+                reason: StopReason::Stop,
+                message: done,
+            }),
+        ])))
+    }
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 struct ExtSetup {
     manager: ExtensionManager,
     host_actions: Arc<RecordingHostActions>,
+    session_handle: SessionHandle,
+}
+
+struct AgentSessionExtSetup {
+    agent_session: AgentSession,
     session_handle: SessionHandle,
 }
 
@@ -102,6 +171,43 @@ fn load_extension(harness: &common::TestHarness, source: &str) -> ExtSetup {
     ExtSetup {
         manager,
         host_actions,
+        session_handle,
+    }
+}
+
+fn load_agent_session_extension(
+    harness: &common::TestHarness,
+    source: &str,
+) -> AgentSessionExtSetup {
+    let cwd = harness.temp_dir().to_path_buf();
+    let entry_path = harness.create_file("extensions/ext.mjs", source.as_bytes());
+    let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
+        Some(cwd.clone()),
+    )));
+    let session_handle = SessionHandle(Arc::clone(&session));
+    let agent = Agent::new(
+        Arc::new(IdleReplayProvider),
+        ToolRegistry::new(&[], &cwd, None),
+        AgentConfig {
+            stream_options: StreamOptions {
+                api_key: Some("test-key".to_string()),
+                ..StreamOptions::default()
+            },
+            ..AgentConfig::default()
+        },
+    );
+    let agent_session = common::run_async(async move {
+        let mut agent_session =
+            AgentSession::new(agent, session, true, ResolvedCompactionSettings::default());
+        agent_session
+            .enable_extensions(&[], &cwd, None, &[entry_path])
+            .await
+            .expect("enable extensions");
+        agent_session
+    });
+
+    AgentSessionExtSetup {
+        agent_session,
         session_handle,
     }
 }
@@ -274,6 +380,151 @@ export default function init(pi) {
     assert_eq!(user_msgs.len(), 1);
     assert_eq!(user_msgs[0].text, "Please review the changes");
     drop(user_msgs);
+    write_jsonl_artifacts(&harness, test_name);
+}
+
+// ─── AgentSession Idle Replay Tests ────────────────────────────────────────
+
+#[test]
+fn e2e_agent_session_send_message_trigger_turn_runs_agent_turn_when_idle() {
+    let test_name = "e2e_agent_session_send_message_trigger_turn_runs_agent_turn_when_idle";
+    let harness = common::TestHarness::new(test_name);
+    let setup = load_agent_session_extension(
+        &harness,
+        r#"
+export default function init(pi) {
+  pi.registerCommand("emit-now", {
+    description: "emit a custom message and trigger a turn",
+    handler: async () => {
+      await pi.events("sendMessage", {
+        message: {
+          customType: "note",
+          content: "turn-now",
+          display: true
+        },
+        options: {
+          deliverAs: "steer",
+          triggerTurn: true
+        }
+      });
+      return "queued";
+    }
+  });
+}
+"#,
+    );
+
+    let session_handle = setup.session_handle;
+    let result = common::run_async({
+        let mut agent_session = setup.agent_session;
+        async move {
+            agent_session
+                .execute_extension_command("emit-now", "", 5_000, |_| {})
+                .await
+        }
+    });
+    assert!(
+        result.is_ok(),
+        "emit-now command should succeed: {result:?}"
+    );
+    let value = result.expect("emit-now command result");
+    assert_eq!(value.as_str(), Some("queued"));
+
+    common::run_async(async move {
+        let messages = session_handle.get_messages().await;
+        assert!(
+            messages.iter().any(|msg| {
+                matches!(
+                    msg,
+                    SessionMessage::Custom {
+                        custom_type,
+                        content,
+                        ..
+                    } if custom_type == "note" && content == "turn-now"
+                )
+            }),
+            "expected custom message prompt in session, got {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|msg| {
+                matches!(
+                    msg,
+                    SessionMessage::Assistant { message }
+                        if message.content.iter().any(|block| {
+                            matches!(block, ContentBlock::Text(text) if text.text == "resumed-response-0")
+                        })
+                )
+            }),
+            "expected assistant response after triggered turn, got {messages:?}"
+        );
+    });
+
+    write_jsonl_artifacts(&harness, test_name);
+}
+
+#[test]
+fn e2e_agent_session_send_user_message_runs_agent_turn_when_idle() {
+    let test_name = "e2e_agent_session_send_user_message_runs_agent_turn_when_idle";
+    let harness = common::TestHarness::new(test_name);
+    let setup = load_agent_session_extension(
+        &harness,
+        r#"
+export default function init(pi) {
+  pi.registerCommand("inject-user", {
+    description: "inject a user message",
+    handler: async () => {
+      await pi.events("sendUserMessage", {
+        text: "Please review the changes"
+      });
+      return "queued";
+    }
+  });
+}
+"#,
+    );
+
+    let session_handle = setup.session_handle;
+    let result = common::run_async({
+        let mut agent_session = setup.agent_session;
+        async move {
+            agent_session
+                .execute_extension_command("inject-user", "", 5_000, |_| {})
+                .await
+        }
+    });
+    assert!(
+        result.is_ok(),
+        "inject-user command should succeed: {result:?}"
+    );
+    let value = result.expect("inject-user command result");
+    assert_eq!(value.as_str(), Some("queued"));
+
+    common::run_async(async move {
+        let messages = session_handle.get_messages().await;
+        assert!(
+            messages.iter().any(|msg| {
+                matches!(
+                    msg,
+                    SessionMessage::User { content, .. }
+                        if matches!(content, UserContent::Text(text) if text == "Please review the changes")
+                )
+            }),
+            "expected injected user message in session, got {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|msg| {
+                matches!(
+                    msg,
+                    SessionMessage::Assistant { message }
+                        if message.content.iter().any(|block| {
+                            matches!(block, ContentBlock::Text(text) if text.text == "resumed-response-0")
+                        })
+                )
+            }),
+            "expected assistant response after triggered turn, got {messages:?}"
+        );
+    });
+
     write_jsonl_artifacts(&harness, test_name);
 }
 

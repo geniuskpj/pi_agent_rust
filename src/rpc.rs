@@ -158,6 +158,69 @@ fn is_extension_command(message: &str, expanded: &str) -> bool {
     message.trim_start().starts_with('/') && message == expanded
 }
 
+fn parse_extension_command_line(message: &str) -> Option<(String, String)> {
+    let trimmed = message.trim_start();
+    let stripped = trimmed.strip_prefix('/')?;
+    let (command, args) = stripped
+        .split_once(char::is_whitespace)
+        .unwrap_or((stripped, ""));
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    Some((command.to_string(), args.trim_start().to_string()))
+}
+
+fn resolve_extension_command(
+    message: &str,
+    expanded: &str,
+    manager: Option<&ExtensionManager>,
+) -> Option<(String, String)> {
+    if !is_extension_command(message, expanded) {
+        return None;
+    }
+
+    let manager = manager?;
+    let (command_name, args) = parse_extension_command_line(message)?;
+    manager
+        .has_command(&command_name)
+        .then_some((command_name, args))
+}
+
+fn rpc_agent_event_handler(
+    out_tx: std::sync::mpsc::Sender<String>,
+    runtime_handle: RuntimeHandle,
+    extensions: Option<ExtensionManager>,
+) -> impl Fn(AgentEvent) + Send + Sync + 'static {
+    let coalescer = extensions.map(crate::extensions::EventCoalescer::new);
+
+    move |event: AgentEvent| {
+        let serialized = if let AgentEvent::AgentEnd {
+            messages, error, ..
+        } = &event
+        {
+            json!({
+                "type": "agent_end",
+                "messages": messages,
+                "error": error,
+            })
+            .to_string()
+        } else {
+            serde_json::to_string(&event).unwrap_or_else(|err| {
+                json!({
+                    "type": "event_serialize_error",
+                    "error": err.to_string(),
+                })
+                .to_string()
+            })
+        };
+        let _ = out_tx.send(serialized);
+        if let Some(coalescer) = &coalescer {
+            coalescer.dispatch_agent_event_lazy(&event, &runtime_handle);
+        }
+    }
+}
+
 async fn rpc_dispatch_session_before_switch(
     manager: Option<ExtensionManager>,
     reason: &str,
@@ -516,8 +579,35 @@ pub async fn run(
                     };
 
                 let expanded = options.resources.expand_input(&message);
+                let extension_command = if is_extension_command(&message, &expanded) {
+                    let guard = session
+                        .lock(&cx)
+                        .await
+                        .map_err(|err| Error::session(format!("session lock failed: {err}")))?;
+                    resolve_extension_command(
+                        &message,
+                        &expanded,
+                        guard
+                            .extensions
+                            .as_ref()
+                            .map(crate::extensions::ExtensionRegion::manager),
+                    )
+                } else {
+                    None
+                };
 
                 if is_streaming.load(Ordering::SeqCst) {
+                    if extension_command.is_some() {
+                        let resp = response_error(
+                            id,
+                            "prompt",
+                            "Extension commands are not allowed while agent is streaming"
+                                .to_string(),
+                        );
+                        let _ = out_tx.send(resp);
+                        continue;
+                    }
+
                     if streaming_behavior.is_none() {
                         let resp = response_error(
                             id,
@@ -567,27 +657,45 @@ pub async fn run(
                 let is_streaming = Arc::clone(&is_streaming);
                 let is_compacting = Arc::clone(&is_compacting);
                 let abort_handle_slot = Arc::clone(&abort_handle);
-                let retry_abort = retry_abort.clone();
-                let options = options.clone();
-                let expanded = expanded.clone();
                 let runtime_handle = options.runtime_handle.clone();
-                runtime_handle.spawn(async move {
-                    let cx = AgentCx::for_request();
-                    run_prompt_with_retry(
-                        session,
-                        shared_state,
-                        is_streaming,
-                        is_compacting,
-                        abort_handle_slot,
-                        out_tx,
-                        retry_abort,
-                        options,
-                        expanded,
-                        images,
-                        cx,
-                    )
-                    .await;
-                });
+                if let Some((command_name, args)) = extension_command {
+                    let command_runtime = runtime_handle.clone();
+                    runtime_handle.spawn(async move {
+                        let cx = AgentCx::for_request();
+                        run_extension_command(
+                            session,
+                            is_streaming,
+                            abort_handle_slot,
+                            out_tx,
+                            command_runtime,
+                            command_name,
+                            args,
+                            cx,
+                        )
+                        .await;
+                    });
+                } else {
+                    let retry_abort = retry_abort.clone();
+                    let options = options.clone();
+                    let expanded = expanded.clone();
+                    runtime_handle.spawn(async move {
+                        let cx = AgentCx::for_request();
+                        run_prompt_with_retry(
+                            session,
+                            shared_state,
+                            is_streaming,
+                            is_compacting,
+                            abort_handle_slot,
+                            out_tx,
+                            retry_abort,
+                            options,
+                            expanded,
+                            images,
+                            cx,
+                        )
+                        .await;
+                    });
+                }
             }
 
             "steer" => {
@@ -1846,38 +1954,8 @@ async fn run_prompt_with_retry(
                 }
             };
             let extensions = guard.extensions.as_ref().map(|r| r.manager().clone());
-            let runtime_for_events_handler = runtime_for_events.clone();
-            let event_tx = out_tx.clone();
-            let coalescer = extensions
-                .as_ref()
-                .map(|m| crate::extensions::EventCoalescer::new(m.clone()));
-            let event_handler = move |event: AgentEvent| {
-                let serialized = if let AgentEvent::AgentEnd {
-                    messages, error, ..
-                } = &event
-                {
-                    json!({
-                        "type": "agent_end",
-                        "messages": messages,
-                        "error": error,
-                    })
-                    .to_string()
-                } else {
-                    serde_json::to_string(&event).unwrap_or_else(|err| {
-                        json!({
-                            "type": "event_serialize_error",
-                            "error": err.to_string(),
-                        })
-                        .to_string()
-                    })
-                };
-                let _ = event_tx.send(serialized);
-                // Route non-lifecycle events through the coalescer for
-                // batched/coalesced dispatch with lazy serialization.
-                if let Some(coal) = &coalescer {
-                    coal.dispatch_agent_event_lazy(&event, &runtime_for_events_handler);
-                }
-            };
+            let event_handler =
+                rpc_agent_event_handler(out_tx.clone(), runtime_for_events, extensions);
 
             if images.is_empty() {
                 guard
@@ -2017,6 +2095,74 @@ async fn run_prompt_with_retry(
         .is_ok_and(|state| state.auto_compaction_enabled);
     if auto_compaction_enabled {
         maybe_auto_compact(session, options, is_compacting, out_tx).await;
+    }
+}
+
+async fn run_extension_command(
+    session: Arc<Mutex<AgentSession>>,
+    is_streaming: Arc<AtomicBool>,
+    abort_handle_slot: Arc<Mutex<Option<AbortHandle>>>,
+    out_tx: std::sync::mpsc::Sender<String>,
+    runtime_handle: RuntimeHandle,
+    command_name: String,
+    args: String,
+    cx: AgentCx,
+) {
+    is_streaming.store(true, Ordering::SeqCst);
+
+    let (abort_handle, abort_signal) = AbortHandle::new();
+    if let Ok(mut guard) = OwnedMutexGuard::lock(Arc::clone(&abort_handle_slot), &cx).await {
+        *guard = Some(abort_handle);
+    } else {
+        is_streaming.store(false, Ordering::SeqCst);
+        return;
+    }
+
+    let result = {
+        let mut guard = match OwnedMutexGuard::lock(Arc::clone(&session), &cx).await {
+            Ok(guard) => guard,
+            Err(err) => {
+                let err = Error::session(format!("session lock failed: {err}"));
+                let mut payload = json!({
+                    "type": "agent_end",
+                    "messages": [],
+                    "error": err.to_string(),
+                });
+                payload["errorHints"] = error_hints_value(&err);
+                let _ = out_tx.send(event(&payload));
+                is_streaming.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        let extensions = guard
+            .extensions
+            .as_ref()
+            .map(|region| region.manager().clone());
+        let event_handler = rpc_agent_event_handler(out_tx.clone(), runtime_handle, extensions);
+        guard
+            .execute_extension_command_with_abort(
+                &command_name,
+                &args,
+                EXTENSION_EVENT_TIMEOUT_MS,
+                Some(abort_signal),
+                event_handler,
+            )
+            .await
+    };
+
+    if let Ok(mut guard) = OwnedMutexGuard::lock(Arc::clone(&abort_handle_slot), &cx).await {
+        *guard = None;
+    }
+    is_streaming.store(false, Ordering::SeqCst);
+
+    if let Err(err) = result {
+        let mut payload = json!({
+            "type": "agent_end",
+            "messages": [],
+            "error": err.to_string(),
+        });
+        payload["errorHints"] = error_hints_value(&err);
+        let _ = out_tx.send(event(&payload));
     }
 }
 

@@ -13,11 +13,7 @@ use common::TestHarness;
 use pi::agent::{Agent, AgentConfig, AgentSession};
 use pi::auth::AuthStorage;
 use pi::config::Config;
-use pi::extensions::{
-    ExtensionManager, ExtensionRegion, ExtensionUiRequest, JsExtensionLoadSpec,
-    JsExtensionRuntimeHandle,
-};
-use pi::extensions_js::PiJsRuntimeConfig;
+use pi::extensions::{ExtensionManager, ExtensionRegion, ExtensionUiRequest};
 use pi::http::client::Client;
 use pi::model::{AssistantMessage, ContentBlock, StopReason, TextContent, Usage, UserContent};
 use pi::models::ModelEntry;
@@ -140,6 +136,36 @@ fn parse_response(line: &str) -> Value {
     serde_json::from_str(line.trim()).expect("parse JSON response")
 }
 
+async fn recv_response(out_rx: &Arc<Mutex<Receiver<String>>>, label: &str) -> Value {
+    let start = Instant::now();
+
+    loop {
+        let line = recv_line(out_rx, label)
+            .await
+            .unwrap_or_else(|err| panic!("{err}"));
+        let value = parse_response(&line);
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("response") => return value,
+            Some("agent_end") => {
+                let has_error = value
+                    .get("error")
+                    .is_some_and(|error| !error.is_null() && error != "");
+                assert!(
+                    !has_error,
+                    "{label}: unexpected agent_end error while waiting for response: {value}"
+                );
+            }
+            _ => {}
+        }
+
+        assert!(
+            start.elapsed() <= Duration::from_secs(10),
+            "{label}: timed out waiting for RPC response"
+        );
+    }
+}
+
 /// Send a command and get the response.
 async fn send_recv(
     in_tx: &asupersync::channel::mpsc::Sender<String>,
@@ -152,10 +178,7 @@ async fn send_recv(
         .send(&cx, cmd.to_string())
         .await
         .unwrap_or_else(|_| panic!("send {label}"));
-    let line = recv_line(out_rx, label)
-        .await
-        .unwrap_or_else(|err| panic!("{err}"));
-    parse_response(&line)
+    recv_response(out_rx, label).await
 }
 
 /// Assert that a response indicates success with the expected command.
@@ -1354,6 +1377,65 @@ fn rpc_prompt_missing_message() {
 }
 
 #[test]
+fn rpc_prompt_dispatches_registered_extension_command() {
+    let harness = TestHarness::new("rpc_prompt_dispatches_registered_extension_command");
+    let cassette_dir = cassette_root();
+    let runtime = asupersync::runtime::RuntimeBuilder::current_thread()
+        .build()
+        .expect("build test runtime");
+    let handle = runtime.handle();
+
+    runtime.block_on(async move {
+        let (agent_session, _manager) = build_agent_session_with_js_extension(
+            Session::in_memory(),
+            &cassette_dir,
+            &harness,
+            RPC_PROMPT_EXTENSION_COMMAND_EXT,
+        )
+        .await;
+        let options = build_options(&handle, harness.temp_path("auth.json"), vec![], vec![]);
+        let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
+        let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+        let out_rx = Arc::new(Mutex::new(out_rx));
+
+        let server = handle.spawn(async move { run(agent_session, options, in_rx, out_tx).await });
+
+        let resp = send_recv(
+            &in_tx,
+            &out_rx,
+            r#"{"id":"1","type":"prompt","message":"/emit-now"}"#,
+            "prompt(extension command)",
+        )
+        .await;
+        assert_ok(&resp, "prompt");
+
+        let messages = wait_for_custom_message(
+            &in_tx,
+            &out_rx,
+            "rpc-note",
+            "rpc-message",
+            "get_messages(after extension command)",
+        )
+        .await;
+        let messages = messages["data"]["messages"]
+            .as_array()
+            .expect("messages array");
+        assert!(
+            messages.iter().any(|message| {
+                message["role"] == "custom"
+                    && message["customType"] == "rpc-note"
+                    && message["content"] == "rpc-message"
+            }),
+            "expected RPC prompt command to append custom message, got {messages:?}"
+        );
+
+        drop(in_tx);
+        let result = server.await;
+        assert!(result.is_ok(), "rpc server error: {result:?}");
+    });
+}
+
+#[test]
 fn rpc_steer_missing_message() {
     let harness = TestHarness::new("rpc_steer_missing_message");
     let cassette_dir = cassette_root();
@@ -1627,25 +1709,17 @@ async fn build_agent_session_with_js_extension(
 ) -> (AgentSession, ExtensionManager) {
     let cwd = harness.temp_dir().to_path_buf();
     let ext_entry_path = harness.create_file("extensions/ext.mjs", source.as_bytes());
-    let spec = JsExtensionLoadSpec::from_entry_path(&ext_entry_path).expect("load spec");
-
-    let manager = ExtensionManager::new();
-    let tools = Arc::new(ToolRegistry::new(&[], &cwd, None));
-    let js_config = PiJsRuntimeConfig {
-        cwd: cwd.display().to_string(),
-        ..Default::default()
-    };
-    let runtime = JsExtensionRuntimeHandle::start(js_config, tools, manager.clone())
-        .await
-        .expect("start js runtime");
-    manager.set_js_runtime(runtime);
-    manager
-        .load_js_extensions(vec![spec])
-        .await
-        .expect("load extension");
-
     let mut agent_session = build_agent_session(session, cassette_dir);
-    agent_session.extensions = Some(ExtensionRegion::new(manager.clone()));
+    agent_session
+        .enable_extensions(&[], &cwd, None, &[ext_entry_path])
+        .await
+        .expect("enable extensions");
+    let manager = agent_session
+        .extensions
+        .as_ref()
+        .expect("extension region")
+        .manager()
+        .clone();
     (agent_session, manager)
 }
 
@@ -1668,6 +1742,25 @@ export default function init(pi) {
     pi.registerCommand("get-events", {
         description: "Return recorded session switch events",
         handler: async () => JSON.stringify(events),
+    });
+}
+"#;
+
+const RPC_PROMPT_EXTENSION_COMMAND_EXT: &str = r#"
+export default function init(pi) {
+    pi.registerCommand("emit-now", {
+        description: "Record a custom message through RPC prompt dispatch",
+        handler: async () => {
+            await pi.events("sendMessage", {
+                message: {
+                    customType: "rpc-note",
+                    content: "rpc-message",
+                    display: true
+                },
+                options: { triggerTurn: false }
+            });
+            return "queued";
+        }
     });
 }
 "#;
@@ -1704,6 +1797,44 @@ async fn recv_ui_request(out_rx: &Arc<Mutex<Receiver<String>>>, label: &str) -> 
             "{label}: timed out waiting for extension_ui_request"
         );
         asupersync::time::sleep(asupersync::time::wall_now(), Duration::from_millis(5)).await;
+    }
+}
+
+async fn wait_for_custom_message(
+    in_tx: &asupersync::channel::mpsc::Sender<String>,
+    out_rx: &Arc<Mutex<Receiver<String>>>,
+    custom_type: &str,
+    content: &str,
+    label: &str,
+) -> Value {
+    let start = Instant::now();
+    let mut attempt = 0usize;
+
+    loop {
+        attempt = attempt.saturating_add(1);
+        let cmd = json!({
+            "id": format!("wait-{attempt}"),
+            "type": "get_messages",
+        })
+        .to_string();
+        let resp = send_recv(in_tx, out_rx, &cmd, label).await;
+        assert_ok(&resp, "get_messages");
+
+        if resp["data"]["messages"].as_array().is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message["role"] == "custom"
+                    && message["customType"] == custom_type
+                    && message["content"] == content
+            })
+        }) {
+            return resp;
+        }
+
+        assert!(
+            start.elapsed() <= Duration::from_secs(10),
+            "{label}: timed out waiting for custom message {custom_type}/{content}"
+        );
+        asupersync::time::sleep(asupersync::time::wall_now(), Duration::from_millis(10)).await;
     }
 }
 
