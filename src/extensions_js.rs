@@ -6143,26 +6143,200 @@ pub fn generate_monorepo_stub(names: &[String]) -> String {
     lines.join("\n")
 }
 
-fn source_declares_binding(source: &str, name: &str) -> bool {
-    let patterns = [
-        format!("const {name}"),
-        format!("let {name}"),
-        format!("var {name}"),
-        format!("function {name}"),
-        format!("class {name}"),
-        format!("export const {name}"),
-        format!("export let {name}"),
-        format!("export var {name}"),
-        format!("export function {name}"),
-        format!("export class {name}"),
-    ];
-    source.lines().any(|line| {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("//") || trimmed.starts_with('*') {
-            return false;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DeclState {
+    #[default]
+    None,
+    AfterExport,
+    AfterAsync,
+    AfterDeclKeyword,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BindingLexMode {
+    #[default]
+    Normal,
+    SingleQuoted,
+    DoubleQuoted,
+    Template,
+    LineComment,
+    BlockComment,
+}
+
+#[derive(Debug, Default)]
+struct BindingScanner {
+    mode: BindingLexMode,
+    escaped: bool,
+    state: DeclState,
+}
+
+impl BindingScanner {
+    fn consume_context(&mut self, b: u8, next: Option<u8>, index: &mut usize) -> bool {
+        match self.mode {
+            BindingLexMode::Normal => false,
+            BindingLexMode::LineComment => {
+                if b == b'\n' {
+                    self.mode = BindingLexMode::Normal;
+                }
+                *index += 1;
+                true
+            }
+            BindingLexMode::BlockComment => {
+                if b == b'*' && next == Some(b'/') {
+                    *index += 2;
+                    self.mode = BindingLexMode::Normal;
+                } else {
+                    *index += 1;
+                }
+                true
+            }
+            BindingLexMode::SingleQuoted => {
+                consume_quoted_context(&mut self.mode, &mut self.escaped, b, b'\'');
+                *index += 1;
+                true
+            }
+            BindingLexMode::DoubleQuoted => {
+                consume_quoted_context(&mut self.mode, &mut self.escaped, b, b'"');
+                *index += 1;
+                true
+            }
+            BindingLexMode::Template => {
+                consume_quoted_context(&mut self.mode, &mut self.escaped, b, b'`');
+                *index += 1;
+                true
+            }
         }
-        patterns.iter().any(|pattern| trimmed.starts_with(pattern))
-    })
+    }
+
+    fn enter_context(&mut self, b: u8, next: Option<u8>, index: &mut usize) -> bool {
+        if b == b'/' && next == Some(b'/') {
+            self.mode = BindingLexMode::LineComment;
+            *index += 2;
+            return true;
+        }
+
+        if b == b'/' && next == Some(b'*') {
+            self.mode = BindingLexMode::BlockComment;
+            *index += 2;
+            return true;
+        }
+
+        if b == b'\'' {
+            self.mode = BindingLexMode::SingleQuoted;
+            *index += 1;
+            return true;
+        }
+
+        if b == b'"' {
+            self.mode = BindingLexMode::DoubleQuoted;
+            *index += 1;
+            return true;
+        }
+
+        if b == b'`' {
+            self.mode = BindingLexMode::Template;
+            *index += 1;
+            return true;
+        }
+
+        false
+    }
+
+    fn advance_state(&mut self, token: &str, name: &str) -> bool {
+        self.state = match self.state {
+            DeclState::None => match token {
+                "export" => DeclState::AfterExport,
+                "const" | "let" | "var" | "function" | "class" => DeclState::AfterDeclKeyword,
+                _ => DeclState::None,
+            },
+            DeclState::AfterExport => match token {
+                "const" | "let" | "var" | "function" | "class" => DeclState::AfterDeclKeyword,
+                "async" => DeclState::AfterAsync,
+                _ => DeclState::None,
+            },
+            DeclState::AfterAsync => {
+                if token == "function" {
+                    DeclState::AfterDeclKeyword
+                } else {
+                    DeclState::None
+                }
+            }
+            DeclState::AfterDeclKeyword => {
+                if token == name {
+                    return true;
+                }
+                DeclState::None
+            }
+        };
+
+        false
+    }
+}
+
+const fn consume_quoted_context(
+    mode: &mut BindingLexMode,
+    escaped: &mut bool,
+    b: u8,
+    terminator: u8,
+) {
+    if *escaped {
+        *escaped = false;
+    } else if b == b'\\' {
+        *escaped = true;
+    } else if b == terminator {
+        *mode = BindingLexMode::Normal;
+    }
+}
+
+fn consume_js_identifier<'a>(source: &'a str, bytes: &[u8], index: &mut usize) -> &'a str {
+    let start = *index;
+    *index += 1;
+    while *index < bytes.len() && is_js_ident_continue(bytes[*index]) {
+        *index += 1;
+    }
+    &source[start..*index]
+}
+
+fn source_declares_binding(source: &str, name: &str) -> bool {
+    if name.is_empty() || !name.is_ascii() {
+        return false;
+    }
+
+    let bytes = source.as_bytes();
+    let mut i = 0usize;
+    let mut scanner = BindingScanner::default();
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        let next = bytes.get(i + 1).copied();
+
+        if scanner.consume_context(b, next, &mut i) || scanner.enter_context(b, next, &mut i) {
+            continue;
+        }
+
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+
+        if is_js_ident_start(b) {
+            let token = consume_js_identifier(source, bytes, &mut i);
+            if scanner.advance_state(token, name) {
+                return true;
+            }
+            continue;
+        }
+
+        if scanner.state == DeclState::AfterDeclKeyword && b == b'*' {
+            i += 1;
+            continue;
+        }
+
+        scanner.state = DeclState::None;
+        i += 1;
+    }
+
+    false
 }
 
 /// Extract static `require("specifier")` calls from JavaScript source.
@@ -18460,6 +18634,27 @@ export const bundled = join(__dirname, "doom1.wad");
         assert!(
             !rewritten.contains("const __dirname = (() =>"),
             "declared __dirname should not be replaced:\n{rewritten}"
+        );
+    }
+
+    #[test]
+    fn source_declares_binding_detects_inline_const_binding() {
+        let source = r#"import { dirname } from "node:path"; const __dirname = dirname("/tmp/demo"); export const bundled = __dirname;"#;
+        assert!(source_declares_binding(source, "__dirname"));
+    }
+
+    #[test]
+    fn maybe_cjs_to_esm_leaves_inline_doom_style_dirname_module_alone() {
+        let source = r#"import { dirname, join } from "node:path"; import { fileURLToPath } from "node:url"; const __dirname = dirname(fileURLToPath(import.meta.url)); export const bundled = join(__dirname, "doom1.wad");"#;
+
+        let rewritten = maybe_cjs_to_esm(source);
+        assert!(
+            !rewritten.contains("const __filename ="),
+            "inline declared __dirname should not trigger __filename shim:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("const __dirname = (() =>"),
+            "inline declared __dirname should not be replaced:\n{rewritten}"
         );
     }
 
