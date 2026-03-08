@@ -254,7 +254,8 @@ impl ExtensionSession for InteractiveExtensionSession {
                     SessionMessage::User { .. }
                     | SessionMessage::Assistant { .. }
                     | SessionMessage::ToolResult { .. }
-                    | SessionMessage::BashExecution { .. } => Some(msg.message.clone()),
+                    | SessionMessage::BashExecution { .. }
+                    | SessionMessage::Custom { .. } => Some(msg.message.clone()),
                     _ => None,
                 },
                 _ => None,
@@ -563,13 +564,17 @@ mod tests {
     use super::*;
 
     use crate::agent::{Agent, AgentConfig};
+    use crate::config::Config;
     use crate::model::StreamEvent;
-    use crate::provider::{Context, Provider, StreamOptions};
-    use crate::session::Session;
+    use crate::models::ModelEntry;
+    use crate::provider::{Context, InputType, Model, ModelCost, Provider, StreamOptions};
+    use crate::session::{Session, SessionMessage};
     use crate::tools::ToolRegistry;
     use asupersync::runtime::RuntimeBuilder;
     use async_trait::async_trait;
     use futures::stream;
+    use serde_json::json;
+    use std::collections::HashMap;
     use std::path::Path;
     use std::pin::Pin;
 
@@ -633,6 +638,86 @@ mod tests {
             session,
             agent,
         )
+    }
+
+    fn dummy_model_entry() -> ModelEntry {
+        ModelEntry {
+            model: Model {
+                id: "noop-model".to_string(),
+                name: "Noop Model".to_string(),
+                api: "noop".to_string(),
+                provider: "noop".to_string(),
+                base_url: "https://example.invalid".to_string(),
+                reasoning: false,
+                input: vec![InputType::Text],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 8192,
+                max_tokens: 1024,
+                headers: HashMap::new(),
+            },
+            api_key: None,
+            headers: HashMap::new(),
+            auth_header: true,
+            compat: None,
+            oauth_config: None,
+        }
+    }
+
+    #[test]
+    fn interactive_extension_session_get_messages_includes_custom_messages() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let cx = Cx::for_request();
+            {
+                let mut guard = session.lock(&cx).await.expect("lock session");
+                guard.append_message(SessionMessage::Custom {
+                    custom_type: "note".to_string(),
+                    content: "hello".to_string(),
+                    display: true,
+                    details: Some(json!({ "from": "test" })),
+                    timestamp: Some(1),
+                });
+            }
+
+            let ext_session = InteractiveExtensionSession {
+                session,
+                model_entry: Arc::new(StdMutex::new(dummy_model_entry())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                config: Config::default(),
+                save_enabled: false,
+            };
+
+            let messages = ext_session.get_messages().await;
+            assert!(
+                messages.iter().any(|message| {
+                    matches!(
+                        message,
+                        SessionMessage::Custom {
+                            custom_type,
+                            content,
+                            display,
+                            details,
+                            ..
+                        } if custom_type == "note"
+                            && content == "hello"
+                            && *display
+                            && details.as_ref().and_then(|value| value.get("from").and_then(Value::as_str))
+                                == Some("test")
+                    )
+                }),
+                "expected custom message in interactive extension session messages, got {messages:?}"
+            );
+        });
     }
 
     #[test]
