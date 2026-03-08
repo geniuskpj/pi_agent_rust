@@ -2081,6 +2081,8 @@ pub struct AgentSession {
     /// down when the session ends.
     pub extensions: Option<ExtensionRegion>,
     extensions_is_streaming: Arc<AtomicBool>,
+    extensions_turn_active: Arc<AtomicBool>,
+    extensions_pending_idle_actions: Arc<StdMutex<VecDeque<PendingIdleAction>>>,
     compaction_settings: ResolvedCompactionSettings,
     compaction_worker: CompactionWorkerState,
     model_registry: Option<ModelRegistry>,
@@ -2111,11 +2113,19 @@ impl ExtensionInjectedQueue {
     }
 }
 
+#[derive(Debug)]
+enum PendingIdleAction {
+    CustomMessage(Message),
+    UserText(String),
+}
+
 #[derive(Clone)]
 struct AgentSessionHostActions {
     session: Arc<Mutex<Session>>,
     injected: Arc<StdMutex<ExtensionInjectedQueue>>,
     is_streaming: Arc<AtomicBool>,
+    is_turn_active: Arc<AtomicBool>,
+    pending_idle_actions: Arc<StdMutex<VecDeque<PendingIdleAction>>>,
 }
 
 impl AgentSessionHostActions {
@@ -2144,6 +2154,13 @@ impl AgentSessionHostActions {
         session.append_model_message(message);
         Ok(())
     }
+
+    fn queue_pending_idle_action(&self, action: PendingIdleAction) {
+        let Ok(mut actions) = self.pending_idle_actions.lock() else {
+            return;
+        };
+        actions.push_back(action);
+    }
 }
 
 #[async_trait]
@@ -2166,15 +2183,22 @@ impl ExtensionHostActions for AgentSessionHostActions {
             return Ok(());
         }
 
-        // Non-streaming, best-effort: persist to session. Triggering a new turn is handled by the
-        // interactive layer; non-interactive modes will pick this up on the next prompt.
-        let _ = message.trigger_turn;
+        if self.is_turn_active.load(Ordering::SeqCst) {
+            return self.append_to_session(custom_message).await;
+        }
+
+        if message.trigger_turn {
+            self.queue_pending_idle_action(PendingIdleAction::CustomMessage(custom_message));
+            return Ok(());
+        }
+
         self.append_to_session(custom_message).await
     }
 
     async fn send_user_message(&self, message: ExtensionSendUserMessage) -> Result<()> {
+        let text = message.text;
         let user_message = Message::User(UserMessage {
-            content: UserContent::Text(message.text),
+            content: UserContent::Text(text.clone()),
             timestamp: Utc::now().timestamp_millis(),
         });
 
@@ -2183,8 +2207,12 @@ impl ExtensionHostActions for AgentSessionHostActions {
             return Ok(());
         }
 
-        // Non-streaming, best-effort: persist to session. Interactive mode triggers turns via UI.
-        self.append_to_session(user_message).await
+        if self.is_turn_active.load(Ordering::SeqCst) {
+            return self.append_to_session(user_message).await;
+        }
+
+        self.queue_pending_idle_action(PendingIdleAction::UserText(text));
+        Ok(())
     }
 }
 
@@ -2332,6 +2360,63 @@ mod extensions_integration_tests {
             Pin<Box<dyn Stream<Item = crate::error::Result<StreamEvent>> + Send>>,
         > {
             Ok(Box::pin(futures::stream::empty()))
+        }
+    }
+
+    #[derive(Debug)]
+    struct IdleCommandProvider;
+
+    #[async_trait]
+    #[allow(clippy::unnecessary_literal_bound)]
+    impl Provider for IdleCommandProvider {
+        fn name(&self) -> &str {
+            "test-provider"
+        }
+
+        fn api(&self) -> &str {
+            "test-api"
+        }
+
+        fn model_id(&self) -> &str {
+            "test-model"
+        }
+
+        async fn stream(
+            &self,
+            _context: &Context<'_>,
+            _options: &StreamOptions,
+        ) -> crate::error::Result<
+            Pin<Box<dyn Stream<Item = crate::error::Result<StreamEvent>> + Send>>,
+        > {
+            let partial = AssistantMessage {
+                content: Vec::new(),
+                api: self.api().to_string(),
+                provider: self.name().to_string(),
+                model: self.model_id().to_string(),
+                usage: Usage::default(),
+                stop_reason: StopReason::Stop,
+                error_message: None,
+                timestamp: 0,
+            };
+            let done = AssistantMessage {
+                content: vec![ContentBlock::Text(TextContent::new(
+                    "resumed-response-0".to_string(),
+                ))],
+                api: self.api().to_string(),
+                provider: self.name().to_string(),
+                model: self.model_id().to_string(),
+                usage: Usage::default(),
+                stop_reason: StopReason::Stop,
+                error_message: None,
+                timestamp: 0,
+            };
+            Ok(Box::pin(futures::stream::iter(vec![
+                Ok(StreamEvent::Start { partial }),
+                Ok(StreamEvent::Done {
+                    reason: StopReason::Stop,
+                    message: done,
+                }),
+            ])))
         }
     }
 
@@ -2648,10 +2733,7 @@ mod extensions_integration_tests {
                 .expect("execute tool");
 
             let cx = crate::agent_cx::AgentCx::for_request();
-            let session_guard = session
-                .lock(cx.cx())
-                .await
-                .expect("lock session");
+            let session_guard = session.lock(cx.cx()).await.expect("lock session");
             let messages = session_guard.to_messages_for_current_path();
 
             assert!(
@@ -2732,10 +2814,7 @@ mod extensions_integration_tests {
                 .expect("execute tool");
 
             let cx = crate::agent_cx::AgentCx::for_request();
-            let session_guard = session
-                .lock(cx.cx())
-                .await
-                .expect("lock session");
+            let session_guard = session.lock(cx.cx()).await.expect("lock session");
             let messages = session_guard.to_messages_for_current_path();
 
             assert!(
@@ -2750,6 +2829,176 @@ mod extensions_integration_tests {
                     )
                 }),
                 "expected custom message to be persisted, got {messages:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn extension_command_send_message_trigger_turn_runs_agent_turn_when_idle() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let entry_path = temp_dir.path().join("ext.mjs");
+            std::fs::write(
+                &entry_path,
+                r#"
+                export default function init(pi) {
+                  pi.registerCommand("emit-now", {
+                    description: "emit a custom message and trigger a turn",
+                    handler: async () => {
+                      await pi.events("sendMessage", {
+                        message: {
+                          customType: "note",
+                          content: "turn-now",
+                          display: true
+                        },
+                        options: {
+                          deliverAs: "steer",
+                          triggerTurn: true
+                        }
+                      });
+                      return "queued";
+                    }
+                  });
+                }
+                "#,
+            )
+            .expect("write extension entry");
+
+            let provider = Arc::new(IdleCommandProvider);
+            let tools = ToolRegistry::new(&[], Path::new("."), None);
+            let agent = Agent::new(provider, tools, AgentConfig::default());
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let mut agent_session = AgentSession::new(
+                agent,
+                Arc::clone(&session),
+                false,
+                ResolvedCompactionSettings::default(),
+            );
+
+            agent_session
+                .enable_extensions(&[], temp_dir.path(), None, &[entry_path])
+                .await
+                .expect("enable extensions");
+
+            let value = agent_session
+                .execute_extension_command("emit-now", "", 5_000, |_| {})
+                .await
+                .expect("execute extension command");
+            assert_eq!(value.as_str(), Some("queued"));
+
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let session_guard = session.lock(cx.cx()).await.expect("lock session");
+            let messages = session_guard.to_messages_for_current_path();
+
+            assert!(
+                messages.iter().any(|msg| {
+                    matches!(
+                        msg,
+                        Message::Custom(CustomMessage { custom_type, content, .. })
+                            if custom_type == "note" && content == "turn-now"
+                    )
+                }),
+                "expected custom message prompt in session, got {messages:?}"
+            );
+            assert!(
+                messages.iter().any(|msg| {
+                    matches!(
+                        msg,
+                        Message::Assistant(assistant)
+                            if assistant.content.iter().any(|block| matches!(
+                                block,
+                                ContentBlock::Text(TextContent { text, .. })
+                                    if text == "resumed-response-0"
+                            ))
+                    )
+                }),
+                "expected assistant response after triggered turn, got {messages:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn extension_command_send_user_message_runs_agent_turn_when_idle() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let entry_path = temp_dir.path().join("ext.mjs");
+            std::fs::write(
+                &entry_path,
+                r#"
+                export default function init(pi) {
+                  pi.registerCommand("inject-user", {
+                    description: "inject a user message",
+                    handler: async () => {
+                      await pi.events("sendUserMessage", {
+                        text: "Please review the changes"
+                      });
+                      return "queued";
+                    }
+                  });
+                }
+                "#,
+            )
+            .expect("write extension entry");
+
+            let provider = Arc::new(IdleCommandProvider);
+            let tools = ToolRegistry::new(&[], Path::new("."), None);
+            let agent = Agent::new(provider, tools, AgentConfig::default());
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let mut agent_session = AgentSession::new(
+                agent,
+                Arc::clone(&session),
+                false,
+                ResolvedCompactionSettings::default(),
+            );
+
+            agent_session
+                .enable_extensions(&[], temp_dir.path(), None, &[entry_path])
+                .await
+                .expect("enable extensions");
+
+            let value = agent_session
+                .execute_extension_command("inject-user", "", 5_000, |_| {})
+                .await
+                .expect("execute extension command");
+            assert_eq!(value.as_str(), Some("queued"));
+
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let session_guard = session.lock(cx.cx()).await.expect("lock session");
+            let messages = session_guard.to_messages_for_current_path();
+
+            assert!(
+                messages.iter().any(|msg| {
+                    matches!(
+                        msg,
+                        Message::User(UserMessage {
+                            content: UserContent::Text(text),
+                            ..
+                        }) if text == "Please review the changes"
+                    )
+                }),
+                "expected injected user message in session, got {messages:?}"
+            );
+            assert!(
+                messages.iter().any(|msg| {
+                    matches!(
+                        msg,
+                        Message::Assistant(assistant)
+                            if assistant.content.iter().any(|block| matches!(
+                                block,
+                                ContentBlock::Text(TextContent { text, .. })
+                                    if text == "resumed-response-0"
+                            ))
+                    )
+                }),
+                "expected assistant response after injected user turn, got {messages:?}"
             );
         });
     }
@@ -4640,6 +4889,8 @@ impl AgentSession {
             save_enabled,
             extensions: None,
             extensions_is_streaming: Arc::new(AtomicBool::new(false)),
+            extensions_turn_active: Arc::new(AtomicBool::new(false)),
+            extensions_pending_idle_actions: Arc::new(StdMutex::new(VecDeque::new())),
             compaction_settings,
             compaction_worker: CompactionWorkerState::new(CompactionQuota::default()),
             model_registry: None,
@@ -4762,6 +5013,59 @@ impl AgentSession {
         on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
     ) -> Result<()> {
         self.compact_synchronous(Arc::new(on_event)).await
+    }
+
+    pub async fn execute_extension_command(
+        &mut self,
+        command_name: &str,
+        args: &str,
+        timeout_ms: u64,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<Value> {
+        self.execute_extension_command_with_abort(command_name, args, timeout_ms, None, on_event)
+            .await
+    }
+
+    pub async fn execute_extension_command_with_abort(
+        &mut self,
+        command_name: &str,
+        args: &str,
+        timeout_ms: u64,
+        abort: Option<AbortSignal>,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<Value> {
+        let manager = self
+            .extensions
+            .as_ref()
+            .map(ExtensionRegion::manager)
+            .ok_or_else(|| Error::extension("Extensions are disabled"))?
+            .clone();
+        let on_event: AgentEventHandler = Arc::new(on_event);
+
+        self.run_pending_idle_actions_with_abort(abort.clone(), Arc::clone(&on_event))
+            .await?;
+
+        let command_result = manager
+            .execute_command(command_name, args, timeout_ms)
+            .await;
+        let replay_result = self
+            .run_pending_idle_actions_with_abort(abort, Arc::clone(&on_event))
+            .await;
+
+        match command_result {
+            Ok(value) => {
+                replay_result?;
+                Ok(value)
+            }
+            Err(err) => {
+                if let Err(replay_err) = replay_result {
+                    tracing::warn!(
+                        "extension command follow-up replay failed after command error: {replay_err}"
+                    );
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Two-phase non-blocking compaction.
@@ -5124,6 +5428,8 @@ impl AgentSession {
             session: Arc::clone(&self.session),
             injected: Arc::clone(&injected),
             is_streaming: Arc::clone(&self.extensions_is_streaming),
+            is_turn_active: Arc::clone(&self.extensions_turn_active),
+            pending_idle_actions: Arc::clone(&self.extensions_pending_idle_actions),
         };
         manager.set_host_actions(Arc::new(host_actions));
         {
@@ -5255,23 +5561,29 @@ impl AgentSession {
         abort: Option<AbortSignal>,
         on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
     ) -> Result<AssistantMessage> {
-        let outcome = self.dispatch_input_event(input, Vec::new()).await?;
-        let (text, images) = match outcome {
-            InputEventOutcome::Continue { text, images } => (text, images),
-            InputEventOutcome::Block { reason } => {
-                let message = reason.unwrap_or_else(|| "Input blocked".to_string());
-                return Err(Error::extension(message));
+        self.extensions_turn_active.store(true, Ordering::SeqCst);
+        let result = async {
+            let outcome = self.dispatch_input_event(input, Vec::new()).await?;
+            let (text, images) = match outcome {
+                InputEventOutcome::Continue { text, images } => (text, images),
+                InputEventOutcome::Block { reason } => {
+                    let message = reason.unwrap_or_else(|| "Input blocked".to_string());
+                    return Err(Error::extension(message));
+                }
+            };
+
+            self.dispatch_before_agent_start().await;
+
+            if images.is_empty() {
+                self.run_agent_with_text(text, abort, on_event).await
+            } else {
+                let content = Self::build_content_blocks_for_input(&text, &images);
+                self.run_agent_with_content(content, abort, on_event).await
             }
-        };
-
-        self.dispatch_before_agent_start().await;
-
-        if images.is_empty() {
-            self.run_agent_with_text(text, abort, on_event).await
-        } else {
-            let content = Self::build_content_blocks_for_input(&text, &images);
-            self.run_agent_with_content(content, abort, on_event).await
         }
+        .await;
+        self.extensions_turn_active.store(false, Ordering::SeqCst);
+        result
     }
 
     pub async fn run_with_content(
@@ -5289,21 +5601,27 @@ impl AgentSession {
         abort: Option<AbortSignal>,
         on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
     ) -> Result<AssistantMessage> {
-        let (text, images) = Self::split_content_blocks_for_input(&content);
-        let outcome = self.dispatch_input_event(text, images).await?;
-        let (text, images) = match outcome {
-            InputEventOutcome::Continue { text, images } => (text, images),
-            InputEventOutcome::Block { reason } => {
-                let message = reason.unwrap_or_else(|| "Input blocked".to_string());
-                return Err(Error::extension(message));
-            }
-        };
+        self.extensions_turn_active.store(true, Ordering::SeqCst);
+        let result = async {
+            let (text, images) = Self::split_content_blocks_for_input(&content);
+            let outcome = self.dispatch_input_event(text, images).await?;
+            let (text, images) = match outcome {
+                InputEventOutcome::Continue { text, images } => (text, images),
+                InputEventOutcome::Block { reason } => {
+                    let message = reason.unwrap_or_else(|| "Input blocked".to_string());
+                    return Err(Error::extension(message));
+                }
+            };
 
-        self.dispatch_before_agent_start().await;
+            self.dispatch_before_agent_start().await;
 
-        let content_for_agent = Self::build_content_blocks_for_input(&text, &images);
-        self.run_agent_with_content(content_for_agent, abort, on_event)
-            .await
+            let content_for_agent = Self::build_content_blocks_for_input(&text, &images);
+            self.run_agent_with_content(content_for_agent, abort, on_event)
+                .await
+        }
+        .await;
+        self.extensions_turn_active.store(false, Ordering::SeqCst);
+        result
     }
 
     pub async fn revert_last_user_message(&mut self) -> Result<bool> {
@@ -5391,6 +5709,124 @@ impl AgentSession {
             content.push(ContentBlock::Image(image.clone()));
         }
         content
+    }
+
+    fn take_pending_idle_actions(&self) -> Vec<PendingIdleAction> {
+        let Ok(mut actions) = self.extensions_pending_idle_actions.lock() else {
+            return Vec::new();
+        };
+        actions.drain(..).collect()
+    }
+
+    async fn run_pending_idle_actions_with_abort(
+        &mut self,
+        abort: Option<AbortSignal>,
+        on_event: AgentEventHandler,
+    ) -> Result<()> {
+        for action in self.take_pending_idle_actions() {
+            match action {
+                PendingIdleAction::CustomMessage(message) => {
+                    let handler = Arc::clone(&on_event);
+                    self.run_custom_message_with_abort(message, abort.clone(), move |event| {
+                        handler(event);
+                    })
+                    .await?;
+                }
+                PendingIdleAction::UserText(text) => {
+                    let handler = Arc::clone(&on_event);
+                    self.run_text_with_abort(text, abort.clone(), move |event| {
+                        handler(event);
+                    })
+                    .await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn run_custom_message_with_abort(
+        &mut self,
+        message: Message,
+        abort: Option<AbortSignal>,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<AssistantMessage> {
+        self.extensions_turn_active.store(true, Ordering::SeqCst);
+        let result = async {
+            self.dispatch_before_agent_start().await;
+            self.run_agent_with_prompt_message(message, abort, on_event)
+                .await
+        }
+        .await;
+        self.extensions_turn_active.store(false, Ordering::SeqCst);
+        result
+    }
+
+    async fn run_agent_with_prompt_message(
+        &mut self,
+        prompt_message: Message,
+        abort: Option<AbortSignal>,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<AssistantMessage> {
+        let on_event: AgentEventHandler = Arc::new(on_event);
+        let session_model = {
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let session = self
+                .session
+                .lock(cx.cx())
+                .await
+                .map_err(|e| Error::session(e.to_string()))?;
+            (
+                session.header.provider.clone(),
+                session.header.model_id.clone(),
+            )
+        };
+
+        if let (Some(provider_id), Some(model_id)) = session_model {
+            self.apply_session_model_selection(provider_id.as_str(), model_id.as_str());
+        }
+
+        self.maybe_compact(Arc::clone(&on_event)).await?;
+        let history = {
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let session = self
+                .session
+                .lock(cx.cx())
+                .await
+                .map_err(|e| Error::session(e.to_string()))?;
+            session.to_messages_for_current_path()
+        };
+        self.agent.replace_messages(history);
+
+        let start_len = self.agent.messages().len();
+
+        {
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let mut session = self
+                .session
+                .lock(cx.cx())
+                .await
+                .map_err(|e| Error::session(e.to_string()))?;
+            session.append_model_message(prompt_message.clone());
+            if self.save_enabled {
+                session.flush_autosave(AutosaveFlushTrigger::Manual).await?;
+            }
+        }
+
+        self.extensions_is_streaming.store(true, Ordering::SeqCst);
+        let on_event_for_run = Arc::clone(&on_event);
+        let result = self
+            .agent
+            .run_with_message_with_abort(prompt_message, abort, move |event| {
+                on_event_for_run(event);
+            })
+            .await;
+        self.extensions_is_streaming.store(false, Ordering::SeqCst);
+
+        let persist_result = self.persist_new_messages(start_len + 1).await;
+
+        let result = result?;
+        persist_result?;
+        Ok(result)
     }
 
     pub(crate) async fn run_agent_with_text(
