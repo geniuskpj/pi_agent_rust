@@ -1849,12 +1849,8 @@ pub(crate) async fn run_bash_command(
         .stderr(Stdio::piped());
 
     // Place the shell in its own process group so background children
-    // can be killed reliably via killpg even if the shell exits first.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        cmd.process_group(0);
-    }
+    // can be killed reliably even if the shell exits first.
+    isolate_command_process_group(&mut cmd);
 
     let mut child = cmd
         .spawn()
@@ -1870,7 +1866,7 @@ pub(crate) async fn run_bash_command(
         .ok_or_else(|| Error::tool("bash", "Missing stderr".to_string()))?;
 
     // Wrap in ProcessGuard for cleanup (including tree kill)
-    let mut guard = ProcessGuard::new(child, true);
+    let mut guard = ProcessGuard::new(child, ProcessCleanupMode::ProcessGroupTree);
 
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(128);
     let tx_stdout = tx.clone();
@@ -1931,7 +1927,7 @@ pub(crate) async fn run_bash_command(
             if elapsed >= timeout {
                 timed_out = true;
                 let pid = guard.child.as_ref().map(std::process::Child::id);
-                terminate_process_tree(pid);
+                terminate_process_group_tree(pid);
                 terminate_deadline = Some(now + Duration::from_secs(BASH_TERMINATE_GRACE_SECS));
             }
         }
@@ -3395,7 +3391,7 @@ impl Tool for GrepTool {
             .take()
             .ok_or_else(|| Error::tool("grep", "Missing stderr".to_string()))?;
 
-        let mut guard = ProcessGuard::new(child, false);
+        let mut guard = ProcessGuard::new(child, ProcessCleanupMode::ChildOnly);
 
         let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel(1024);
         let (stderr_tx, stderr_rx) =
@@ -3829,7 +3825,7 @@ impl Tool for FindTool {
             .take()
             .ok_or_else(|| Error::tool("find", "Missing stderr"))?;
 
-        let mut guard = ProcessGuard::new(child, false);
+        let mut guard = ProcessGuard::new(child, ProcessCleanupMode::ChildOnly);
 
         let stdout_handle = std::thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
             let mut buf = Vec::new();
@@ -4507,14 +4503,23 @@ fn emit_bash_update(
 
 pub(crate) struct ProcessGuard {
     child: Option<std::process::Child>,
-    kill_tree: bool,
+    cleanup_mode: ProcessCleanupMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProcessCleanupMode {
+    ChildOnly,
+    ProcessGroupTree,
 }
 
 impl ProcessGuard {
-    pub(crate) const fn new(child: std::process::Child, kill_tree: bool) -> Self {
+    pub(crate) const fn new(
+        child: std::process::Child,
+        cleanup_mode: ProcessCleanupMode,
+    ) -> Self {
         Self {
             child: Some(child),
-            kill_tree,
+            cleanup_mode,
         }
     }
 
@@ -4526,10 +4531,7 @@ impl ProcessGuard {
 
     pub(crate) fn kill(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         if let Some(mut child) = self.child.take() {
-            if self.kill_tree {
-                let pid = child.id();
-                kill_process_tree(Some(pid));
-            }
+            cleanup_child(Some(child.id()), self.cleanup_mode);
             let _ = child.kill();
             let status = child.wait()?;
             return Ok(Some(status));
@@ -4552,12 +4554,9 @@ impl Drop for ProcessGuard {
                 Ok(None) => {}
                 Ok(Some(_)) | Err(_) => return,
             }
-            let kill_tree = self.kill_tree;
+            let cleanup_mode = self.cleanup_mode;
             std::thread::spawn(move || {
-                if kill_tree {
-                    let pid = child.id();
-                    kill_process_tree(Some(pid));
-                }
+                cleanup_child(Some(child.id()), cleanup_mode);
                 let _ = child.kill();
                 let _ = child.wait();
             });
@@ -4565,15 +4564,29 @@ impl Drop for ProcessGuard {
     }
 }
 
-fn terminate_process_tree(pid: Option<u32>) {
-    kill_process_tree_with(pid, sysinfo::Signal::Term);
+fn cleanup_child(pid: Option<u32>, cleanup_mode: ProcessCleanupMode) {
+    if cleanup_mode == ProcessCleanupMode::ProcessGroupTree {
+        kill_process_group_tree(pid);
+    }
 }
 
 pub fn kill_process_tree(pid: Option<u32>) {
-    kill_process_tree_with(pid, sysinfo::Signal::Kill);
+    kill_process_tree_with(pid, sysinfo::Signal::Kill, false);
 }
 
-fn kill_process_tree_with(pid: Option<u32>, signal: sysinfo::Signal) {
+pub(crate) fn kill_process_group_tree(pid: Option<u32>) {
+    kill_process_tree_with(pid, sysinfo::Signal::Kill, true);
+}
+
+fn terminate_process_group_tree(pid: Option<u32>) {
+    kill_process_tree_with(pid, sysinfo::Signal::Term, true);
+}
+
+fn kill_process_tree_with(
+    pid: Option<u32>,
+    signal: sysinfo::Signal,
+    include_process_group: bool,
+) {
     let Some(pid) = pid else {
         return;
     };
@@ -4594,23 +4607,25 @@ fn kill_process_tree_with(pid: Option<u32>, signal: sysinfo::Signal) {
     let mut visited = std::collections::HashSet::new();
     collect_process_tree(root, &children_map, &mut to_kill, &mut visited);
 
-    // Kill the entire process group first. The bash tool spawns
-    // children with process_group(0) so the root PID is the PGID.
-    // This catches background children even if reparented to init.
-    #[cfg(unix)]
-    {
-        let sig_num = match signal {
-            sysinfo::Signal::Kill => "9",
-            _ => "15",
-        };
-        let _ = Command::new("kill")
-            .arg(format!("-{sig_num}"))
-            .arg("--")
-            .arg(format!("-{pid}"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    if include_process_group {
+        // Some subprocess surfaces isolate the child into its own process group.
+        // When they do, killing the group first catches background children even
+        // if they have already been reparented away from the original root PID.
+        #[cfg(unix)]
+        {
+            let sig_num = match signal {
+                sysinfo::Signal::Kill => "9",
+                _ => "15",
+            };
+            let _ = Command::new("kill")
+                .arg(format!("-{sig_num}"))
+                .arg("--")
+                .arg(format!("-{pid}"))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 
     // Kill children first.
@@ -4640,6 +4655,19 @@ fn collect_process_tree(
         for child in children {
             collect_process_tree(*child, children_map, out, visited);
         }
+    }
+}
+
+pub(crate) fn isolate_command_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = command;
     }
 }
 
@@ -5066,7 +5094,8 @@ impl Tool for HashlineEditTool {
         }
 
         // Check file size
-        let metadata = std::fs::metadata(&absolute_path)
+        let metadata = asupersync::fs::metadata(&absolute_path)
+            .await
             .map_err(|e| Error::tool("hashline_edit", format!("Cannot read file metadata: {e}")))?;
         if metadata.len() > READ_TOOL_MAX_BYTES {
             return Err(Error::tool(
@@ -5080,19 +5109,29 @@ impl Tool for HashlineEditTool {
         }
 
         // Read file content
-        let file = std::fs::File::open(&absolute_path)
+        let file = asupersync::fs::File::open(&absolute_path)
+            .await
             .map_err(|e| Error::tool("hashline_edit", format!("Cannot open file: {e}")))?;
-        let mut raw_content = String::new();
-        file.take(READ_TOOL_MAX_BYTES.saturating_add(1))
-            .read_to_string(&mut raw_content)
+        let mut raw = Vec::new();
+        let mut limiter = file.take(READ_TOOL_MAX_BYTES.saturating_add(1));
+        limiter
+            .read_to_end(&mut raw)
+            .await
             .map_err(|e| Error::tool("hashline_edit", format!("Cannot read file: {e}")))?;
 
-        if raw_content.len() as u64 > READ_TOOL_MAX_BYTES {
+        if raw.len() as u64 > READ_TOOL_MAX_BYTES {
             return Err(Error::tool(
                 "hashline_edit",
                 format!("File too large (> {READ_TOOL_MAX_BYTES} bytes)"),
             ));
         }
+
+        let raw_content = String::from_utf8(raw).map_err(|_| {
+            Error::tool(
+                "hashline_edit",
+                "File contains invalid UTF-8 characters and cannot be safely edited as text.".to_string(),
+            )
+        })?;
 
         let (content_no_bom, had_bom) = strip_bom(&raw_content);
         let original_ending = detect_line_ending(content_no_bom);
