@@ -525,6 +525,7 @@ pub(crate) fn delete_session_file(path: &Path) -> Result<()> {
 
 fn delete_session_file_with_trash_cmd(path: &Path, trash_cmd: &str) -> Result<()> {
     if try_trash_with_cmd(path, trash_cmd) {
+        remove_sqlite_sidecars_best_effort(path, trash_cmd);
         remove_sidecar_dir_best_effort(&crate::session_store_v2::v2_sidecar_path(path), trash_cmd);
         return Ok(());
     }
@@ -540,8 +541,41 @@ fn delete_session_file_with_trash_cmd(path: &Path, trash_cmd: &str) -> Result<()
         }
     }
 
+    remove_sqlite_sidecars_best_effort(path, trash_cmd);
     remove_sidecar_dir_best_effort(&crate::session_store_v2::v2_sidecar_path(path), trash_cmd);
     Ok(())
+}
+
+#[cfg(feature = "sqlite-sessions")]
+fn sqlite_auxiliary_paths(path: &Path) -> [PathBuf; 2] {
+    ["-wal", "-shm"].map(|suffix| {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(suffix);
+        PathBuf::from(candidate)
+    })
+}
+
+fn remove_sqlite_sidecars_best_effort(path: &Path, trash_cmd: &str) {
+    #[cfg(feature = "sqlite-sessions")]
+    if path.extension().and_then(|ext| ext.to_str()) == Some("sqlite") {
+        for auxiliary_path in sqlite_auxiliary_paths(path) {
+            if !auxiliary_path.exists() {
+                continue;
+            }
+            if try_trash_with_cmd(&auxiliary_path, trash_cmd) {
+                continue;
+            }
+            if let Err(err) = fs::remove_file(&auxiliary_path) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        path = %auxiliary_path.display(),
+                        error = %err,
+                        "Failed to remove SQLite sidecar"
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn remove_sidecar_dir_best_effort(sidecar_path: &Path, trash_cmd: &str) {
@@ -1145,6 +1179,57 @@ mod tests {
             "delete should be idempotent when file is already gone"
         );
         assert!(!session_path.exists(), "session file should remain deleted");
+    }
+
+    #[cfg(feature = "sqlite-sessions")]
+    #[test]
+    fn delete_sqlite_session_removes_wal_and_shm_sidecars() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_path = tmp.path().join("sqlite-session.sqlite");
+        let [wal_path, shm_path] = sqlite_auxiliary_paths(&session_path);
+        fs::write(&session_path, "db").expect("write sqlite session");
+        fs::write(&wal_path, "wal").expect("write sqlite wal");
+        fs::write(&shm_path, "shm").expect("write sqlite shm");
+
+        let result = delete_session_file_with_trash_cmd(
+            &session_path,
+            "__pi_agent_rust_nonexistent_trash_command__",
+        );
+        assert!(result.is_ok(), "delete should fall back to remove_file");
+        assert!(
+            !session_path.exists(),
+            "sqlite session file should be deleted"
+        );
+        assert!(!wal_path.exists(), "sqlite wal sidecar should be deleted");
+        assert!(!shm_path.exists(), "sqlite shm sidecar should be deleted");
+    }
+
+    #[cfg(feature = "sqlite-sessions")]
+    #[test]
+    fn delete_sqlite_session_preserves_sidecars_when_primary_delete_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_path = tmp.path().join("delete-fails.sqlite");
+        let [wal_path, shm_path] = sqlite_auxiliary_paths(&session_path);
+        fs::create_dir(&session_path).expect("create directory in place of sqlite session");
+        fs::write(&wal_path, "wal").expect("write sqlite wal");
+        fs::write(&shm_path, "shm").expect("write sqlite shm");
+
+        let result = delete_session_file_with_trash_cmd(
+            &session_path,
+            "__pi_agent_rust_nonexistent_trash_command__",
+        );
+        assert!(
+            result.is_err(),
+            "directory-backed sqlite session path should fail deletion"
+        );
+        assert!(
+            wal_path.exists(),
+            "wal sidecar must be preserved on primary delete failure"
+        );
+        assert!(
+            shm_path.exists(),
+            "shm sidecar must be preserved on primary delete failure"
+        );
     }
 
     #[cfg(unix)]

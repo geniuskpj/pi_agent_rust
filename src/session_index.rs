@@ -570,10 +570,34 @@ where
     (message_count, name)
 }
 
+#[cfg(feature = "sqlite-sessions")]
+fn sqlite_auxiliary_paths(path: &Path) -> [PathBuf; 2] {
+    ["-wal", "-shm"].map(|suffix| {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(suffix);
+        PathBuf::from(candidate)
+    })
+}
+
 fn file_stats(path: &Path) -> Result<(i64, u64)> {
     let meta = fs::metadata(path)?;
-    let size = meta.len();
-    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut size = meta.len();
+    let mut modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+    #[cfg(feature = "sqlite-sessions")]
+    if path.extension().and_then(|ext| ext.to_str()) == Some("sqlite") {
+        for auxiliary_path in sqlite_auxiliary_paths(path) {
+            let Ok(aux_meta) = fs::metadata(&auxiliary_path) else {
+                continue;
+            };
+            size = size.saturating_add(aux_meta.len());
+            let aux_modified = aux_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            if aux_modified > modified {
+                modified = aux_modified;
+            }
+        }
+    }
+
     let millis = modified
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1224,6 +1248,73 @@ mod tests {
         let (last_modified_ms, size_bytes) = file_stats(&path).expect("file_stats");
         assert_eq!(size_bytes, 11); // "hello world" = 11 bytes
         assert!(last_modified_ms > 0, "Expected positive modification time");
+    }
+
+    #[cfg(feature = "sqlite-sessions")]
+    #[test]
+    fn file_stats_sqlite_includes_wal_and_shm_sizes() {
+        let harness = TestHarness::new("file_stats_sqlite_includes_wal_and_shm_sizes");
+        let path = harness.temp_path("test_session.sqlite");
+        let [wal_path, shm_path] = sqlite_auxiliary_paths(&path);
+
+        fs::write(&path, b"db").expect("write sqlite db");
+        fs::write(&wal_path, b"walpayload").expect("write sqlite wal");
+        fs::write(&shm_path, b"shm!").expect("write sqlite shm");
+
+        let (_, size_bytes) = file_stats(&path).expect("file_stats");
+        assert_eq!(size_bytes, 2 + 10 + 4);
+    }
+
+    #[cfg(feature = "sqlite-sessions")]
+    #[test]
+    fn index_session_snapshot_uses_newest_sqlite_sidecar_mtime_and_size() {
+        let harness =
+            TestHarness::new("index_session_snapshot_uses_newest_sqlite_sidecar_mtime_and_size");
+        let root = harness.temp_path("sessions");
+        let project_dir = root.join("project");
+        fs::create_dir_all(&project_dir).expect("create project dir");
+
+        let path = project_dir.join("test.sqlite");
+        let [wal_path, _shm_path] = sqlite_auxiliary_paths(&path);
+        fs::write(&path, b"db").expect("write sqlite db");
+
+        let base_millis = fs::metadata(&path)
+            .expect("base metadata")
+            .modified()
+            .expect("base modified")
+            .duration_since(UNIX_EPOCH)
+            .expect("base since epoch")
+            .as_millis();
+        std::thread::sleep(Duration::from_millis(1_100));
+        fs::write(&wal_path, b"walpayload").expect("write sqlite wal");
+        let wal_millis = fs::metadata(&wal_path)
+            .expect("wal metadata")
+            .modified()
+            .expect("wal modified")
+            .duration_since(UNIX_EPOCH)
+            .expect("wal since epoch")
+            .as_millis();
+
+        assert!(
+            wal_millis > base_millis,
+            "test requires WAL sidecar mtime to be newer than base db mtime"
+        );
+
+        let index = SessionIndex::for_sessions_root(&root);
+        let header = make_header("sqlite-id", "sqlite-cwd");
+        index
+            .index_session_snapshot(&path, &header, 3, Some("sqlite session".to_string()))
+            .expect("index sqlite snapshot");
+
+        let listed = index
+            .list_sessions(Some("sqlite-cwd"))
+            .expect("list sqlite session");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].size_bytes, 2 + 10);
+        assert_eq!(
+            listed[0].last_modified_ms,
+            i64::try_from(wal_millis).expect("wal mtime fits in i64")
+        );
     }
 
     #[test]
