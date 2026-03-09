@@ -1544,6 +1544,7 @@ impl Tool for ReadTool {
         let mut collecting = start_line_idx == 0;
         let mut buf = vec![0u8; 64 * 1024].into_boxed_slice(); // 64KB chunks
         let mut last_byte_was_newline = false;
+        let mut pending_cr = false;
 
         // We need to track total_lines accurately for the output.
         // We will respect MAX_BYTES for *collected* content, but continue scanning for line counts
@@ -1567,11 +1568,14 @@ impl Tool for ReadTool {
                 ));
             }
 
-            let chunk = &buf[..n];
-            last_byte_was_newline = chunk[n - 1] == b'\n';
+            let chunk = normalize_line_endings_chunk(&buf[..n], &mut pending_cr);
+            if chunk.is_empty() {
+                continue;
+            }
+            last_byte_was_newline = chunk.last().is_some_and(|byte| *byte == b'\n');
             let mut chunk_cursor = 0;
 
-            for pos in memchr::memchr_iter(b'\n', chunk) {
+            for pos in memchr::memchr_iter(b'\n', &chunk) {
                 // Check if this newline marks the end of a line we are collecting
                 if collecting {
                     // newlines_seen is the index of the line ending at this newline
@@ -1603,6 +1607,14 @@ impl Tool for ReadTool {
                 let slice_len = (chunk.len() - chunk_cursor).min(remaining);
                 raw_content.extend_from_slice(&chunk[chunk_cursor..chunk_cursor + slice_len]);
             }
+        }
+
+        if pending_cr {
+            last_byte_was_newline = true;
+            if collecting && raw_content.len() < DEFAULT_MAX_BYTES {
+                raw_content.push(b'\n');
+            }
+            newlines_seen += 1;
         }
 
         // A trailing newline terminates the last line rather than starting a new one.
@@ -2184,27 +2196,69 @@ fn strip_bom(s: &str) -> (&str, bool) {
 }
 
 fn detect_line_ending(content: &str) -> &'static str {
-    let crlf_idx = content.find("\r\n");
-    let lf_idx = content.find('\n');
-    if lf_idx.is_none() {
-        return "\n";
+    let bytes = content.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        match bytes[idx] {
+            b'\r' => {
+                return if bytes.get(idx + 1) == Some(&b'\n') {
+                    "\r\n"
+                } else {
+                    "\r"
+                };
+            }
+            b'\n' => return "\n",
+            _ => idx += 1,
+        }
     }
-    let Some(crlf_idx) = crlf_idx else {
-        return "\n";
-    };
-    let lf_idx = lf_idx.unwrap_or(usize::MAX);
-    if crlf_idx < lf_idx { "\r\n" } else { "\n" }
+    "\n"
 }
 
 fn normalize_to_lf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+fn normalize_line_endings_chunk(chunk: &[u8], pending_cr: &mut bool) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(chunk.len().saturating_add(usize::from(*pending_cr)));
+    let mut idx = 0;
+
+    if *pending_cr {
+        normalized.push(b'\n');
+        if chunk.first() == Some(&b'\n') {
+            idx = 1;
+        }
+        *pending_cr = false;
+    }
+
+    while idx < chunk.len() {
+        match chunk[idx] {
+            b'\r' => {
+                if chunk.get(idx + 1) == Some(&b'\n') {
+                    normalized.push(b'\n');
+                    idx += 2;
+                } else if idx + 1 < chunk.len() {
+                    normalized.push(b'\n');
+                    idx += 1;
+                } else {
+                    *pending_cr = true;
+                    idx += 1;
+                }
+            }
+            byte => {
+                normalized.push(byte);
+                idx += 1;
+            }
+        }
+    }
+
+    normalized
+}
+
 fn restore_line_endings(text: &str, ending: &str) -> String {
-    if ending == "\r\n" {
-        text.replace('\n', "\r\n")
-    } else {
-        text.to_string()
+    match ending {
+        "\r\n" => text.replace('\n', "\r\n"),
+        "\r" => text.replace('\n', "\r"),
+        _ => text.to_string(),
     }
 }
 
@@ -5716,6 +5770,63 @@ mod tests {
     }
 
     #[test]
+    fn test_read_offset_and_limit_with_cr_only_line_endings() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(tmp.path().join("lines.txt"), b"L1\rL2\rL3\r").unwrap();
+
+            let tool = ReadTool::new(tmp.path());
+            let out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "path": tmp.path().join("lines.txt").to_string_lossy(),
+                        "offset": 2,
+                        "limit": 1
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            let text = get_text(&out.content);
+            assert!(text.contains("L2"));
+            assert!(!text.contains("L1"));
+            assert!(!text.contains("L3"));
+            assert!(text.contains("offset=3"));
+            assert!(!text.contains('\r'));
+        });
+    }
+
+    #[test]
+    fn test_read_offset_and_limit_with_split_crlf_chunk_boundary() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut content = vec![b'x'; (64 * 1024) - 1];
+            content.extend_from_slice(b"\r\nSECOND\r\nTHIRD");
+            std::fs::write(tmp.path().join("lines.txt"), content).unwrap();
+
+            let tool = ReadTool::new(tmp.path());
+            let out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "path": tmp.path().join("lines.txt").to_string_lossy(),
+                        "offset": 2,
+                        "limit": 1
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            let text = get_text(&out.content);
+            assert!(text.contains("SECOND"));
+            assert!(!text.contains("THIRD"));
+            assert!(!text.contains("xxxx"));
+            assert!(text.contains("offset=3"));
+        });
+    }
+
+    #[test]
     fn test_read_offset_beyond_eof() {
         asupersync::test_utils::run_test(|| async {
             let tmp = tempfile::tempdir().unwrap();
@@ -7376,6 +7487,11 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_line_ending_cr() {
+        assert_eq!(detect_line_ending("hello\rworld"), "\r");
+    }
+
+    #[test]
     fn test_detect_line_ending_lf() {
         assert_eq!(detect_line_ending("hello\nworld"), "\n");
     }
@@ -7983,6 +8099,33 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_edit_cr_content_correctness() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("cr.txt");
+            std::fs::write(&path, "line1\rline2\rline3").unwrap();
+
+            let tool = EditTool::new(tmp.path());
+            let out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "path": path.to_string_lossy(),
+                        "oldText": "line2",
+                        "newText": "changed"
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            assert!(!out.is_error);
+            let new_content = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(new_content, "line1\rchanged\rline3");
+        });
+    }
+
     // ========================================================================
     // Hashline tests
     // ========================================================================
@@ -8435,6 +8578,33 @@ mod tests {
 
             let content = std::fs::read_to_string(&file).unwrap();
             assert_eq!(content, "line1\r\nchanged\r\nline3");
+        });
+    }
+
+    #[test]
+    fn test_hashline_edit_cr_preservation() {
+        asupersync::test_utils::run_test(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("test.txt");
+            std::fs::write(&file, "line1\rline2\rline3").unwrap();
+
+            let tool = HashlineEditTool::new(dir.path());
+            let tag2 = format_hashline_tag(1, "line2");
+
+            let input = serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": tag2,
+                    "lines": ["changed"]
+                }]
+            });
+
+            let out = tool.execute("test", input, None).await.unwrap();
+            assert!(!out.is_error);
+
+            let content = std::fs::read_to_string(&file).unwrap();
+            assert_eq!(content, "line1\rchanged\rline3");
         });
     }
 

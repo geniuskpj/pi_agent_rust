@@ -218,6 +218,47 @@ fn load_skills_requires_description() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn prompt_templates_ignore_alias_symlink_to_same_tree() {
+    use std::os::unix::fs::symlink;
+
+    let harness = TestHarness::new("prompt_templates_ignore_alias_symlink_to_same_tree");
+
+    let cwd = harness.temp_path("project");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    let agent_dir = harness.temp_path("agent");
+    std::fs::create_dir_all(&agent_dir).expect("create agent dir");
+
+    let prompts_root = harness.temp_path("prompt-roots");
+    let real_root = prompts_root.join("real");
+    std::fs::create_dir_all(&real_root).expect("create real prompt root");
+
+    let real_prompt = write_prompt(
+        &harness,
+        &real_root.join("review.md"),
+        "---\ndescription: Review prompt\n---\nReview body.\n",
+    );
+    let alias_root = prompts_root.join("alias");
+    symlink(&real_root, &alias_root).expect("create alias symlink");
+
+    let templates = load_prompt_templates(LoadPromptTemplatesOptions {
+        cwd,
+        agent_dir,
+        prompt_paths: vec![real_root, alias_root],
+        include_defaults: false,
+    });
+    let (deduped, diagnostics) = dedupe_prompts(templates);
+
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].name, "review");
+    assert_eq!(deduped[0].file_path, real_prompt);
+    assert!(
+        diagnostics.is_empty(),
+        "alias symlink to same prompt tree should not report a collision"
+    );
+}
+
 #[test]
 fn prompt_template_description_and_collision_diagnostics() {
     let harness = TestHarness::new("prompt_template_description_and_collision_diagnostics");
@@ -290,6 +331,47 @@ fn prompt_template_description_and_collision_diagnostics() {
     assert_eq!(info.name, "plan");
     assert_eq!(info.winner_path, user_plan);
     assert_eq!(info.loser_path, project_plan);
+}
+
+#[cfg(unix)]
+#[test]
+fn themes_ignore_alias_symlink_to_same_tree() {
+    use std::os::unix::fs::symlink;
+
+    let harness = TestHarness::new("themes_ignore_alias_symlink_to_same_tree");
+
+    let cwd = harness.temp_path("project");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    let agent_dir = harness.temp_path("agent");
+    std::fs::create_dir_all(&agent_dir).expect("create agent dir");
+
+    let themes_root = harness.temp_path("theme-roots");
+    let real_root = themes_root.join("real");
+    std::fs::create_dir_all(&real_root).expect("create real theme root");
+
+    let real_theme = write_theme_ini(
+        &harness,
+        &real_root.join("dark.ini"),
+        "brand.accent = bold #38bdf8",
+    );
+    let alias_root = themes_root.join("alias");
+    symlink(&real_root, &alias_root).expect("create alias symlink");
+
+    let result = load_themes(LoadThemesOptions {
+        cwd,
+        agent_dir,
+        theme_paths: vec![real_root, alias_root],
+        include_defaults: false,
+    });
+    let (deduped, diagnostics) = dedupe_themes(result.themes);
+
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].name, "dark");
+    assert_eq!(deduped[0].file_path, real_theme);
+    assert!(
+        diagnostics.is_empty(),
+        "alias symlink to same theme tree should not report a collision"
+    );
 }
 
 #[test]

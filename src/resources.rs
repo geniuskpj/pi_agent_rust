@@ -38,6 +38,10 @@ fn read_dir_sorted_paths(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
+fn canonical_identity_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn resolved_path_kind(path: &Path) -> (bool, bool) {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -649,8 +653,7 @@ pub fn load_skills(options: LoadSkillsOptions) -> LoadSkillsResult {
     ) {
         diagnostics.extend(result.diagnostics);
         for skill in result.skills {
-            let real_path =
-                fs::canonicalize(&skill.file_path).unwrap_or_else(|_| skill.file_path.clone());
+            let real_path = canonical_identity_path(&skill.file_path);
             if real_paths.contains(&real_path) {
                 continue;
             }
@@ -1337,7 +1340,11 @@ pub fn dedupe_prompts(
     let mut diagnostics = Vec::new();
 
     for prompt in prompts {
+        let real_path = canonical_identity_path(&prompt.file_path);
         if let Some(existing) = seen.get(&prompt.name) {
+            if canonical_identity_path(&existing.file_path) == real_path {
+                continue;
+            }
             diagnostics.push(ResourceDiagnostic {
                 kind: DiagnosticKind::Collision,
                 message: format!("name \"/{}\" collision", prompt.name),
@@ -1365,7 +1372,11 @@ pub fn dedupe_themes(themes: Vec<ThemeResource>) -> (Vec<ThemeResource>, Vec<Res
 
     for theme in themes {
         let key = theme.name.to_ascii_lowercase();
+        let real_path = canonical_identity_path(&theme.file_path);
         if let Some(existing) = seen.get(&key) {
+            if canonical_identity_path(&existing.file_path) == real_path {
+                continue;
+            }
             diagnostics.push(ResourceDiagnostic {
                 kind: DiagnosticKind::Collision,
                 message: format!("theme \"{}\" collision", theme.name),
@@ -1804,7 +1815,7 @@ fn ensure_explicit_file_paths_loaded(
 ) -> Result<()> {
     let loaded_paths = loaded_paths
         .into_iter()
-        .map(|path| path.to_string_lossy().to_string())
+        .map(|path| canonical_identity_path(&path))
         .collect::<HashSet<_>>();
 
     for path in explicit_paths {
@@ -1819,7 +1830,7 @@ fn ensure_explicit_file_paths_loaded(
             continue;
         }
 
-        let key = path.to_string_lossy().to_string();
+        let key = canonical_identity_path(path);
         if loaded_paths.contains(&key) {
             continue;
         }
@@ -1827,11 +1838,13 @@ fn ensure_explicit_file_paths_loaded(
         let detail = diagnostics
             .iter()
             .find_map(|diagnostic| {
-                if diagnostic.path == *path {
+                if canonical_identity_path(&diagnostic.path) == key {
                     return Some(diagnostic.message.clone());
                 }
                 diagnostic.collision.as_ref().and_then(|collision| {
-                    if collision.winner_path == *path || collision.loser_path == *path {
+                    if canonical_identity_path(&collision.winner_path) == key
+                        || canonical_identity_path(&collision.loser_path) == key
+                    {
                         Some(diagnostic.message.clone())
                     } else {
                         None
@@ -2112,6 +2125,47 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_resource_loader_accepts_explicit_cli_prompt_alias_path() {
+        run_async(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let prompt_dir = temp_dir.path().join("prompts");
+            fs::create_dir_all(&prompt_dir).expect("create prompt dir");
+            let prompt_path = prompt_dir.join("review.md");
+            fs::write(
+                &prompt_path,
+                "---\ndescription: Review prompt\n---\nReview body\n",
+            )
+            .expect("write prompt");
+            let alias_path = temp_dir.path().join("review-alias.md");
+            std::os::unix::fs::symlink(&prompt_path, &alias_path).expect("create prompt alias");
+
+            let manager = PackageManager::new(temp_dir.path().to_path_buf());
+            let config = Config::default();
+            let cli = ResourceCliOptions {
+                no_skills: true,
+                no_prompt_templates: false,
+                no_extensions: true,
+                no_themes: true,
+                skill_paths: Vec::new(),
+                prompt_paths: vec![
+                    prompt_path.to_string_lossy().to_string(),
+                    alias_path.to_string_lossy().to_string(),
+                ],
+                extension_paths: Vec::new(),
+                theme_paths: Vec::new(),
+            };
+
+            let loader = ResourceLoader::load(&manager, temp_dir.path(), &config, &cli)
+                .await
+                .expect("load explicit prompt alias");
+            assert_eq!(loader.prompts().len(), 1);
+            assert_eq!(loader.prompts()[0].file_path, prompt_path);
+            assert!(loader.prompt_diagnostics().is_empty());
+        });
+    }
+
     #[test]
     fn test_resource_loader_rejects_invalid_cli_skill_file() {
         run_async(async {
@@ -2175,6 +2229,43 @@ mod tests {
                 err.to_string().contains("Failed to load theme"),
                 "unexpected error: {err}"
             );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resource_loader_accepts_explicit_cli_theme_alias_path() {
+        run_async(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let theme_dir = temp_dir.path().join("themes");
+            fs::create_dir_all(&theme_dir).expect("create theme dir");
+            let theme_path = theme_dir.join("dark.ini");
+            fs::write(&theme_path, "[styles]\nbrand.accent = bold #38bdf8\n").expect("write theme");
+            let alias_path = temp_dir.path().join("dark-alias.ini");
+            std::os::unix::fs::symlink(&theme_path, &alias_path).expect("create theme alias");
+
+            let manager = PackageManager::new(temp_dir.path().to_path_buf());
+            let config = Config::default();
+            let cli = ResourceCliOptions {
+                no_skills: true,
+                no_prompt_templates: true,
+                no_extensions: true,
+                no_themes: false,
+                skill_paths: Vec::new(),
+                prompt_paths: Vec::new(),
+                extension_paths: Vec::new(),
+                theme_paths: vec![
+                    theme_path.to_string_lossy().to_string(),
+                    alias_path.to_string_lossy().to_string(),
+                ],
+            };
+
+            let loader = ResourceLoader::load(&manager, temp_dir.path(), &config, &cli)
+                .await
+                .expect("load explicit theme alias");
+            assert_eq!(loader.themes().len(), 1);
+            assert_eq!(loader.themes()[0].file_path, theme_path);
+            assert!(loader.theme_diagnostics().is_empty());
         });
     }
 

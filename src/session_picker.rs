@@ -3,7 +3,7 @@
 //! Provides an interactive list for choosing which session to resume.
 
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -371,16 +371,28 @@ pub fn list_sessions_for_project(cwd: &Path, override_dir: Option<&Path>) -> Vec
     sessions.retain(|meta| Path::new(&meta.path).exists());
 
     let scanned = scan_sessions_on_disk(&project_session_dir);
-    if !scanned.is_empty() {
+    if !scanned.failed_paths.is_empty() {
+        for path in &scanned.failed_paths {
+            let _ = index.delete_session_path(path);
+        }
+    }
+
+    if !scanned.metas.is_empty() || !scanned.failed_paths.is_empty() {
+        let failed_paths = scanned
+            .failed_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<HashSet<_>>();
         let mut by_path: HashMap<String, SessionMeta> = sessions
             .into_iter()
+            .filter(|meta| !failed_paths.contains(&meta.path))
             .map(|meta| (meta.path.clone(), meta))
             .collect();
 
-        for meta in scanned {
+        for meta in scanned.metas {
             // Disk scans are authoritative for successfully parsed session files.
-            // Keep indexed rows only for paths that weren't discovered on disk or
-            // could not be reparsed during the scan.
+            // Drop indexed rows for files that failed reparsing so they stop
+            // surfacing in the picker until the on-disk session becomes valid again.
             by_path.insert(meta.path.clone(), meta);
         }
 
@@ -392,22 +404,35 @@ pub fn list_sessions_for_project(cwd: &Path, override_dir: Option<&Path>) -> Vec
     sessions
 }
 
-fn scan_sessions_on_disk(project_session_dir: &Path) -> Vec<SessionMeta> {
+struct ScanSessionsResult {
+    metas: Vec<SessionMeta>,
+    failed_paths: Vec<PathBuf>,
+}
+
+fn scan_sessions_on_disk(project_session_dir: &Path) -> ScanSessionsResult {
     let mut out = Vec::new();
+    let mut failed_paths = Vec::new();
     let Ok(entries) = fs::read_dir(project_session_dir) else {
-        return out;
+        return ScanSessionsResult {
+            metas: out,
+            failed_paths,
+        };
     };
 
     for entry in entries.flatten() {
         let path = entry.path();
         if is_session_file_path(&path) {
-            if let Ok(meta) = build_meta_from_file(&path) {
-                out.push(meta);
+            match build_meta_from_file(&path) {
+                Ok(meta) => out.push(meta),
+                Err(_) => failed_paths.push(path),
             }
         }
     }
 
-    out
+    ScanSessionsResult {
+        metas: out,
+        failed_paths,
+    }
 }
 
 fn build_meta_from_file(path: &Path) -> crate::error::Result<SessionMeta> {
@@ -442,6 +467,9 @@ fn build_meta_from_jsonl(path: &Path) -> crate::error::Result<SessionMeta> {
 
     let header: SessionHeader = serde_json::from_str(&header_line)
         .map_err(|e| crate::error::Error::session(format!("Parse session header: {e}")))?;
+    header.validate().map_err(|reason| {
+        crate::error::Error::session(format!("Invalid session header: {reason}"))
+    })?;
 
     let mut message_count = 0u64;
     let mut name = None;
@@ -488,6 +516,9 @@ fn build_meta_from_sqlite(path: &Path) -> crate::error::Result<SessionMeta> {
         crate::session_sqlite::load_session_meta(path).await
     })?;
     let header = meta.header;
+    header.validate().map_err(|reason| {
+        crate::error::Error::session(format!("Invalid session header: {reason}"))
+    })?;
 
     let (last_modified_ms, size_bytes) = session_file_stats(path)?;
 
@@ -1013,12 +1044,10 @@ mod tests {
     fn build_meta_from_jsonl_parses_session_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_path = tmp.path().join("test.jsonl");
-        let header = serde_json::json!({
-            "type": "header",
-            "id": "abc123",
-            "cwd": "/work",
-            "timestamp": "2025-06-01T12:00:00.000Z"
-        });
+        let mut header = SessionHeader::new();
+        header.id = "abc123".to_string();
+        header.cwd = "/work".to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
         let msg1 = serde_json::json!({
             "type": "message",
             "timestamp": "2025-06-01T12:00:01.000Z",
@@ -1052,6 +1081,32 @@ mod tests {
     }
 
     #[test]
+    fn build_meta_from_jsonl_rejects_semantically_invalid_header() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_path = tmp.path().join("invalid.jsonl");
+        let header = serde_json::json!({
+            "type": "header",
+            "id": "abc123",
+            "cwd": "/work",
+            "timestamp": "2025-06-01T12:00:00.000Z"
+        });
+        fs::write(
+            &session_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&header).expect("serialize header")
+            ),
+        )
+        .expect("write");
+
+        let err = build_meta_from_jsonl(&session_path).expect_err("invalid header should fail");
+        assert!(
+            matches!(err, crate::error::Error::Session(ref msg) if msg.contains("Invalid session header")),
+            "expected invalid session header error, got {err:?}"
+        );
+    }
+
+    #[test]
     fn build_meta_from_jsonl_empty_file_returns_error() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_path = tmp.path().join("empty.jsonl");
@@ -1075,26 +1130,26 @@ mod tests {
     fn scan_sessions_on_disk_finds_valid_session_files() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_path = tmp.path().join("session.jsonl");
-        let header = serde_json::json!({
-            "type": "header",
-            "id": "scan-test",
-            "cwd": "/work",
-            "timestamp": "2025-06-01T12:00:00.000Z"
-        });
+        let mut header = SessionHeader::new();
+        header.id = "scan-test".to_string();
+        header.cwd = "/work".to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
         fs::write(&session_path, serde_json::to_string(&header).unwrap()).expect("write");
 
         // Also create a non-session file that should be ignored
         fs::write(tmp.path().join("notes.txt"), "not a session").expect("write");
 
         let found = scan_sessions_on_disk(tmp.path());
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].id, "scan-test");
+        assert_eq!(found.metas.len(), 1);
+        assert_eq!(found.metas[0].id, "scan-test");
+        assert!(found.failed_paths.is_empty());
     }
 
     #[test]
     fn scan_sessions_on_disk_nonexistent_dir_returns_empty() {
         let found = scan_sessions_on_disk(Path::new("/nonexistent/dir"));
-        assert!(found.is_empty());
+        assert!(found.metas.is_empty());
+        assert!(found.failed_paths.is_empty());
     }
 
     #[test]
@@ -1150,6 +1205,55 @@ mod tests {
         assert_eq!(session.size_bytes, expected.size_bytes);
         assert_eq!(session.name, expected.name);
         assert_eq!(session.last_modified_ms, expected.last_modified_ms);
+    }
+
+    #[test]
+    fn list_sessions_for_project_evicts_cached_row_when_disk_session_is_invalid() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_dir = tmp.path().join("sessions");
+        let cwd = tmp.path().join("repo");
+        let project_dir = base_dir.join(encode_cwd(&cwd));
+        fs::create_dir_all(&project_dir).expect("create project sessions");
+
+        let session_path = project_dir.join("stale-invalid.jsonl");
+        let mut header = SessionHeader::new();
+        header.id = "stale-invalid".to_string();
+        header.cwd = cwd.display().to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
+        fs::write(
+            &session_path,
+            format!(
+                "{}\n{{\"type\":\"message\"}}\n",
+                serde_json::to_string(&header).expect("serialize header"),
+            ),
+        )
+        .expect("write session");
+
+        let index = SessionIndex::for_sessions_root(&base_dir);
+        index.reindex_all().expect("seed session index");
+
+        let invalid_header = serde_json::json!({
+            "type": "header",
+            "id": "stale-invalid",
+            "cwd": cwd.display().to_string(),
+            "timestamp": "2025-06-01T12:00:00.000Z"
+        });
+        fs::write(
+            &session_path,
+            format!(
+                "{}\n{{\"type\":\"message\"}}\n",
+                serde_json::to_string(&invalid_header).expect("serialize invalid header"),
+            ),
+        )
+        .expect("corrupt session");
+
+        let sessions = list_sessions_for_project(&cwd, Some(&base_dir));
+        assert!(sessions.is_empty());
+
+        let indexed = index
+            .list_sessions(Some(&cwd.display().to_string()))
+            .expect("list sessions");
+        assert!(indexed.is_empty());
     }
 
     #[cfg(feature = "sqlite-sessions")]

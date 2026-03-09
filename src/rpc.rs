@@ -1069,12 +1069,19 @@ pub async fn run(
                         .lock(&cx)
                         .await
                         .map_err(|err| Error::session(format!("session lock failed: {err}")))?;
+                    let runtime_provider = guard.agent.provider().name().to_string();
+                    let runtime_model_id = guard.agent.provider().model_id().to_string();
                     let level = {
                         let inner_session = guard.session.lock(&cx).await.map_err(|err| {
                             Error::session(format!("inner session lock failed: {err}"))
                         })?;
-                        current_model_entry(&inner_session, &options)
-                            .map_or(level, |entry| entry.clamp_thinking_level(level))
+                        current_or_runtime_model_entry(
+                            &inner_session,
+                            &runtime_provider,
+                            &runtime_model_id,
+                            &options,
+                        )
+                        .map_or(level, |entry| entry.clamp_thinking_level(level))
                     };
                     if let Err(err) = apply_thinking_level(&mut guard, level).await {
                         let _ = out_tx.send(response_error_with_hints(
@@ -1094,11 +1101,19 @@ pub async fn run(
                         .lock(&cx)
                         .await
                         .map_err(|err| Error::session(format!("session lock failed: {err}")))?;
+                    let runtime_provider = guard.agent.provider().name().to_string();
+                    let runtime_model_id = guard.agent.provider().model_id().to_string();
                     let entry = {
                         let inner_session = guard.session.lock(&cx).await.map_err(|err| {
                             Error::session(format!("inner session lock failed: {err}"))
                         })?;
-                        current_model_entry(&inner_session, &options).cloned()
+                        current_or_runtime_model_entry(
+                            &inner_session,
+                            &runtime_provider,
+                            &runtime_model_id,
+                            &options,
+                        )
+                        .cloned()
                     };
                     let Some(entry) = entry else {
                         let _ =
@@ -1976,9 +1991,16 @@ async fn run_prompt_with_retry(
                         let context_window = if let Ok(guard) =
                             OwnedMutexGuard::lock(Arc::clone(&session), &cx).await
                         {
+                            let runtime_provider = guard.agent.provider().name().to_string();
+                            let runtime_model_id = guard.agent.provider().model_id().to_string();
                             guard.session.lock(&cx).await.map_or(None, |inner| {
-                                current_model_entry(&inner, &options)
-                                    .map(|e| e.model.context_window)
+                                current_or_runtime_model_entry(
+                                    &inner,
+                                    &runtime_provider,
+                                    &runtime_model_id,
+                                    &options,
+                                )
+                                .map(|e| e.model.context_window)
                             })
                         } else {
                             None
@@ -3070,11 +3092,18 @@ async fn maybe_auto_compact(
             return;
         };
         let (path_entries, context_window) = {
+            let runtime_provider = guard.agent.provider().name().to_string();
+            let runtime_model_id = guard.agent.provider().model_id().to_string();
             let Ok(mut inner_session) = guard.session.lock(cx.cx()).await else {
                 return;
             };
             inner_session.ensure_entry_ids();
-            let Some(entry) = current_model_entry(&inner_session, &options) else {
+            let Some(entry) = current_or_runtime_model_entry(
+                &inner_session,
+                &runtime_provider,
+                &runtime_model_id,
+                &options,
+            ) else {
                 return;
             };
             let path_entries = inner_session
@@ -3968,6 +3997,24 @@ fn current_model_entry<'a>(
 ) -> Option<&'a ModelEntry> {
     let provider = session.header.provider.as_deref()?;
     let model_id = session.header.model_id.as_deref()?;
+    model_entry_for_provider_and_id(provider, model_id, options)
+}
+
+fn current_or_runtime_model_entry<'a>(
+    session: &crate::session::Session,
+    runtime_provider: &str,
+    runtime_model_id: &str,
+    options: &'a RpcOptions,
+) -> Option<&'a ModelEntry> {
+    current_model_entry(session, options)
+        .or_else(|| model_entry_for_provider_and_id(runtime_provider, runtime_model_id, options))
+}
+
+fn model_entry_for_provider_and_id<'a>(
+    provider: &str,
+    model_id: &str,
+    options: &'a RpcOptions,
+) -> Option<&'a ModelEntry> {
     options.available_models.iter().find(|m| {
         provider_ids_match(&m.model.provider, provider) && m.model.id.eq_ignore_ascii_case(model_id)
     })
@@ -4089,16 +4136,32 @@ async fn cycle_model_for_rpc(
     }
 
     let cx = AgentCx::for_request();
+    let runtime_provider = guard.agent.provider().name().to_string();
+    let runtime_model_id = guard.agent.provider().model_id().to_string();
     let (current_provider, current_model_id) = {
         let inner_session = guard
             .session
             .lock(cx.cx())
             .await
             .map_err(|err| Error::session(format!("inner session lock failed: {err}")))?;
-        (
-            inner_session.header.provider.clone(),
-            inner_session.header.model_id.clone(),
+        current_or_runtime_model_entry(
+            &inner_session,
+            &runtime_provider,
+            &runtime_model_id,
+            options,
         )
+        .map(|entry| {
+            (
+                Some(entry.model.provider.clone()),
+                Some(entry.model.id.clone()),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                inner_session.header.provider.clone(),
+                inner_session.header.model_id.clone(),
+            )
+        })
     };
 
     let current_index = candidates.iter().position(|entry| {
@@ -5496,6 +5559,27 @@ export default function init(pi) {
     }
 
     #[test]
+    fn current_or_runtime_model_entry_falls_back_when_header_is_unresolved() {
+        let mut runtime = dummy_entry("test-model", false);
+        runtime.model.provider = "test-provider".to_string();
+        let options = rpc_options_with_models(vec![runtime.clone()]);
+
+        let mut session = Session::in_memory();
+        session.header.provider = Some("missing-provider".to_string());
+        session.header.model_id = Some("missing-model".to_string());
+
+        let resolved =
+            current_or_runtime_model_entry(&session, "test-provider", "test-model", &options)
+                .expect("resolve runtime fallback");
+        assert_eq!(resolved.model.provider, "test-provider");
+        assert_eq!(resolved.model.id, "test-model");
+        assert_eq!(
+            resolved.clamp_thinking_level(ThinkingLevel::High),
+            ThinkingLevel::Off
+        );
+    }
+
+    #[test]
     fn cycle_model_for_rpc_does_not_mutate_provider_when_credentials_are_missing() {
         let runtime = asupersync::runtime::RuntimeBuilder::new()
             .blocking_threads(1, 1)
@@ -5580,6 +5664,51 @@ export default function init(pi) {
             assert_eq!(
                 session.header.model_id.as_deref(),
                 Some(current.model.id.as_str())
+            );
+        });
+    }
+
+    #[test]
+    fn cycle_model_for_rpc_uses_runtime_model_when_header_is_missing() {
+        let runtime = asupersync::runtime::RuntimeBuilder::new()
+            .blocking_threads(1, 1)
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async move {
+            let mut current = dummy_entry("test-model", false);
+            current.model.provider = "test-provider".to_string();
+            current.model.api = "test-api".to_string();
+            current.model.base_url = "https://example.test/v1".to_string();
+
+            let mut next = dummy_entry("after-runtime", true);
+            next.api_key = Some("inline-next-key".to_string());
+            let options = rpc_options_with_models(vec![current, next.clone()]);
+
+            let mut agent_session = build_test_agent_session(Session::in_memory());
+            let result = cycle_model_for_rpc(&mut agent_session, &options)
+                .await
+                .expect("cycle should succeed")
+                .expect("should choose next model");
+
+            assert_eq!(result.0.model.provider, next.model.provider);
+            assert_eq!(result.0.model.id, next.model.id);
+            assert_eq!(agent_session.agent.provider().name(), next.model.provider);
+            assert_eq!(agent_session.agent.provider().model_id(), next.model.id);
+
+            let cx = AgentCx::for_request();
+            let session = agent_session
+                .session
+                .lock(cx.cx())
+                .await
+                .expect("session lock");
+            assert_eq!(
+                session.header.provider.as_deref(),
+                Some(next.model.provider.as_str())
+            );
+            assert_eq!(
+                session.header.model_id.as_deref(),
+                Some(next.model.id.as_str())
             );
         });
     }

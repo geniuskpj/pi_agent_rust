@@ -474,6 +474,43 @@ fn session_thinking_level(
         .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionThinkingSyncPlan {
+    effective: crate::model::ThinkingLevel,
+    thinking_changed: bool,
+    persist_needed: bool,
+}
+
+fn plan_session_thinking_sync(
+    session_thinking: Option<&str>,
+    current_thinking: crate::model::ThinkingLevel,
+    target_entry: &ModelEntry,
+) -> SessionThinkingSyncPlan {
+    let parsed_session_thinking = session_thinking.and_then(|raw| {
+        raw.parse::<crate::model::ThinkingLevel>().map_or_else(
+            |_| {
+                tracing::warn!("Ignoring invalid session thinking level: {raw}");
+                None
+            },
+            Some,
+        )
+    });
+    let requested_thinking = parsed_session_thinking.unwrap_or(current_thinking);
+    let effective = target_entry.clamp_thinking_level(requested_thinking);
+    let thinking_changed = effective != current_thinking;
+    let persist_needed = if session_thinking.is_some() {
+        parsed_session_thinking != Some(effective)
+    } else {
+        thinking_changed
+    };
+
+    SessionThinkingSyncPlan {
+        effective,
+        thinking_changed,
+        persist_needed,
+    }
+}
+
 pub fn resolve_scoped_model_entries(
     patterns: &[String],
     available_models: &[ModelEntry],
@@ -758,9 +795,11 @@ impl PiApp {
             .stream_options()
             .thinking_level
             .unwrap_or_default();
-        let requested_thinking = session_thinking_level(&session_guard);
-        let effective_thinking =
-            target_entry.clamp_thinking_level(requested_thinking.unwrap_or(current_thinking));
+        let thinking_sync = plan_session_thinking_sync(
+            session_guard.header.thinking_level.as_deref(),
+            current_thinking,
+            &target_entry,
+        );
 
         let provider = agent_guard.provider();
         let runtime_matches_target =
@@ -784,14 +823,16 @@ impl PiApp {
             stream_options.api_key.clone_from(&resolved_key_opt);
             stream_options.headers.clone_from(&target_entry.headers);
         }
-        agent_guard.stream_options_mut().thinking_level = Some(effective_thinking);
+        agent_guard.stream_options_mut().thinking_level = Some(thinking_sync.effective);
         drop(agent_guard);
 
-        let persist_needed = if let Some(previous_thinking) = requested_thinking
-            && previous_thinking != effective_thinking
-        {
-            session_guard.header.thinking_level = Some(effective_thinking.to_string());
-            session_guard.append_thinking_level_change(effective_thinking.to_string());
+        let persist_needed = if thinking_sync.persist_needed {
+            let previous_thinking = session_thinking_level(&session_guard);
+            session_guard.header.thinking_level = Some(thinking_sync.effective.to_string());
+            if thinking_sync.thinking_changed && previous_thinking != Some(thinking_sync.effective)
+            {
+                session_guard.append_thinking_level_change(thinking_sync.effective.to_string());
+            }
             true
         } else {
             false
@@ -2357,6 +2398,35 @@ mod tests {
             compat: None,
             oauth_config: None,
         }
+    }
+
+    #[test]
+    fn plan_session_thinking_sync_repairs_missing_header_when_model_clamps_runtime_level() {
+        let mut target = test_model_entry("acme", "plain-model");
+        target.model.reasoning = false;
+
+        let plan =
+            super::plan_session_thinking_sync(None, crate::model::ThinkingLevel::High, &target);
+
+        assert_eq!(plan.effective, crate::model::ThinkingLevel::Off);
+        assert!(plan.thinking_changed);
+        assert!(plan.persist_needed);
+    }
+
+    #[test]
+    fn plan_session_thinking_sync_repairs_invalid_header_without_fake_runtime_change() {
+        let mut target = test_model_entry("acme", "plain-model");
+        target.model.reasoning = false;
+
+        let plan = super::plan_session_thinking_sync(
+            Some("definitely-invalid"),
+            crate::model::ThinkingLevel::Off,
+            &target,
+        );
+
+        assert_eq!(plan.effective, crate::model::ThinkingLevel::Off);
+        assert!(!plan.thinking_changed);
+        assert!(plan.persist_needed);
     }
 
     #[test]
