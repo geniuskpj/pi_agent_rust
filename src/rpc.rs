@@ -4444,7 +4444,10 @@ export default function init(pi) {
     pi.registerCommand("wait-confirm", {
         description: "Block until RPC confirms",
         handler: async () => {
-            const confirmed = await pi.ui.confirm("Wait", "Hold the command open");
+            const confirmed = await pi.ui("confirm", {
+                title: "Wait",
+                message: "Hold the command open"
+            });
             return confirmed ? "confirmed" : "cancelled";
         }
     });
