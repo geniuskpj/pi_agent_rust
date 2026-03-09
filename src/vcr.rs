@@ -45,6 +45,14 @@ fn test_env_overrides() -> &'static Mutex<HashMap<String, Option<String>>> {
     TEST_ENV_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TestEnvOverrideSnapshot {
+    Absent,
+    Unset,
+    Value(String),
+}
+
 fn env_var(name: &str) -> Option<String> {
     #[cfg(test)]
     {
@@ -59,26 +67,33 @@ fn env_var(name: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-fn set_test_env_var(name: &str, value: Option<&str>) -> Option<String> {
+fn set_test_env_var(name: &str, value: Option<&str>) -> TestEnvOverrideSnapshot {
     let mut guard = test_env_overrides()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let previous = guard.get(name).and_then(Clone::clone);
+    let previous = match guard.get(name) {
+        Some(Some(previous)) => TestEnvOverrideSnapshot::Value(previous.clone()),
+        Some(None) => TestEnvOverrideSnapshot::Unset,
+        None => TestEnvOverrideSnapshot::Absent,
+    };
     // Store Some(val) for override or None as tombstone (explicitly unset)
     guard.insert(name.to_string(), value.map(String::from));
     previous
 }
 
 #[cfg(test)]
-fn restore_test_env_var(name: &str, previous: Option<String>) {
+fn restore_test_env_var(name: &str, previous: TestEnvOverrideSnapshot) {
     let mut guard = test_env_overrides()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     match previous {
-        Some(value) => {
+        TestEnvOverrideSnapshot::Value(value) => {
             guard.insert(name.to_string(), Some(value));
         }
-        None => {
+        TestEnvOverrideSnapshot::Unset => {
+            guard.insert(name.to_string(), None);
+        }
+        TestEnvOverrideSnapshot::Absent => {
             // Remove the override entirely (go back to real env)
             guard.remove(name);
         }
@@ -1110,11 +1125,29 @@ mod tests {
         assert_eq!(env_var(TEST_VAR), None);
 
         let previous = set_test_env_var(TEST_VAR, Some("override-value"));
-        assert_eq!(previous, None);
+        assert_eq!(previous, TestEnvOverrideSnapshot::Unset);
         assert_eq!(env_var(TEST_VAR).as_deref(), Some("override-value"));
 
         restore_test_env_var(TEST_VAR, previous);
         assert_eq!(env_var(TEST_VAR), None);
+
+        restore_test_env_var(TEST_VAR, original);
+    }
+
+    #[test]
+    fn test_env_override_helpers_restore_nested_tombstone_state() {
+        const TEST_VAR: &str = "PI_AGENT_VCR_TEST_ENV_TOMBSTONE";
+        let _lock = lock_env();
+
+        let original = set_test_env_var(TEST_VAR, None);
+        let previous = set_test_env_var(TEST_VAR, Some("override-value"));
+        restore_test_env_var(TEST_VAR, previous);
+
+        let guard = test_env_overrides()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(guard.get(TEST_VAR), Some(&None));
+        drop(guard);
 
         restore_test_env_var(TEST_VAR, original);
     }
