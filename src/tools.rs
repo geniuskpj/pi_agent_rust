@@ -3361,7 +3361,8 @@ impl Tool for GrepTool {
         let search_dir = input.path.as_deref().unwrap_or(".");
         let search_path = resolve_read_path(search_dir, &self.cwd);
 
-        let is_directory = std::fs::metadata(&search_path)
+        let is_directory = asupersync::fs::metadata(&search_path)
+            .await
             .map_err(|e| {
                 Error::tool(
                     "grep",
