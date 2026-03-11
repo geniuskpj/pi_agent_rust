@@ -1579,7 +1579,15 @@ pub async fn run_interactive(
         runtime_handle.spawn(async move {
             let _current = Cx::set_current(Some(extension_ui_cx.clone()));
             while let Ok(request) = extension_ui_rx.recv(&extension_ui_cx).await {
-                let _ = extension_event_tx.try_send(PiMsg::ExtensionUiRequest(request));
+                if !enqueue_pi_event(
+                    &extension_event_tx,
+                    &extension_ui_cx,
+                    PiMsg::ExtensionUiRequest(request),
+                )
+                .await
+                {
+                    break;
+                }
             }
         });
     }
@@ -1619,11 +1627,22 @@ pub async fn run_interactive(
 
     // Tell the async bridge to exit promptly even if some background task still
     // holds an event sender clone after the TUI has already shut down.
-    let _ = shutdown_event_tx.try_send(PiMsg::UiShutdown);
+    // Use a fresh cleanup scope so bridge teardown still runs even if the ambient
+    // interactive context is already cancelled while exiting.
+    let shutdown_cx = Cx::for_request();
+    enqueue_ui_shutdown(&shutdown_event_tx, &shutdown_cx).await;
 
     let _ = crossterm::execute!(std::io::stdout(), cursor::Show);
     println!("Goodbye!");
     Ok(())
+}
+
+async fn enqueue_pi_event(event_tx: &mpsc::Sender<PiMsg>, cx: &Cx, msg: PiMsg) -> bool {
+    event_tx.send(cx, msg).await.is_ok()
+}
+
+async fn enqueue_ui_shutdown(event_tx: &mpsc::Sender<PiMsg>, cx: &Cx) {
+    let _ = enqueue_pi_event(event_tx, cx, PiMsg::UiShutdown).await;
 }
 
 /// Custom message types for async agent events.

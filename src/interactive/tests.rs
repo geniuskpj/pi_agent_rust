@@ -113,6 +113,74 @@ fn startup_init_cmd_sequences_window_size_before_pending() {
 }
 
 #[test]
+fn enqueue_ui_shutdown_waits_for_capacity_in_full_channel() {
+    asupersync::test_utils::run_test(|| async {
+        let (event_tx, event_rx) = mpsc::channel(1);
+        event_tx
+            .try_send(PiMsg::System("busy".to_string()))
+            .expect("fill bounded event channel");
+
+        let send_cx = Cx::for_request();
+        let recv_cx = Cx::for_request();
+        let send_shutdown = enqueue_ui_shutdown(&event_tx, &send_cx);
+        let recv_messages = async {
+            let first = event_rx.recv(&recv_cx).await.expect("first queued message");
+            let second = event_rx.recv(&recv_cx).await.expect("shutdown message");
+            (first, second)
+        };
+
+        let ((), (first, second)) = futures::join!(send_shutdown, recv_messages);
+
+        assert!(matches!(first, PiMsg::System(text) if text == "busy"));
+        assert!(matches!(second, PiMsg::UiShutdown));
+    });
+}
+
+#[test]
+fn enqueue_pi_event_preserves_extension_ui_requests_under_backpressure() {
+    asupersync::test_utils::run_test(|| async {
+        let (event_tx, event_rx) = mpsc::channel(1);
+        event_tx
+            .try_send(PiMsg::System("busy".to_string()))
+            .expect("fill bounded event channel");
+
+        let request = ExtensionUiRequest::new(
+            "req-confirm",
+            "confirm",
+            json!({ "title": "Need approval" }),
+        );
+        let send_cx = Cx::for_request();
+        let recv_cx = Cx::for_request();
+        let send_request = enqueue_pi_event(
+            &event_tx,
+            &send_cx,
+            PiMsg::ExtensionUiRequest(request.clone()),
+        );
+        let recv_messages = async {
+            let first = event_rx.recv(&recv_cx).await.expect("first queued message");
+            let second = event_rx.recv(&recv_cx).await.expect("extension ui request");
+            (first, second)
+        };
+
+        let (enqueued, (first, second)) = futures::join!(send_request, recv_messages);
+
+        assert!(
+            enqueued,
+            "extension UI request should enqueue once capacity opens"
+        );
+        assert!(matches!(first, PiMsg::System(text) if text == "busy"));
+        match second {
+            PiMsg::ExtensionUiRequest(actual) => {
+                assert_eq!(actual.id, request.id);
+                assert_eq!(actual.method, request.method);
+                assert_eq!(actual.payload, request.payload);
+            }
+            other => panic!("expected extension UI request, got {other:?}"),
+        }
+    });
+}
+
+#[test]
 fn tmux_wheel_guard_extracts_saved_binding_command() {
     let line = r##"bind-key -T root WheelUpPane            if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }"##;
     assert_eq!(

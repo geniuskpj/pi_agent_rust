@@ -473,9 +473,16 @@ impl PiApp {
             manager.clear_ui_sender();
         }
 
+        // Schedule a guaranteed bridge shutdown instead of a lossy try_send so quit
+        // still unwinds when the bounded event queue is already saturated.
+        let shutdown_tx = self.event_tx.clone();
+        self.runtime_handle.spawn(async move {
+            let shutdown_cx = Cx::for_request();
+            super::enqueue_ui_shutdown(&shutdown_tx, &shutdown_cx).await;
+        });
+
         // Drop the async → bubbletea bridge sender so bubbletea can shut down cleanly.
         // Without this, bubbletea's external forwarder thread can block on `recv()` during quit.
-        let _ = self.event_tx.try_send(PiMsg::UiShutdown);
         let (tx, _rx) = mpsc::channel::<PiMsg>(1);
         drop(std::mem::replace(&mut self.event_tx, tx));
         quit()
@@ -1009,7 +1016,7 @@ mod tests {
         }
     }
 
-    fn runtime_handle() -> asupersync::runtime::RuntimeHandle {
+    fn runtime() -> &'static asupersync::runtime::Runtime {
         static RT: OnceLock<asupersync::runtime::Runtime> = OnceLock::new();
         RT.get_or_init(|| {
             RuntimeBuilder::multi_thread()
@@ -1017,7 +1024,10 @@ mod tests {
                 .build()
                 .expect("build runtime")
         })
-        .handle()
+    }
+
+    fn runtime_handle() -> asupersync::runtime::RuntimeHandle {
+        runtime().handle()
     }
 
     fn model_entry(
@@ -1053,7 +1063,10 @@ mod tests {
         }
     }
 
-    fn build_test_app(current: ModelEntry, available: Vec<ModelEntry>) -> PiApp {
+    fn build_test_app_with_event_rx(
+        current: ModelEntry,
+        available: Vec<ModelEntry>,
+    ) -> (PiApp, mpsc::Receiver<PiMsg>) {
         let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
         let agent = Agent::new(
             provider,
@@ -1072,26 +1085,34 @@ mod tests {
             extension_paths: Vec::new(),
             theme_paths: Vec::new(),
         };
-        let (event_tx, _event_rx) = mpsc::channel(64);
-        PiApp::new(
-            agent,
-            session,
-            Config::default(),
-            resources,
-            resource_cli,
-            Path::new(".").to_path_buf(),
-            current,
-            Vec::new(),
-            available,
-            Vec::new(),
-            event_tx,
-            runtime_handle(),
-            true,
-            None,
-            Some(KeyBindings::new()),
-            Vec::new(),
-            Usage::default(),
+        let (event_tx, event_rx) = mpsc::channel(64);
+        (
+            PiApp::new(
+                agent,
+                session,
+                Config::default(),
+                resources,
+                resource_cli,
+                Path::new(".").to_path_buf(),
+                current,
+                Vec::new(),
+                available,
+                Vec::new(),
+                event_tx,
+                runtime_handle(),
+                true,
+                None,
+                Some(KeyBindings::new()),
+                Vec::new(),
+                Usage::default(),
+            ),
+            event_rx,
         )
+    }
+
+    fn build_test_app(current: ModelEntry, available: Vec<ModelEntry>) -> PiApp {
+        let (app, _event_rx) = build_test_app_with_event_rx(current, available);
+        app
     }
 
     #[test]
@@ -1437,5 +1458,26 @@ mod tests {
             "Ctrl+C should remain available for normal global handling"
         );
         assert!(app.extension_custom_key_queue.is_empty());
+    }
+
+    #[test]
+    fn quit_cmd_schedules_shutdown_when_event_queue_is_full() {
+        let current = model_entry("openai", "gpt-4o-mini", Some("old-key"), HashMap::new());
+        let (mut app, event_rx) = build_test_app_with_event_rx(current.clone(), vec![current]);
+        app.event_tx
+            .try_send(PiMsg::System("busy".to_string()))
+            .expect("fill bounded event channel");
+
+        let _ = app.quit_cmd();
+
+        let (first, second) = runtime().block_on(async {
+            let cx = asupersync::Cx::for_request();
+            let first = event_rx.recv(&cx).await.expect("first queued message");
+            let second = event_rx.recv(&cx).await.expect("shutdown message");
+            (first, second)
+        });
+
+        assert!(matches!(first, PiMsg::System(text) if text == "busy"));
+        assert!(matches!(second, PiMsg::UiShutdown));
     }
 }
