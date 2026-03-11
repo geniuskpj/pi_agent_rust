@@ -6933,8 +6933,8 @@ mod tests {
         );
 
         let mut session = Session::in_memory();
-        session.header.provider = Some("openai".to_string());
-        session.header.model_id = Some("gpt-4o".to_string());
+        session.header.provider = Some("anthropic".to_string());
+        session.header.model_id = Some("claude-sonnet-4-5".to_string());
 
         let mut agent_session = AgentSession::new(
             agent,

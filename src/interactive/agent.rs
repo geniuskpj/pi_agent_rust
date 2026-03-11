@@ -1820,7 +1820,7 @@ mod stream_delta_batcher_tests {
     }
 
     fn build_test_app_with_provider(provider: Arc<dyn Provider>) -> (PiApp, mpsc::Receiver<PiMsg>) {
-        let current = model_entry("openai", "gpt-4o-mini");
+        let current = model_entry("continue-probe", "continue-probe-model");
         let agent = Agent::new(
             provider,
             ToolRegistry::new(&[], Path::new("."), None),
@@ -2065,8 +2065,14 @@ mod stream_delta_batcher_tests {
         let mut saw_done = false;
         while std::time::Instant::now() < deadline {
             match event_rx.try_recv() {
-                Ok(PiMsg::AgentDone { .. }) => {
+                Ok(PiMsg::AgentDone { error_message, .. }) => {
                     saw_done = true;
+                    if let Some(err) = error_message {
+                        println!("AgentDone error: {}", err);
+                    }
+                }
+                Ok(PiMsg::AgentError(err)) => {
+                    println!("AgentError: {}", err);
                 }
                 Ok(_) => {}
                 Err(_) => {}
@@ -2077,6 +2083,10 @@ mod stream_delta_batcher_tests {
             }
 
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        if state.calls.load(Ordering::SeqCst) == 0 {
+            println!("Status message: {:?}", app.status_message);
         }
 
         assert!(saw_done, "submit_message path should finish an agent turn");

@@ -1689,7 +1689,7 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for path in paths {
-        let key = path.to_string_lossy().to_string();
+        let key = canonical_identity_path(&path).to_string_lossy().to_string();
         if seen.insert(key) {
             out.push(path);
         }

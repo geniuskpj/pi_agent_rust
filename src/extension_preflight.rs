@@ -4375,9 +4375,9 @@ const c = arguments.callee;
                 .iter()
                 .any(|e| e.rule_id == SecurityRuleId::WebAssemblyUsage)
         );
-        // Rulebook version should be 2.0.0
+        // Rulebook version should be 2.1.0
         for entry in &entries {
-            assert_eq!(entry.rulebook_version, "2.0.0");
+            assert_eq!(entry.rulebook_version, "2.1.0");
         }
     }
 
@@ -4385,7 +4385,7 @@ const c = arguments.callee;
 
     #[test]
     fn rulebook_version_is_v2() {
-        assert_eq!(SECURITY_RULEBOOK_VERSION, "2.0.0");
+        assert_eq!(SECURITY_RULEBOOK_VERSION, "2.1.0");
     }
 
     // ---- New rule tier consistency ----
