@@ -1554,6 +1554,7 @@ pub async fn run_interactive(
     }
 
     let (event_tx, event_rx) = mpsc::channel::<PiMsg>(1024);
+    let shutdown_event_tx = event_tx.clone();
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<Message>();
 
     let ui_bridge_cx = Cx::current().unwrap_or_else(Cx::for_request);
@@ -1615,6 +1616,10 @@ pub async fn run_interactive(
     .with_mouse_cell_motion()
     .with_input_receiver(ui_rx)
     .run()?;
+
+    // Tell the async bridge to exit promptly even if some background task still
+    // holds an event sender clone after the TUI has already shut down.
+    let _ = shutdown_event_tx.try_send(PiMsg::UiShutdown);
 
     let _ = crossterm::execute!(std::io::stdout(), cursor::Show);
     println!("Goodbye!");
