@@ -1949,35 +1949,57 @@ async fn handle_info(name: &str) -> Result<()> {
 
 fn handle_info_blocking(name: &str) -> Result<()> {
     let index = ExtensionIndexStore::default_store().load_or_seed()?;
-    let entry = find_index_entry_by_name_or_id(&index, name);
-    let Some(entry) = entry else {
-        println!("Extension \"{name}\" not found.");
-        println!("Try: pi search {name}");
-        return Ok(());
-    };
-    print_extension_info(entry);
+    match find_index_entry_by_name_or_id(&index, name) {
+        ExtensionInfoLookup::Found(entry) => print_extension_info(entry),
+        ExtensionInfoLookup::Ambiguous => {
+            println!("Extension query \"{name}\" is ambiguous.");
+            println!("Try: pi search {name}");
+        }
+        ExtensionInfoLookup::NotFound => {
+            println!("Extension \"{name}\" not found.");
+            println!("Try: pi search {name}");
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExtensionInfoLookup<'a> {
+    Found(&'a pi::extension_index::ExtensionIndexEntry),
+    NotFound,
+    Ambiguous,
 }
 
 fn find_index_entry_by_name_or_id<'a>(
     index: &'a pi::extension_index::ExtensionIndex,
     name: &str,
-) -> Option<&'a pi::extension_index::ExtensionIndexEntry> {
-    // Look up by exact id, name, or fuzzy match (top-1 search hit)
-    index
+) -> ExtensionInfoLookup<'a> {
+    // Look up by exact id, name, or fuzzy match when there is a single best hit.
+    if let Some(entry) = index
         .entries
         .iter()
         .find(|e| e.id.eq_ignore_ascii_case(name) || e.name.eq_ignore_ascii_case(name))
-        .or_else(|| {
-            let hits = index.search(name, 1);
-            hits.into_iter()
-                .next()
-                .map(|h| h.entry)
-                .and_then(|matched| {
-                    // Return a reference from the index, not the owned clone
-                    index.entries.iter().find(|e| e.id == matched.id)
-                })
-        })
+    {
+        return ExtensionInfoLookup::Found(entry);
+    }
+
+    let hits = index.search(name, 2);
+    let Some(best_hit) = hits.first() else {
+        return ExtensionInfoLookup::NotFound;
+    };
+
+    if hits
+        .get(1)
+        .is_some_and(|next_hit| next_hit.score == best_hit.score)
+    {
+        return ExtensionInfoLookup::Ambiguous;
+    }
+
+    index
+        .entries
+        .iter()
+        .find(|entry| entry.id == best_hit.entry.id)
+        .map_or(ExtensionInfoLookup::NotFound, ExtensionInfoLookup::Found)
 }
 
 fn print_extension_info(entry: &pi::extension_index::ExtensionIndexEntry) {
@@ -4962,6 +4984,62 @@ mod tests {
         let hits = collect_search_hits(&index, Some("automation"), "relevance", 1, "foo");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].entry.id, "npm/zzz-foo");
+    }
+
+    fn test_extension_index(
+        entries: Vec<pi::extension_index::ExtensionIndexEntry>,
+    ) -> pi::extension_index::ExtensionIndex {
+        pi::extension_index::ExtensionIndex {
+            schema: pi::extension_index::EXTENSION_INDEX_SCHEMA.to_string(),
+            version: pi::extension_index::EXTENSION_INDEX_VERSION,
+            generated_at: None,
+            last_refreshed_at: None,
+            entries,
+        }
+    }
+
+    fn test_extension_entry(id: &str, name: &str) -> pi::extension_index::ExtensionIndexEntry {
+        pi::extension_index::ExtensionIndexEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            tags: Vec::new(),
+            license: None,
+            source: None,
+            install_source: Some(format!("npm:{name}")),
+        }
+    }
+
+    #[test]
+    fn find_index_entry_by_name_or_id_returns_unique_fuzzy_hit() {
+        let index = test_extension_index(vec![
+            test_extension_entry("npm/foo-helper", "foo-helper"),
+            test_extension_entry("npm/bar-helper", "bar-helper"),
+        ]);
+
+        match find_index_entry_by_name_or_id(&index, "foo") {
+            ExtensionInfoLookup::Found(entry) => assert_eq!(entry.id, "npm/foo-helper"),
+            ExtensionInfoLookup::NotFound => panic!("expected unique fuzzy match, got NotFound"),
+            ExtensionInfoLookup::Ambiguous => {
+                panic!("expected unique fuzzy match, got Ambiguous")
+            }
+        }
+    }
+
+    #[test]
+    fn find_index_entry_by_name_or_id_rejects_ambiguous_fuzzy_hit() {
+        let index = test_extension_index(vec![
+            test_extension_entry("npm/foo-alpha", "foo-alpha"),
+            test_extension_entry("npm/foo-beta", "foo-beta"),
+        ]);
+
+        assert!(
+            matches!(
+                find_index_entry_by_name_or_id(&index, "foo"),
+                ExtensionInfoLookup::Ambiguous
+            ),
+            "ambiguous fuzzy hits should fail safe instead of picking one arbitrarily"
+        );
     }
 
     #[test]
