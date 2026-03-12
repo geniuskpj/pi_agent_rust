@@ -277,7 +277,7 @@ async fn send_parts(
     transport.flush().await?;
 
     let (status, response_headers, leftover) = Box::pin(read_response_head(&mut transport)).await?;
-    let body_kind = body_kind_from_response(status, &response_headers);
+    let body_kind = body_kind_from_response(status, &response_headers)?;
 
     let state = BodyStreamState::new(transport, body_kind, leftover);
     let stream = stream::try_unfold(state, |mut state| async move {
@@ -574,21 +574,31 @@ enum BodyKind {
     Eof,
 }
 
-fn body_kind_from_response(status: u16, headers: &[(String, String)]) -> BodyKind {
+fn body_kind_from_response(status: u16, headers: &[(String, String)]) -> Result<BodyKind> {
     if matches!(status, 100..=199 | 204 | 205 | 304) {
-        return BodyKind::Empty;
+        return Ok(BodyKind::Empty);
     }
     body_kind_from_headers(headers)
 }
 
-fn body_kind_from_headers(headers: &[(String, String)]) -> BodyKind {
+fn body_kind_from_headers(headers: &[(String, String)]) -> Result<BodyKind> {
     let mut content_length = None;
     let mut transfer_encoding = None;
 
     for (name, value) in headers {
         let name_lc = name.to_ascii_lowercase();
         if name_lc == "content-length" {
-            content_length = value.trim().parse::<usize>().ok();
+            let parsed = value
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| Error::api("Invalid HTTP Content-Length header"))?;
+            if let Some(existing) = content_length {
+                if existing != parsed {
+                    return Err(Error::api("Conflicting HTTP Content-Length headers"));
+                }
+            } else {
+                content_length = Some(parsed);
+            }
         } else if name_lc == "transfer-encoding" {
             transfer_encoding = Some(value.to_ascii_lowercase());
         }
@@ -596,15 +606,15 @@ fn body_kind_from_headers(headers: &[(String, String)]) -> BodyKind {
 
     if let Some(te) = transfer_encoding {
         if te.split(',').any(|v| v.trim() == "chunked") {
-            return BodyKind::Chunked;
+            return Ok(BodyKind::Chunked);
         }
     }
 
-    match content_length {
+    Ok(match content_length {
         Some(0) => BodyKind::Empty,
         Some(n) => BodyKind::ContentLength(n),
         None => BodyKind::Eof,
-    }
+    })
 }
 
 struct Buffer {
@@ -1060,7 +1070,7 @@ mod tests {
     fn body_kind_content_length() {
         let headers = vec![("Content-Length".to_string(), "42".to_string())];
         assert!(matches!(
-            body_kind_from_headers(&headers),
+            body_kind_from_headers(&headers).unwrap(),
             BodyKind::ContentLength(42)
         ));
     }
@@ -1068,14 +1078,17 @@ mod tests {
     #[test]
     fn body_kind_content_length_zero() {
         let headers = vec![("Content-Length".to_string(), "0".to_string())];
-        assert!(matches!(body_kind_from_headers(&headers), BodyKind::Empty));
+        assert!(matches!(
+            body_kind_from_headers(&headers).unwrap(),
+            BodyKind::Empty
+        ));
     }
 
     #[test]
     fn body_kind_chunked() {
         let headers = vec![("Transfer-Encoding".to_string(), "chunked".to_string())];
         assert!(matches!(
-            body_kind_from_headers(&headers),
+            body_kind_from_headers(&headers).unwrap(),
             BodyKind::Chunked
         ));
     }
@@ -1085,7 +1098,7 @@ mod tests {
         // Transfer-Encoding with multiple values
         let headers = vec![("Transfer-Encoding".to_string(), "gzip, chunked".to_string())];
         assert!(matches!(
-            body_kind_from_headers(&headers),
+            body_kind_from_headers(&headers).unwrap(),
             BodyKind::Chunked
         ));
     }
@@ -1098,7 +1111,7 @@ mod tests {
             ("Transfer-Encoding".to_string(), "chunked".to_string()),
         ];
         assert!(matches!(
-            body_kind_from_headers(&headers),
+            body_kind_from_headers(&headers).unwrap(),
             BodyKind::Chunked
         ));
     }
@@ -1106,14 +1119,17 @@ mod tests {
     #[test]
     fn body_kind_eof_no_headers() {
         let headers: Vec<(String, String)> = Vec::new();
-        assert!(matches!(body_kind_from_headers(&headers), BodyKind::Eof));
+        assert!(matches!(
+            body_kind_from_headers(&headers).unwrap(),
+            BodyKind::Eof
+        ));
     }
 
     #[test]
     fn body_kind_case_insensitive() {
         let headers = vec![("content-length".to_string(), "10".to_string())];
         assert!(matches!(
-            body_kind_from_headers(&headers),
+            body_kind_from_headers(&headers).unwrap(),
             BodyKind::ContentLength(10)
         ));
     }
@@ -1122,7 +1138,7 @@ mod tests {
     fn body_kind_response_204_without_headers_is_empty() {
         let headers: Vec<(String, String)> = Vec::new();
         assert!(matches!(
-            body_kind_from_response(204, &headers),
+            body_kind_from_response(204, &headers).unwrap(),
             BodyKind::Empty
         ));
     }
@@ -1131,7 +1147,7 @@ mod tests {
     fn body_kind_response_304_ignores_content_length() {
         let headers = vec![("Content-Length".to_string(), "7".to_string())];
         assert!(matches!(
-            body_kind_from_response(304, &headers),
+            body_kind_from_response(304, &headers).unwrap(),
             BodyKind::Empty
         ));
     }
@@ -1140,7 +1156,7 @@ mod tests {
     fn body_kind_response_205_without_headers_is_empty() {
         let headers: Vec<(String, String)> = Vec::new();
         assert!(matches!(
-            body_kind_from_response(205, &headers),
+            body_kind_from_response(205, &headers).unwrap(),
             BodyKind::Empty
         ));
     }
@@ -1614,10 +1630,18 @@ mod tests {
     }
 
     #[test]
-    fn body_kind_invalid_content_length_falls_to_eof() {
+    fn body_kind_invalid_content_length_is_error() {
         let headers = vec![("Content-Length".to_string(), "not-a-number".to_string())];
-        // parse fails, content_length stays None → Eof
-        assert!(matches!(body_kind_from_headers(&headers), BodyKind::Eof));
+        assert!(body_kind_from_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn body_kind_conflicting_content_length_headers_is_error() {
+        let headers = vec![
+            ("Content-Length".to_string(), "5".to_string()),
+            ("content-length".to_string(), "7".to_string()),
+        ];
+        assert!(body_kind_from_headers(&headers).is_err());
     }
 
     #[test]

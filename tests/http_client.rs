@@ -269,6 +269,44 @@ fn malformed_header_line_is_error() {
 }
 
 #[test]
+fn invalid_content_length_is_error() {
+    let harness = TestHarness::new("http_client_invalid_content_length_is_error");
+
+    let server = OneShotServer::start(|mut stream, _request| {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Length: nope\r\n",
+            "Connection: keep-alive\r\n",
+            "\r\n"
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
+        stream.flush().expect("flush response");
+        thread::sleep(Duration::from_millis(150));
+    });
+
+    let url = server.url("/invalid-content-length");
+    let err = common::run_async(async move {
+        Client::new()
+            .get(&url)
+            .timeout(Duration::from_millis(30))
+            .send()
+            .await
+            .err()
+            .expect("expected invalid content-length error")
+    });
+
+    server.join();
+    let message = err.to_string();
+    assert!(
+        message.contains("Invalid HTTP Content-Length header"),
+        "unexpected error: {message}"
+    );
+    write_logs_artifact(&harness);
+}
+
+#[test]
 fn oversized_response_headers_is_error() {
     let harness = TestHarness::new("http_client_oversized_response_headers_is_error");
 
