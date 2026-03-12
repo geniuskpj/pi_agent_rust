@@ -4434,6 +4434,22 @@ impl BashOutputState {
             spill_failed: false,
         }
     }
+
+    fn abandon_spill_file(&mut self) {
+        self.spill_failed = true;
+        self.temp_file = None;
+        if let Some(path) = self.temp_file_path.take() {
+            if let Err(e) = std::fs::remove_file(&path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::debug!(
+                    "Failed to remove incomplete bash spill file {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -4499,7 +4515,9 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
                         match file.metadata().await {
                             Ok(meta) => {
                                 if meta.ino() != expected {
-                                    tracing::warn!("Temp file identity mismatch (possible TOCTOU attack)");
+                                    tracing::warn!(
+                                        "Temp file identity mismatch (possible TOCTOU attack)"
+                                    );
                                     identity_match = false;
                                 }
                             }
@@ -4545,19 +4563,21 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
     }
 
     if let Some(file) = state.temp_file.as_mut() {
+        let mut abandon_spill_file = false;
         if state.total_bytes <= BASH_FILE_LIMIT_BYTES {
             if let Err(e) = file.write_all(&chunk).await {
                 tracing::warn!("Failed to write bash chunk to temp file: {e}");
-                state.spill_failed = true;
-                state.temp_file = None;
+                abandon_spill_file = true;
             }
         } else {
             // Hard limit reached. Stop writing and close the file to release the FD.
             if !state.spill_failed {
                 tracing::warn!("Bash output exceeded hard limit; stopping file log");
-                state.spill_failed = true;
-                state.temp_file = None;
+                abandon_spill_file = true;
             }
+        }
+        if abandon_spill_file {
+            state.abandon_spill_file();
         }
     }
 
@@ -6721,6 +6741,58 @@ mod tests {
                 "active drain should still honor ambient cancellation"
             );
             assert_eq!(bash_output.total_bytes, 0);
+        });
+    }
+
+    #[test]
+    fn test_bash_output_state_abandon_spill_file_clears_path_and_unlinks_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spill_path = tmp.path().join("partial-bash.log");
+        std::fs::write(&spill_path, b"partial output").unwrap();
+
+        let mut bash_output = BashOutputState::new(DEFAULT_MAX_BYTES);
+        bash_output.temp_file_path = Some(spill_path.clone());
+
+        bash_output.abandon_spill_file();
+
+        assert!(bash_output.spill_failed);
+        assert!(bash_output.temp_file.is_none());
+        assert!(bash_output.temp_file_path.is_none());
+        assert!(
+            !spill_path.exists(),
+            "abandoned spill files should not be advertised or left behind"
+        );
+    }
+
+    #[test]
+    fn test_bash_hard_limit_abandons_partial_spill_file() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().unwrap();
+            let spill_path = tmp.path().join("hard-limit-bash.log");
+            std::fs::write(&spill_path, b"partial output").unwrap();
+
+            let spill_file = asupersync::fs::OpenOptions::new()
+                .append(true)
+                .open(&spill_path)
+                .await
+                .unwrap();
+
+            let mut bash_output = BashOutputState::new(DEFAULT_MAX_BYTES);
+            bash_output.total_bytes = BASH_FILE_LIMIT_BYTES;
+            bash_output.temp_file_path = Some(spill_path.clone());
+            bash_output.temp_file = Some(spill_file);
+
+            ingest_bash_chunk(vec![b'x'], &mut bash_output)
+                .await
+                .expect("hard-limit ingestion should still succeed");
+
+            assert!(bash_output.spill_failed);
+            assert!(bash_output.temp_file.is_none());
+            assert!(bash_output.temp_file_path.is_none());
+            assert!(
+                !spill_path.exists(),
+                "partial spill files must be discarded once the hard limit is reached"
+            );
         });
     }
 
