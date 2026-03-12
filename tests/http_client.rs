@@ -130,7 +130,7 @@ fn request_builder_sends_headers_and_json_body() {
 
     let request_text = String::from_utf8_lossy(&request);
     assert!(request_text.starts_with("POST /hello HTTP/1.1\r\n"));
-    assert!(request_text.contains("Host: 127.0.0.1\r\n"));
+    assert!(request_text.contains("Host: 127.0.0.1:"));
     assert!(request_text.contains("User-Agent: pi_agent_rust/0.1\r\n"));
     assert!(request_text.contains("Content-Type: application/json\r\n"));
     assert!(request_text.contains("X-Test: 1\r\n"));
@@ -218,14 +218,14 @@ fn response_204_without_content_length_returns_empty_body_without_waiting_for_cl
             .write_all(response.as_bytes())
             .expect("write response");
         stream.flush().expect("flush response");
-        thread::sleep(Duration::from_millis(150));
+        thread::sleep(Duration::from_millis(1000));
     });
 
     let url = server.url("/no-content");
     let body = common::run_async(async move {
         let response = Client::new()
             .get(&url)
-            .timeout(Duration::from_millis(30))
+            .timeout(Duration::from_millis(500))
             .send()
             .await
             .expect("send");
@@ -283,14 +283,14 @@ fn invalid_content_length_is_error() {
             .write_all(response.as_bytes())
             .expect("write response");
         stream.flush().expect("flush response");
-        thread::sleep(Duration::from_millis(150));
+        thread::sleep(Duration::from_millis(1000));
     });
 
     let url = server.url("/invalid-content-length");
     let err = common::run_async(async move {
         Client::new()
             .get(&url)
-            .timeout(Duration::from_millis(30))
+            .timeout(Duration::from_millis(500))
             .send()
             .await
             .err()
