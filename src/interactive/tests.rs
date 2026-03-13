@@ -837,7 +837,7 @@ fn settings_summary_notes_restart_requirement_for_future_policy_changes() {
 
     let summary = app.format_settings_summary();
     assert!(summary.contains(
-        "extensionPolicy.defaultPermissive: true (future changes apply after extension restart)"
+        "extensionPolicy.defaultPermissive: on (future changes apply after extension restart)"
     ));
 }
 
