@@ -1171,14 +1171,19 @@ impl PackageManager {
         Ok(PathBuf::from(root))
     }
 
+    fn npm_prefix_root(&self, scope: PackageScope) -> Option<PathBuf> {
+        match scope {
+            PackageScope::Project => Some(self.project_npm_root()),
+            PackageScope::Temporary => Some(temporary_dir("npm", None)),
+            PackageScope::User => None,
+        }
+    }
+
     fn npm_install_path(&self, name: &str, scope: PackageScope) -> Result<Option<PathBuf>> {
-        Ok(match scope {
-            PackageScope::Temporary => {
-                Some(temporary_dir("npm", None).join("node_modules").join(name))
-            }
-            PackageScope::Project => Some(self.project_npm_root().join("node_modules").join(name)),
-            PackageScope::User => Some(self.global_npm_root()?.join(name)),
-        })
+        Ok(Some(match self.npm_prefix_root(scope) {
+            Some(prefix_root) => prefix_root.join("node_modules").join(name),
+            None => self.global_npm_root()?.join(name),
+        }))
     }
 
     fn git_root(&self, scope: PackageScope) -> Option<PathBuf> {
@@ -1215,27 +1220,21 @@ impl PackageManager {
 
     fn install_npm(&self, spec: &str, scope: PackageScope) -> Result<()> {
         let (name, _) = parse_npm_spec(spec);
-        match scope {
-            PackageScope::User => run_command("npm", ["install", "-g", spec], None)?,
-            PackageScope::Project | PackageScope::Temporary => {
-                let install_root = match scope {
-                    PackageScope::Project => self.project_npm_root(),
-                    PackageScope::Temporary => temporary_dir("npm", None),
-                    PackageScope::User => unreachable!("handled above"),
-                };
-                ensure_npm_project(&install_root)?;
-                run_command(
-                    "npm",
-                    [
-                        "install",
-                        "--prefix",
-                        install_root.to_string_lossy().as_ref(),
-                        "--",
-                        spec,
-                    ],
-                    None,
-                )?;
-            }
+        if let Some(install_root) = self.npm_prefix_root(scope) {
+            ensure_npm_project(&install_root)?;
+            run_command(
+                "npm",
+                [
+                    "install",
+                    "--prefix",
+                    install_root.to_string_lossy().as_ref(),
+                    "--",
+                    spec,
+                ],
+                None,
+            )?;
+        } else {
+            run_command("npm", ["install", "-g", spec], None)?;
         }
 
         // Basic sanity: installed path exists
@@ -1255,15 +1254,9 @@ impl PackageManager {
     }
 
     fn uninstall_npm(&self, name: &str, scope: PackageScope) -> Result<()> {
-        if scope == PackageScope::User {
+        let Some(install_root) = self.npm_prefix_root(scope) else {
             run_command("npm", ["uninstall", "-g", "--", name], None)?;
             return Ok(());
-        }
-
-        let install_root = match scope {
-            PackageScope::Project => self.project_npm_root(),
-            PackageScope::Temporary => temporary_dir("npm", None),
-            PackageScope::User => unreachable!("handled above"),
         };
         if !install_root.exists() {
             return Ok(());
@@ -5235,6 +5228,22 @@ mod tests {
         let path_str = result.to_string_lossy();
         assert!(path_str.contains("pi-extensions"));
         assert!(path_str.contains("git-github.com"));
+    }
+
+    #[test]
+    fn npm_prefix_root_matches_scope() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = PackageManager::new(dir.path().to_path_buf());
+
+        assert_eq!(
+            manager.npm_prefix_root(PackageScope::Project),
+            Some(dir.path().join(Config::project_dir()).join("npm"))
+        );
+        assert_eq!(
+            manager.npm_prefix_root(PackageScope::Temporary),
+            Some(temporary_dir("npm", None))
+        );
+        assert_eq!(manager.npm_prefix_root(PackageScope::User), None);
     }
 
     // ======================================================================
