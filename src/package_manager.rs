@@ -524,7 +524,7 @@ impl PackageManager {
                         &mut accumulator,
                         entry.pkg.filter.as_ref(),
                         &metadata,
-                    );
+                    )?;
                 }
                 ParsedSource::Git { host, path, .. } => {
                     let installed_path =
@@ -539,7 +539,7 @@ impl PackageManager {
                         &mut accumulator,
                         entry.pkg.filter.as_ref(),
                         &metadata,
-                    );
+                    )?;
                 }
             }
         }
@@ -1650,7 +1650,7 @@ impl PackageManager {
                         accumulator,
                         entry.pkg.filter.as_ref(),
                         &metadata,
-                    );
+                    )?;
                 }
                 ParsedSource::Git {
                     repo: _,
@@ -1673,7 +1673,7 @@ impl PackageManager {
                         accumulator,
                         entry.pkg.filter.as_ref(),
                         &metadata,
-                    );
+                    )?;
                 }
             }
         }
@@ -1757,7 +1757,7 @@ impl PackageManager {
         }
 
         metadata.base_dir = Some(resolved.to_path_buf());
-        let had_any = Self::collect_package_resources(resolved, accumulator, filter, metadata);
+        let had_any = Self::collect_package_resources(resolved, accumulator, filter, metadata)?;
         if !had_any {
             accumulator
                 .extensions
@@ -1875,7 +1875,7 @@ impl PackageManager {
         accumulator: &mut ResourceAccumulator,
         filter: Option<&PackageFilter>,
         metadata: &PathMetadata,
-    ) -> bool {
+    ) -> Result<bool> {
         if let Some(filter) = filter {
             for resource_type in ResourceType::all() {
                 let target = accumulator.target_mut(resource_type);
@@ -1893,15 +1893,15 @@ impl PackageManager {
                         resource_type,
                         target,
                         metadata,
-                    );
+                    )?;
                 } else {
-                    Self::collect_default_resources(package_root, resource_type, target, metadata);
+                    Self::collect_default_resources(package_root, resource_type, target, metadata)?;
                 }
             }
-            return true;
+            return Ok(true);
         }
 
-        if let Some(manifest) = read_pi_manifest(package_root) {
+        if let Some(manifest) = read_pi_manifest(package_root)? {
             for resource_type in ResourceType::all() {
                 let entries = manifest.entries_for(resource_type);
                 Self::add_manifest_entries(
@@ -1912,7 +1912,7 @@ impl PackageManager {
                     metadata,
                 );
             }
-            return true;
+            return Ok(true);
         }
 
         let mut has_any_dir = false;
@@ -1928,7 +1928,7 @@ impl PackageManager {
             }
         }
 
-        has_any_dir
+        Ok(has_any_dir)
     }
 
     fn collect_default_resources(
@@ -1936,8 +1936,8 @@ impl PackageManager {
         resource_type: ResourceType,
         target: &mut ResourceList,
         metadata: &PathMetadata,
-    ) {
-        if let Some(manifest) = read_pi_manifest(package_root) {
+    ) -> Result<()> {
+        if let Some(manifest) = read_pi_manifest(package_root)? {
             let entries = manifest.entries_for(resource_type);
             if entries.as_ref().is_some_and(|e| !e.is_empty()) {
                 Self::add_manifest_entries(
@@ -1947,7 +1947,7 @@ impl PackageManager {
                     target,
                     metadata,
                 );
-                return;
+                return Ok(());
             }
         }
 
@@ -1958,6 +1958,7 @@ impl PackageManager {
                 target.add(f, metadata, true);
             }
         }
+        Ok(())
     }
 
     fn apply_package_filter(
@@ -1966,14 +1967,14 @@ impl PackageManager {
         resource_type: ResourceType,
         target: &mut ResourceList,
         metadata: &PathMetadata,
-    ) {
-        let (all_files, _) = Self::collect_manifest_files(package_root, resource_type);
+    ) -> Result<()> {
+        let (all_files, _) = Self::collect_manifest_files(package_root, resource_type)?;
 
         if user_patterns.is_empty() {
             for f in all_files {
                 target.add(f, metadata, false);
             }
-            return;
+            return Ok(());
         }
 
         let enabled_by_user = apply_patterns(&all_files, user_patterns, package_root);
@@ -1981,13 +1982,14 @@ impl PackageManager {
             let enabled = enabled_by_user.contains(&f);
             target.add(f, metadata, enabled);
         }
+        Ok(())
     }
 
     fn collect_manifest_files(
         package_root: &Path,
         resource_type: ResourceType,
-    ) -> (Vec<PathBuf>, std::collections::HashSet<PathBuf>) {
-        if let Some(manifest) = read_pi_manifest(package_root) {
+    ) -> Result<(Vec<PathBuf>, std::collections::HashSet<PathBuf>)> {
+        if let Some(manifest) = read_pi_manifest(package_root)? {
             let entries = manifest.entries_for(resource_type);
             if let Some(entries) = entries {
                 if !entries.is_empty() {
@@ -2008,18 +2010,18 @@ impl PackageManager {
                     };
                     let mut enabled_vec = enabled_by_manifest.iter().cloned().collect::<Vec<_>>();
                     enabled_vec.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
-                    return (enabled_vec, enabled_by_manifest);
+                    return Ok((enabled_vec, enabled_by_manifest));
                 }
             }
         }
 
         let convention_dir = package_root.join(resource_type.as_str());
         if !convention_dir.exists() {
-            return (Vec::new(), std::collections::HashSet::new());
+            return Ok((Vec::new(), std::collections::HashSet::new()));
         }
         let all_files = collect_resource_files(&convention_dir, resource_type);
         let set = all_files.iter().cloned().collect();
-        (all_files, set)
+        Ok((all_files, set))
     }
 
     fn add_manifest_entries(
@@ -2090,42 +2092,68 @@ impl PiManifest {
     }
 }
 
-fn read_pi_manifest(package_root: &Path) -> Option<PiManifest> {
-    let package_json = package_root.join("package.json");
-    if !package_json.exists() {
-        return None;
-    }
-    let raw = fs::read_to_string(package_json).ok()?;
-    let json: Value = serde_json::from_str(&raw).ok()?;
-    let pi = json.get("pi")?;
-    let obj = pi.as_object()?;
+fn parse_manifest_entries_field(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    manifest_path: &Path,
+) -> Result<Option<Vec<String>>> {
+    let Some(value) = obj.get(key) else {
+        return Ok(None);
+    };
+    let Some(arr) = value.as_array() else {
+        return Err(Error::config(format!(
+            "Invalid package manifest {}: `pi.{key}` must be an array of strings",
+            manifest_path.display()
+        )));
+    };
 
-    Some(PiManifest {
-        extensions: obj.get("extensions").and_then(Value::as_array).map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        }),
-        skills: obj.get("skills").and_then(Value::as_array).map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        }),
-        prompts: obj.get("prompts").and_then(Value::as_array).map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        }),
-        themes: obj.get("themes").and_then(Value::as_array).map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        }),
-    })
+    let mut out = Vec::with_capacity(arr.len());
+    for entry in arr {
+        let Some(entry) = entry.as_str() else {
+            return Err(Error::config(format!(
+                "Invalid package manifest {}: `pi.{key}` must be an array of strings",
+                manifest_path.display()
+            )));
+        };
+        out.push(entry.to_string());
+    }
+
+    Ok(Some(out))
+}
+
+fn read_pi_manifest(package_root: &Path) -> Result<Option<PiManifest>> {
+    let manifest_path = package_root.join("package.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&manifest_path).map_err(|err| {
+        Error::config(format!(
+            "Failed to read package manifest {}: {err}",
+            manifest_path.display()
+        ))
+    })?;
+    let json: Value = serde_json::from_str(&raw).map_err(|err| {
+        Error::config(format!(
+            "Failed to parse package manifest {}: {err}",
+            manifest_path.display()
+        ))
+    })?;
+    let Some(pi) = json.get("pi") else {
+        return Ok(None);
+    };
+    let Some(obj) = pi.as_object() else {
+        return Err(Error::config(format!(
+            "Invalid package manifest {}: `pi` must be an object",
+            manifest_path.display()
+        )));
+    };
+
+    Ok(Some(PiManifest {
+        extensions: parse_manifest_entries_field(obj, "extensions", &manifest_path)?,
+        skills: parse_manifest_entries_field(obj, "skills", &manifest_path)?,
+        prompts: parse_manifest_entries_field(obj, "prompts", &manifest_path)?,
+        themes: parse_manifest_entries_field(obj, "themes", &manifest_path)?,
+    }))
 }
 
 fn temporary_dir(prefix: &str, suffix: Option<&str>) -> PathBuf {
@@ -2638,27 +2666,33 @@ fn resolve_extension_entries(dir: &Path) -> Option<Vec<PathBuf>> {
 
     let package_json_path = dir.join("package.json");
     if package_json_path.exists() {
-        let manifest = read_pi_manifest(dir);
-        if let Some(manifest) = manifest {
-            if let Some(exts) = manifest.extensions {
-                let mut entries = Vec::new();
-                for ext_path in exts {
-                    let resolved = dir.join(ext_path);
-                    if !resolved.exists() {
-                        continue;
+        match read_pi_manifest(dir) {
+            Ok(Some(manifest)) => {
+                if let Some(exts) = manifest.extensions {
+                    let mut entries = Vec::new();
+                    for ext_path in exts {
+                        let resolved = dir.join(ext_path);
+                        if !resolved.exists() {
+                            continue;
+                        }
+                        if resolved.is_file() && !is_supported_extension_file(&resolved) {
+                            warn!(
+                                path = %resolved.display(),
+                                "Ignoring unsupported package.json#pi.extensions entry; use extension.json, JS/TS entrypoints, *.native.json, or *.wasm"
+                            );
+                            continue;
+                        }
+                        entries.push(resolved);
                     }
-                    if resolved.is_file() && !is_supported_extension_file(&resolved) {
-                        warn!(
-                            path = %resolved.display(),
-                            "Ignoring unsupported package.json#pi.extensions entry; use extension.json, JS/TS entrypoints, *.native.json, or *.wasm"
-                        );
-                        continue;
+                    if !entries.is_empty() {
+                        return Some(entries);
                     }
-                    entries.push(resolved);
                 }
-                if !entries.is_empty() {
-                    return Some(entries);
-                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(path = %package_json_path.display(), "Invalid package manifest: {err}");
+                return None;
             }
         }
     }
@@ -4377,6 +4411,35 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_extension_sources_errors_on_malformed_package_manifest() {
+        run_async(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let package_root = temp_dir.path().join("pkg");
+            let extensions_dir = package_root.join("extensions");
+            fs::create_dir_all(&extensions_dir).expect("create extensions dir");
+            fs::write(extensions_dir.join("a.native.json"), "{}").expect("write extension");
+            fs::write(package_root.join("package.json"), "{ not valid json")
+                .expect("write malformed package.json");
+
+            let manager = PackageManager::new(temp_dir.path().to_path_buf());
+            let err = manager
+                .resolve_extension_sources(
+                    &[package_root.to_string_lossy().to_string()],
+                    ResolveExtensionSourcesOptions {
+                        local: false,
+                        temporary: true,
+                    },
+                )
+                .await
+                .expect_err("malformed package manifest must fail closed");
+
+            let message = err.to_string();
+            assert!(message.contains("Failed to parse package manifest"));
+            assert!(message.contains(&package_root.join("package.json").display().to_string()));
+        });
+    }
+
+    #[test]
     fn test_extension_manifest_directory_detected() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let extension_dir = temp_dir.path().join("ext");
@@ -4400,6 +4463,21 @@ mod tests {
 
         let entries = resolve_extension_entries(&extension_dir).expect("entries");
         assert_eq!(entries, vec![extension_dir]);
+    }
+
+    #[test]
+    fn test_resolve_extension_entries_skips_invalid_package_manifest() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let extension_dir = temp_dir.path().join("ext");
+        fs::create_dir_all(&extension_dir).expect("create extension dir");
+        fs::write(extension_dir.join("package.json"), "{ not valid json")
+            .expect("write malformed package.json");
+        fs::write(extension_dir.join("index.ts"), "export {};\n").expect("write fallback entry");
+
+        assert!(
+            resolve_extension_entries(&extension_dir).is_none(),
+            "invalid package.json should not fall back to index.* entrypoints"
+        );
     }
 
     // ======================================================================
@@ -5179,7 +5257,7 @@ mod tests {
             serde_json::to_string(&manifest).unwrap(),
         )
         .expect("write");
-        let result = read_pi_manifest(dir.path());
+        let result = read_pi_manifest(dir.path()).expect("read manifest");
         assert!(result.is_some());
         let result = result.unwrap();
         assert_eq!(
@@ -5199,13 +5277,64 @@ mod tests {
             r#"{"name": "test", "version": "1.0.0"}"#,
         )
         .expect("write");
-        assert!(read_pi_manifest(dir.path()).is_none());
+        assert!(
+            read_pi_manifest(dir.path())
+                .expect("read manifest")
+                .is_none()
+        );
     }
 
     #[test]
     fn read_pi_manifest_no_package_json() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert!(read_pi_manifest(dir.path()).is_none());
+        assert!(
+            read_pi_manifest(dir.path())
+                .expect("read manifest")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn read_pi_manifest_errors_on_malformed_package_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest_path = dir.path().join("package.json");
+        fs::write(&manifest_path, "{ not valid json").expect("write malformed package.json");
+
+        let err = read_pi_manifest(dir.path()).expect_err("malformed package.json must error");
+        let message = err.to_string();
+        assert!(message.contains("Failed to parse package manifest"));
+        assert!(message.contains(&manifest_path.display().to_string()));
+    }
+
+    #[test]
+    fn read_pi_manifest_errors_when_pi_field_is_not_object() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest_path = dir.path().join("package.json");
+        fs::write(&manifest_path, r#"{"name":"pkg","pi":"not-an-object"}"#)
+            .expect("write invalid pi manifest");
+
+        let err = read_pi_manifest(dir.path()).expect_err("non-object `pi` field must error");
+        let message = err.to_string();
+        assert!(message.contains("Invalid package manifest"));
+        assert!(message.contains("`pi` must be an object"));
+        assert!(message.contains(&manifest_path.display().to_string()));
+    }
+
+    #[test]
+    fn read_pi_manifest_errors_when_resource_entries_are_not_string_arrays() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest_path = dir.path().join("package.json");
+        fs::write(
+            &manifest_path,
+            r#"{"name":"pkg","pi":{"extensions":["ok",7]}}"#,
+        )
+        .expect("write invalid pi manifest");
+
+        let err = read_pi_manifest(dir.path()).expect_err("non-string manifest entries must error");
+        let message = err.to_string();
+        assert!(message.contains("Invalid package manifest"));
+        assert!(message.contains("`pi.extensions` must be an array of strings"));
+        assert!(message.contains(&manifest_path.display().to_string()));
     }
 
     // ======================================================================
