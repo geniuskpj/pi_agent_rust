@@ -1130,7 +1130,8 @@ fn e2e_cli_config_show_lists_discovered_package_resources() {
 
 #[test]
 fn e2e_cli_config_show_surfaces_invalid_package_settings() {
-    let harness = CliTestHarness::new("e2e_cli_config_show_surfaces_invalid_package_settings");
+    let mut harness = CliTestHarness::new("e2e_cli_config_show_surfaces_invalid_package_settings");
+    harness.env.remove("PI_CONFIG_PATH");
     let project_settings = harness.harness.temp_dir().join(".pi").join("settings.json");
     fs::create_dir_all(
         project_settings
@@ -1164,8 +1165,9 @@ fn e2e_cli_config_show_surfaces_invalid_package_settings() {
 
 #[test]
 fn e2e_cli_config_without_tty_surfaces_invalid_package_settings() {
-    let harness =
+    let mut harness =
         CliTestHarness::new("e2e_cli_config_without_tty_surfaces_invalid_package_settings");
+    harness.env.remove("PI_CONFIG_PATH");
     let project_settings = harness.harness.temp_dir().join(".pi").join("settings.json");
     fs::create_dir_all(
         project_settings

@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -61,6 +62,18 @@ struct PackageJson {
     license: Option<String>,
     repository: Option<serde_json::Value>,
     homepage: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct PackageInventory {
+    root: Option<PackageJson>,
+    nested: Vec<PackageJson>,
+}
+
+impl PackageInventory {
+    fn all(&self) -> impl Iterator<Item = &PackageJson> {
+        self.root.iter().chain(self.nested.iter())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -163,16 +176,17 @@ fn build_item(
     artifacts_dir: &Path,
 ) -> Result<ProvenanceItem> {
     let dir = artifacts_dir.join(&ext.directory);
-    let package_json = read_package_json(&dir)?;
+    let packages = read_package_inventory(&dir)?;
 
-    let name = package_json
+    let name = packages
+        .root
         .as_ref()
         .and_then(|p| p.name.clone())
         .or_else(|| ext.id.rsplit('/').next().map(ToString::to_string));
 
-    let version = package_json.as_ref().and_then(|p| p.version.clone());
-    let license = infer_license(&ext.source_tier, package_json.as_ref(), &dir);
-    let source = infer_source(ext, package_json.as_ref());
+    let version = packages.root.as_ref().and_then(|p| p.version.clone());
+    let license = infer_license(&ext.source_tier, &packages, &dir);
+    let source = infer_source(ext, &packages);
 
     Ok(ProvenanceItem {
         id: ext.id.clone(),
@@ -188,27 +202,81 @@ fn build_item(
     })
 }
 
+fn read_package_json_file(path: &Path) -> Result<PackageJson> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
+}
+
 fn read_package_json(dir: &Path) -> Result<Option<PackageJson>> {
     let path = dir.join("package.json");
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-    let pkg: PackageJson =
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-    Ok(Some(pkg))
+    Ok(Some(read_package_json_file(&path)?))
 }
 
-fn infer_license(source_tier: &str, pkg: Option<&PackageJson>, dir: &Path) -> String {
+fn read_package_inventory(dir: &Path) -> Result<PackageInventory> {
+    let root = read_package_json(dir)?;
+    let mut package_json_paths = Vec::new();
+    collect_nested_package_json_paths(dir, dir, &mut package_json_paths)?;
+    package_json_paths.sort();
+
+    let mut nested = Vec::new();
+    for path in package_json_paths {
+        nested.push(read_package_json_file(&path)?);
+    }
+
+    Ok(PackageInventory { root, nested })
+}
+
+fn collect_nested_package_json_paths(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let mut entries = fs::read_dir(dir)
+        .with_context(|| format!("read directory {}", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("read directory entries {}", dir.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("read file type {}", path.display()))?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy().as_ref() == "node_modules" {
+                continue;
+            }
+            collect_nested_package_json_paths(root, &path, out)?;
+            continue;
+        }
+
+        if !file_type.is_file() || entry.file_name().to_string_lossy().as_ref() != "package.json" {
+            continue;
+        }
+
+        if path != root.join("package.json") {
+            out.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn infer_license(source_tier: &str, packages: &PackageInventory, dir: &Path) -> String {
     if source_tier == "official-pi-mono" || source_tier == "community" {
         return "MIT".to_string();
     }
 
-    if let Some(license) = pkg.and_then(|p| p.license.as_deref()) {
-        let trimmed = license.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
+    if let Some(license) = packages
+        .all()
+        .filter_map(|pkg| pkg.license.as_deref())
+        .map(str::trim)
+        .find(|license| !license.is_empty())
+    {
+        return license.to_string();
     }
 
     if let Some(detected) = detect_license_file(dir) {
@@ -274,7 +342,7 @@ fn detect_spdx_from_text(text: &str) -> Option<&'static str> {
     None
 }
 
-fn infer_source(ext: &MasterCatalogExtension, pkg: Option<&PackageJson>) -> ProvenanceSource {
+fn infer_source(ext: &MasterCatalogExtension, packages: &PackageInventory) -> ProvenanceSource {
     if ext.source_tier == "official-pi-mono" {
         let file = ext.extension_files.first().cloned();
         let path = file.map(|file| format!("packages/coding-agent/examples/extensions/{file}"));
@@ -303,15 +371,12 @@ fn infer_source(ext: &MasterCatalogExtension, pkg: Option<&PackageJson>) -> Prov
         let url = format!("https://www.npmjs.com/package/{package}");
         return ProvenanceSource::Npm {
             package: package.to_string(),
-            version: pkg.and_then(|p| p.version.clone()),
+            version: packages.root.as_ref().and_then(|p| p.version.clone()),
             url,
         };
     }
 
-    if let Some(url) = pkg
-        .and_then(extract_repository_url)
-        .or_else(|| pkg.and_then(|p| p.homepage.clone()))
-    {
+    if let Some(url) = unique_repository_or_homepage_url(packages) {
         return ProvenanceSource::Url { url };
     }
 
@@ -324,10 +389,8 @@ fn infer_source(ext: &MasterCatalogExtension, pkg: Option<&PackageJson>) -> Prov
         };
     }
 
-    if let Some(ownerish) = ext.id.strip_prefix("third-party/") {
-        return ProvenanceSource::Url {
-            url: format!("https://github.com/{ownerish}"),
-        };
+    if let Some(url) = infer_third_party_repo_url(&ext.id) {
+        return ProvenanceSource::Url { url };
     }
 
     ProvenanceSource::Unknown {
@@ -372,4 +435,173 @@ fn normalize_repo_url(raw: &str) -> Option<String> {
         value.truncate(value.len().saturating_sub(4));
     }
     Some(value)
+}
+
+fn unique_repository_or_homepage_url(packages: &PackageInventory) -> Option<String> {
+    let repository_urls = packages
+        .all()
+        .filter_map(extract_repository_url)
+        .collect::<BTreeSet<_>>();
+    if repository_urls.len() == 1 {
+        return repository_urls.into_iter().next();
+    }
+
+    let homepages = packages
+        .all()
+        .filter_map(|pkg| pkg.homepage.as_deref())
+        .map(str::trim)
+        .filter(|homepage| !homepage.is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    if homepages.len() == 1 {
+        return homepages.into_iter().next();
+    }
+
+    None
+}
+
+fn infer_third_party_repo_url(id: &str) -> Option<String> {
+    let slug = id.strip_prefix("third-party/")?;
+    let (owner, repo) = split_third_party_slug(slug)?;
+    Some(format!("https://github.com/{owner}/{repo}"))
+}
+
+fn split_third_party_slug(slug: &str) -> Option<(String, String)> {
+    let slug = slug.trim_matches('/');
+    if slug.is_empty() {
+        return None;
+    }
+
+    for (marker, repo_prefix) in [
+        ("-pi-", "pi-"),
+        ("-agent-", "agent-"),
+        ("-agents-", "agents-"),
+    ] {
+        if let Some((owner, rest)) = slug.split_once(marker) {
+            if !owner.is_empty() && !rest.is_empty() {
+                return Some((owner.to_string(), format!("{repo_prefix}{rest}")));
+            }
+        }
+    }
+
+    if let Some(owner) = slug.strip_suffix("-agents") {
+        if !owner.is_empty() {
+            return Some((owner.to_string(), "agents".to_string()));
+        }
+    }
+
+    if slug.matches('-').count() >= 2
+        && slug.len() >= 3
+        && slug.as_bytes().get(1).copied() == Some(b'-')
+    {
+        let (owner, repo) = slug.rsplit_once('-')?;
+        if owner.is_empty() || repo.is_empty() {
+            return None;
+        }
+        return Some((owner.to_string(), repo.to_string()));
+    }
+
+    let (owner, repo) = slug.split_once('-')?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn third_party_ext(id: &str) -> MasterCatalogExtension {
+        MasterCatalogExtension {
+            id: id.to_string(),
+            directory: id.to_string(),
+            source_tier: "third-party-github".to_string(),
+            extension_files: vec!["index.ts".to_string()],
+            checksum: "deadbeef".to_string(),
+        }
+    }
+
+    #[test]
+    fn build_item_uses_unique_nested_repository_metadata_for_monorepos() {
+        let temp = tempdir().expect("tempdir");
+        let artifacts_dir = temp.path();
+        let dir = artifacts_dir.join("third-party/ben-vargas-pi-packages");
+        fs::create_dir_all(dir.join("pi-ancestor-discovery")).expect("create nested package dir");
+        fs::create_dir_all(dir.join("pi-cut-stack")).expect("create nested package dir");
+
+        fs::write(
+            dir.join("pi-ancestor-discovery/package.json"),
+            r#"{
+                "name": "@benvargas/pi-ancestor-discovery",
+                "license": "MIT",
+                "repository": {
+                    "type": "git",
+                    "url": "git+https://github.com/ben-vargas/pi-packages.git",
+                    "directory": "packages/pi-ancestor-discovery"
+                }
+            }"#,
+        )
+        .expect("write package.json");
+        fs::write(
+            dir.join("pi-cut-stack/package.json"),
+            r#"{
+                "name": "@benvargas/pi-cut-stack",
+                "license": "MIT",
+                "repository": {
+                    "type": "git",
+                    "url": "git+https://github.com/ben-vargas/pi-packages.git",
+                    "directory": "packages/pi-cut-stack"
+                }
+            }"#,
+        )
+        .expect("write package.json");
+
+        let item = build_item(
+            &third_party_ext("third-party/ben-vargas-pi-packages"),
+            "2026-03-15T00:00:00Z",
+            artifacts_dir,
+        )
+        .expect("build item");
+
+        assert_eq!(item.license, "MIT");
+        assert_eq!(item.name.as_deref(), Some("ben-vargas-pi-packages"));
+        match item.source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://github.com/ben-vargas/pi-packages");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_falls_back_to_valid_github_url_for_ambiguous_third_party_slug() {
+        let source = infer_source(
+            &third_party_ext("third-party/w-winter-dot314"),
+            &PackageInventory::default(),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://github.com/w-winter/dot314");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_prefers_first_split_for_non_prefixed_multi_hyphen_slug() {
+        let source = infer_source(
+            &third_party_ext("third-party/rytswd-slow-mode"),
+            &PackageInventory::default(),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://github.com/rytswd/slow-mode");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
 }

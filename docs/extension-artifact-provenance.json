@@ -2786,10 +2786,10 @@
         "sha256": "60a1caf25626d1442662f3d1f7fbdc570727e26b049868798d49ec9c023f3863"
       },
       "name": "aliou-pi-extensions",
-      "license": "UNKNOWN",
+      "license": "MIT",
       "source": {
         "type": "url",
-        "url": "https://github.com/aliou-pi-extensions"
+        "url": "https://github.com/aliou/pi-extensions"
       }
     },
     {
@@ -2800,10 +2800,10 @@
         "sha256": "cfcde6f2e0ad8e86c94a3235ddcfee996a19b690b3d3293e42d46a1e3ea5ceda"
       },
       "name": "ben-vargas-pi-packages",
-      "license": "UNKNOWN",
+      "license": "MIT",
       "source": {
         "type": "url",
-        "url": "https://github.com/ben-vargas-pi-packages"
+        "url": "https://github.com/ben-vargas/pi-packages"
       }
     },
     {
@@ -2817,7 +2817,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/charles-cooper-pi-extensions"
+        "url": "https://github.com/charles-cooper/pi-extensions"
       }
     },
     {
@@ -2831,7 +2831,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/cv-pi-ssh-remote"
+        "url": "https://github.com/cv/pi-ssh-remote"
       }
     },
     {
@@ -2845,7 +2845,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/graffioh-pi-screenshots-picker"
+        "url": "https://github.com/graffioh/pi-screenshots-picker"
       }
     },
     {
@@ -2859,7 +2859,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/graffioh-pi-super-curl"
+        "url": "https://github.com/graffioh/pi-super-curl"
       }
     },
     {
@@ -2885,10 +2885,10 @@
         "sha256": "3ae6c9a2c50ec4cfa38ee50a8cecde77ea40683b90cdb8b741bbca7c19093857"
       },
       "name": "kcosr-pi-extensions",
-      "license": "UNKNOWN",
+      "license": "MIT",
       "source": {
         "type": "url",
-        "url": "https://github.com/kcosr-pi-extensions"
+        "url": "https://github.com/kcosr/pi-extensions"
       }
     },
     {
@@ -2902,7 +2902,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/limouren-agent-things"
+        "url": "https://github.com/limouren/agent-things"
       }
     },
     {
@@ -2916,7 +2916,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/lsj5031-pi-notification-extension"
+        "url": "https://github.com/lsj5031/pi-notification-extension"
       }
     },
     {
@@ -2927,10 +2927,10 @@
         "sha256": "33ba799ac71a1086058ad47fec013f18d08fcf5021cfa5f4729538a3ab90fe36"
       },
       "name": "marckrenn-pi-sub",
-      "license": "UNKNOWN",
+      "license": "MIT",
       "source": {
         "type": "url",
-        "url": "https://github.com/marckrenn-pi-sub"
+        "url": "https://github.com/marckrenn/pi-sub"
       }
     },
     {
@@ -2944,7 +2944,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/michalvavra-agents"
+        "url": "https://github.com/michalvavra/agents"
       }
     },
     {
@@ -2958,7 +2958,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/ogulcancelik-pi-sketch"
+        "url": "https://github.com/ogulcancelik/pi-sketch"
       }
     },
     {
@@ -2972,7 +2972,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/openclaw-openclaw"
+        "url": "https://github.com/openclaw/openclaw"
       }
     },
     {
@@ -2986,7 +2986,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/pasky-pi-amplike"
+        "url": "https://github.com/pasky/pi-amplike"
       }
     },
     {
@@ -3000,7 +3000,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/qualisero-pi-agent-scip"
+        "url": "https://github.com/qualisero/pi-agent-scip"
       }
     },
     {
@@ -3014,7 +3014,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/raunovillberg-pi-stuffed"
+        "url": "https://github.com/raunovillberg/pi-stuffed"
       }
     },
     {
@@ -3028,7 +3028,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/rytswd-direnv"
+        "url": "https://github.com/rytswd/direnv"
       }
     },
     {
@@ -3042,7 +3042,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/rytswd-questionnaire"
+        "url": "https://github.com/rytswd/questionnaire"
       }
     },
     {
@@ -3056,7 +3056,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/rytswd-slow-mode"
+        "url": "https://github.com/rytswd/slow-mode"
       }
     },
     {
@@ -3070,7 +3070,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/vtemian-pi-config"
+        "url": "https://github.com/vtemian/pi-config"
       }
     },
     {
@@ -3081,10 +3081,10 @@
         "sha256": "8deb3029e326eb4eccc713c4de1214876125edf834eef5da2bb9135f1b6bb17e"
       },
       "name": "w-winter-dot314",
-      "license": "UNKNOWN",
+      "license": "MIT",
       "source": {
         "type": "url",
-        "url": "https://github.com/w-winter-dot314"
+        "url": "https://github.com/w-winter/dot314"
       }
     },
     {
@@ -3098,7 +3098,7 @@
       "license": "UNKNOWN",
       "source": {
         "type": "url",
-        "url": "https://github.com/zenobi-us-pi-dcp"
+        "url": "https://github.com/zenobi-us/pi-dcp"
       }
     },
     {
