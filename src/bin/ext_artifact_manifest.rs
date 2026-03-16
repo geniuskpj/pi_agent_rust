@@ -428,13 +428,83 @@ fn normalize_repo_url(raw: &str) -> Option<String> {
     if let Some(stripped) = value.strip_prefix("git+") {
         value = stripped.to_string();
     }
-    if std::path::Path::new(&value)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("git"))
-    {
-        value.truncate(value.len().saturating_sub(4));
+    if let Some((stripped, _)) = value.split_once('#') {
+        value = stripped.to_string();
     }
-    Some(value)
+    value = value.trim_end_matches('/').to_string();
+
+    if let Some(normalized) = normalize_hosted_repo_reference(&value) {
+        value = normalized;
+    }
+
+    if let Some(stripped) = value.strip_suffix(".git") {
+        value = stripped.to_string();
+    }
+
+    Some(value.trim_end_matches('/').to_string())
+}
+
+fn normalize_hosted_repo_reference(value: &str) -> Option<String> {
+    for (prefix, base) in [
+        ("git@github.com:", "https://github.com"),
+        ("ssh://git@github.com/", "https://github.com"),
+        ("git://github.com/", "https://github.com"),
+        ("github.com/", "https://github.com"),
+    ] {
+        if let Some(path) = value.strip_prefix(prefix) {
+            return normalize_hosted_repo_path(base, path);
+        }
+    }
+
+    if let Some((host, path)) = value.split_once(':') {
+        let base = match host {
+            "github" => "https://github.com",
+            "gitlab" => "https://gitlab.com",
+            "bitbucket" => "https://bitbucket.org",
+            _ => return None,
+        };
+        return normalize_hosted_repo_path(base, path);
+    }
+
+    if value.contains("://")
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || value.starts_with('/')
+        || value.matches('/').count() != 1
+    {
+        return None;
+    }
+
+    normalize_hosted_repo_path("https://github.com", value)
+}
+
+fn normalize_hosted_repo_path(base: &str, path: &str) -> Option<String> {
+    let path = path.trim_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+
+    let mut segments = path.split('/');
+    let owner = segments.next()?;
+    let remainder = segments.collect::<Vec<_>>();
+    if owner.is_empty()
+        || remainder.is_empty()
+        || !is_valid_repo_path_segment(owner)
+        || !remainder
+            .iter()
+            .all(|segment| is_valid_repo_path_segment(segment))
+    {
+        return None;
+    }
+
+    Some(format!("{base}/{path}"))
+}
+
+fn is_valid_repo_path_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 fn unique_repository_or_homepage_url(packages: &PackageInventory) -> Option<String> {
@@ -523,6 +593,19 @@ mod tests {
         }
     }
 
+    fn package_inventory_with_repository(repository: serde_json::Value) -> PackageInventory {
+        PackageInventory {
+            root: Some(PackageJson {
+                name: None,
+                version: None,
+                license: None,
+                repository: Some(repository),
+                homepage: None,
+            }),
+            nested: Vec::new(),
+        }
+    }
+
     #[test]
     fn build_item_uses_unique_nested_repository_metadata_for_monorepos() {
         let temp = tempdir().expect("tempdir");
@@ -600,6 +683,54 @@ mod tests {
         match source {
             ProvenanceSource::Url { url } => {
                 assert_eq!(url, "https://github.com/rytswd/slow-mode");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_normalizes_bare_repository_shorthand_to_https_github_url() {
+        let source = infer_source(
+            &third_party_ext("third-party/custom"),
+            &package_inventory_with_repository(serde_json::json!("w-winter/dot314")),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://github.com/w-winter/dot314");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_normalizes_github_repository_shorthand_with_ref_to_https_url() {
+        let source = infer_source(
+            &third_party_ext("third-party/custom"),
+            &package_inventory_with_repository(serde_json::json!("github:w-winter/dot314#main")),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://github.com/w-winter/dot314");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_normalizes_github_ssh_repository_object_to_https_url() {
+        let source = infer_source(
+            &third_party_ext("third-party/custom"),
+            &package_inventory_with_repository(serde_json::json!({
+                "type": "git",
+                "url": "git+ssh://git@github.com/w-winter/dot314.git"
+            })),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://github.com/w-winter/dot314");
             }
             other => panic!("expected Url source, got {other:?}"),
         }

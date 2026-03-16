@@ -2717,14 +2717,39 @@ fn resolve_extension_entries(dir: &Path) -> Option<Vec<PathBuf>> {
     None
 }
 
+fn suppress_root_extension_walk(dir: &Path) -> bool {
+    match load_extension_manifest(dir) {
+        Ok(Some(_)) | Err(_) => return true,
+        Ok(None) => {}
+    }
+
+    let package_json_path = dir.join("package.json");
+    if !package_json_path.exists() {
+        return false;
+    }
+
+    match read_pi_manifest(dir) {
+        Ok(Some(manifest)) => manifest.extensions.is_some(),
+        Ok(None) => false,
+        Err(_) => true,
+    }
+}
+
 fn collect_auto_extension_entries(dir: &Path) -> Vec<PathBuf> {
     if !dir.exists() {
         return Vec::new();
     }
 
     let mut out = Vec::new();
+    let suppress_root_walk = suppress_root_extension_walk(dir);
     if let Some(entries) = resolve_extension_entries(dir) {
         out.extend(entries);
+    }
+
+    if suppress_root_walk {
+        out.sort();
+        out.dedup();
+        return out;
     }
 
     let mut builder = ignore::WalkBuilder::new(dir);
@@ -5742,6 +5767,72 @@ mod tests {
             .filter(|p| p.file_name().unwrap() == "index.ts")
             .count();
         assert_eq!(count, 1, "index.ts should only be present once");
+    }
+
+    #[test]
+    fn collect_auto_extension_entries_fail_closed_on_malformed_root_package_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ext_dir = dir.path().join("extensions");
+        fs::create_dir_all(&ext_dir).expect("create dir");
+        fs::write(ext_dir.join("package.json"), "{ not valid json")
+            .expect("write malformed package.json");
+        fs::write(ext_dir.join("index.ts"), "export default {}").expect("write index.ts");
+
+        let entries = collect_auto_extension_entries(&ext_dir);
+        assert!(
+            entries.is_empty(),
+            "malformed root package.json must not fall back to conventional entrypoints"
+        );
+    }
+
+    #[test]
+    fn collect_auto_extension_entries_respects_empty_root_manifest_extensions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ext_dir = dir.path().join("extensions");
+        fs::create_dir_all(&ext_dir).expect("create dir");
+        fs::write(
+            ext_dir.join("package.json"),
+            serde_json::to_string_pretty(&json!({
+                "name": "test-pkg",
+                "pi": {
+                    "extensions": []
+                }
+            }))
+            .expect("serialize package.json"),
+        )
+        .expect("write package.json");
+        fs::write(ext_dir.join("index.ts"), "export default {}").expect("write index.ts");
+
+        let entries = collect_auto_extension_entries(&ext_dir);
+        assert!(
+            entries.is_empty(),
+            "explicit empty root package.json#pi.extensions must disable conventional fallback"
+        );
+    }
+
+    #[test]
+    fn collect_auto_extension_entries_respects_missing_root_manifest_targets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ext_dir = dir.path().join("extensions");
+        fs::create_dir_all(&ext_dir).expect("create dir");
+        fs::write(
+            ext_dir.join("package.json"),
+            serde_json::to_string_pretty(&json!({
+                "name": "test-pkg",
+                "pi": {
+                    "extensions": ["missing/index.ts"]
+                }
+            }))
+            .expect("serialize package.json"),
+        )
+        .expect("write package.json");
+        fs::write(ext_dir.join("index.ts"), "export default {}").expect("write index.ts");
+
+        let entries = collect_auto_extension_entries(&ext_dir);
+        assert!(
+            entries.is_empty(),
+            "missing root package.json#pi.extensions targets must disable conventional fallback"
+        );
     }
 
     // ======================================================================
