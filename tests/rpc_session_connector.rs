@@ -116,7 +116,7 @@ fn setup_rpc(
     };
 
     let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-    let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+    let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
     let out_rx = Arc::new(Mutex::new(out_rx));
 
     let server =

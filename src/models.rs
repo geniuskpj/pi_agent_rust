@@ -721,6 +721,33 @@ fn effective_reasoning(model_id: &str, provider_default: bool) -> bool {
 
 fn native_adapter_seed_defaults(provider: &str) -> Option<AdHocProviderDefaults> {
     match provider {
+        "openai-codex" => Some(AdHocProviderDefaults {
+            api: "openai-codex-responses",
+            base_url: CODEX_RESPONSES_API_URL,
+            auth_header: true,
+            reasoning: true,
+            input: &INPUT_TEXT_AND_IMAGE,
+            context_window: 272_000,
+            max_tokens: 128_000,
+        }),
+        "google-gemini-cli" => Some(AdHocProviderDefaults {
+            api: "google-gemini-cli",
+            base_url: GOOGLE_GEMINI_CLI_API_URL,
+            auth_header: true,
+            reasoning: true,
+            input: &INPUT_TEXT_AND_IMAGE,
+            context_window: 128_000,
+            max_tokens: 8192,
+        }),
+        "google-antigravity" => Some(AdHocProviderDefaults {
+            api: "google-gemini-cli",
+            base_url: GOOGLE_ANTIGRAVITY_API_URL,
+            auth_header: true,
+            reasoning: true,
+            input: &INPUT_TEXT_AND_IMAGE,
+            context_window: 128_000,
+            max_tokens: 8192,
+        }),
         "azure-openai" => Some(AdHocProviderDefaults {
             api: "openai-completions",
             base_url: "",
@@ -750,6 +777,12 @@ fn native_adapter_seed_defaults(provider: &str) -> Option<AdHocProviderDefaults>
         }),
         _ => None,
     }
+}
+
+fn custom_provider_defaults(provider: &str) -> Option<AdHocProviderDefaults> {
+    let canonical_provider = canonical_provider_id(provider).unwrap_or(provider);
+    ad_hoc_provider_defaults(canonical_provider)
+        .or_else(|| native_adapter_seed_defaults(canonical_provider))
 }
 
 fn legacy_provider_ids() -> HashSet<String> {
@@ -1274,17 +1307,29 @@ fn apply_custom_models(
 ) {
     for (provider_id, provider_cfg) in &config.providers {
         let provider_id_str = provider_id.as_str();
-        let routing_defaults = provider_routing_defaults(provider_id);
-        let default_api = routing_defaults.map_or("openai-completions", |defaults| defaults.api);
+        let provider_defaults = custom_provider_defaults(provider_id);
+        let default_api = provider_defaults.map_or("openai-completions", |defaults| defaults.api);
         let provider_api = provider_cfg.api.as_deref().unwrap_or(default_api);
         let provider_api_parsed: Api = provider_api
             .parse()
             .unwrap_or_else(|_| Api::Custom(provider_api.to_string()));
         let provider_api_string = provider_api_parsed.to_string();
         let provider_base = provider_cfg.base_url.clone().unwrap_or_else(|| {
-            routing_defaults.map_or_else(
-                || "https://api.openai.com/v1".to_string(),
-                |defaults| defaults.base_url.to_string(),
+            provider_defaults.map_or_else(
+                || {
+                    api_fallback_base_url(provider_api_string.as_str())
+                        .unwrap_or("https://api.openai.com/v1")
+                        .to_string()
+                },
+                |defaults| {
+                    if defaults.base_url.is_empty() {
+                        api_fallback_base_url(provider_api_string.as_str())
+                            .unwrap_or_default()
+                            .to_string()
+                    } else {
+                        defaults.base_url.to_string()
+                    }
+                },
             )
         });
 
@@ -1306,9 +1351,9 @@ fn apply_custom_models(
 
         let auth_header = provider_cfg
             .auth_header
-            .unwrap_or_else(|| routing_defaults.is_some_and(|defaults| defaults.auth_header));
+            .unwrap_or_else(|| provider_defaults.is_some_and(|defaults| defaults.auth_header));
 
-        if routing_defaults.is_some() {
+        if provider_defaults.is_some() {
             tracing::debug!(
                 event = "pi.provider.schema_defaults",
                 provider = %provider_id,
@@ -1387,7 +1432,7 @@ fn apply_custom_models(
                 &provider_headers,
                 resolve_headers_with_base(model_cfg.headers.as_ref(), base_dir),
             );
-            let default_input_types = routing_defaults
+            let default_input_types = provider_defaults
                 .map_or_else(|| vec![InputType::Text], |defaults| defaults.input.to_vec());
             let input_types = model_cfg.input.as_ref().map_or_else(
                 || default_input_types.clone(),
@@ -1407,11 +1452,11 @@ fn apply_custom_models(
             } else {
                 input_types
             };
-            let default_reasoning = routing_defaults.is_some_and(|defaults| defaults.reasoning);
+            let default_reasoning = provider_defaults.is_some_and(|defaults| defaults.reasoning);
             let default_context_window =
-                routing_defaults.map_or(128_000, |defaults| defaults.context_window);
+                provider_defaults.map_or(128_000, |defaults| defaults.context_window);
             let default_max_tokens =
-                routing_defaults.map_or(16_384, |defaults| defaults.max_tokens);
+                provider_defaults.map_or(16_384, |defaults| defaults.max_tokens);
 
             let model = Model {
                 id: normalized_model_id.clone(),
@@ -2354,6 +2399,100 @@ mod tests {
         assert_eq!(anthropic.model.context_window, 200_000);
         assert_eq!(anthropic.model.max_tokens, 8192);
         assert!(!anthropic.auth_header);
+    }
+
+    #[test]
+    fn apply_custom_models_uses_native_adapter_defaults_for_codex_alias_models() {
+        let (_dir, auth) = test_auth_storage();
+        let mut models = Vec::new();
+        let config = ModelsConfig {
+            providers: HashMap::from([(
+                "codex".to_string(),
+                ProviderConfig {
+                    models: Some(vec![ModelConfig {
+                        id: "gpt-5.4".to_string(),
+                        ..ModelConfig::default()
+                    }]),
+                    ..ProviderConfig::default()
+                },
+            )]),
+        };
+
+        apply_custom_models(&auth, &mut models, &config, None);
+
+        let codex = models
+            .iter()
+            .find(|entry| entry.model.provider == "codex")
+            .expect("codex model should be added");
+        assert_eq!(codex.model.api, "openai-codex-responses");
+        assert_eq!(codex.model.base_url, CODEX_RESPONSES_API_URL);
+        assert!(codex.model.reasoning);
+        assert_eq!(codex.model.input, vec![InputType::Text, InputType::Image]);
+        assert_eq!(codex.model.context_window, 272_000);
+        assert_eq!(codex.model.max_tokens, 128_000);
+        assert!(codex.auth_header);
+    }
+
+    #[test]
+    fn apply_custom_models_uses_native_adapter_defaults_for_google_cli_alias_models() {
+        let (_dir, auth) = test_auth_storage();
+        let mut models = Vec::new();
+        let config = ModelsConfig {
+            providers: HashMap::from([
+                (
+                    "gemini-cli".to_string(),
+                    ProviderConfig {
+                        models: Some(vec![ModelConfig {
+                            id: "gemini-2.5-pro".to_string(),
+                            ..ModelConfig::default()
+                        }]),
+                        ..ProviderConfig::default()
+                    },
+                ),
+                (
+                    "antigravity".to_string(),
+                    ProviderConfig {
+                        models: Some(vec![ModelConfig {
+                            id: "gemini-3-flash".to_string(),
+                            ..ModelConfig::default()
+                        }]),
+                        ..ProviderConfig::default()
+                    },
+                ),
+            ]),
+        };
+
+        apply_custom_models(&auth, &mut models, &config, None);
+
+        let gemini_cli = models
+            .iter()
+            .find(|entry| entry.model.provider == "gemini-cli")
+            .expect("gemini-cli model should be added");
+        assert_eq!(gemini_cli.model.api, "google-gemini-cli");
+        assert_eq!(gemini_cli.model.base_url, GOOGLE_GEMINI_CLI_API_URL);
+        assert!(gemini_cli.model.reasoning);
+        assert_eq!(
+            gemini_cli.model.input,
+            vec![InputType::Text, InputType::Image]
+        );
+        assert_eq!(gemini_cli.model.context_window, 128_000);
+        assert_eq!(gemini_cli.model.max_tokens, 8192);
+        assert!(gemini_cli.auth_header);
+
+        let antigravity = models
+            .iter()
+            .find(|entry| entry.model.provider == "antigravity")
+            .expect("antigravity model should be added");
+        assert_eq!(antigravity.model.api, "google-gemini-cli");
+        assert_eq!(antigravity.model.base_url, GOOGLE_ANTIGRAVITY_API_URL);
+        assert!(antigravity.model.reasoning);
+        assert_eq!(
+            antigravity.model.input,
+            vec![InputType::Text, InputType::Image]
+        );
+        assert_eq!(antigravity.model.context_window, 128_000);
+        assert_eq!(antigravity.model.max_tokens, 8192);
+        assert!(antigravity.auth_header);
     }
 
     #[test]
