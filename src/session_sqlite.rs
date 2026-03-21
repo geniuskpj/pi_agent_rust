@@ -641,18 +641,19 @@ pub async fn save_session(
         .await,
     )?;
 
-    for (idx, json) in entry_jsons.into_iter().enumerate() {
-        map_outcome(
-            tx.execute(
-                cx.cx(),
-                "INSERT INTO pi_session_entries (seq,json) VALUES (?1,?2)",
-                &[
-                    SqliteValue::Integer(i64::try_from(idx + 1).unwrap_or(i64::MAX)),
-                    SqliteValue::Text(json),
-                ],
-            )
-            .await,
-        )?;
+    let mut seq = 1;
+    for chunk in entry_jsons.chunks(200) {
+        let mut sql = String::with_capacity(64 + chunk.len() * 16);
+        sql.push_str("INSERT INTO pi_session_entries (seq,json) VALUES ");
+        let mut params = Vec::with_capacity(chunk.len() * 2);
+        for (i, json) in chunk.iter().enumerate() {
+            if i > 0 { sql.push(','); }
+            sql.push_str(&format!("(?{},?{})", i * 2 + 1, i * 2 + 2));
+            params.push(SqliteValue::Integer(i64::try_from(seq).unwrap_or(i64::MAX)));
+            params.push(SqliteValue::Text(json.clone()));
+            seq += 1;
+        }
+        map_outcome(tx.execute(cx.cx(), &sql, &params).await)?;
     }
 
     let (message_count, name) = compute_message_count_and_name(entries);
@@ -722,19 +723,19 @@ pub async fn append_entries(
     serialize_timer.finish();
     metrics.record_bytes(&metrics.sqlite_bytes, total_json_bytes);
 
-    for (i, json) in entry_jsons.into_iter().enumerate() {
-        let seq = start_seq + i + 1; // 1-based
-        map_outcome(
-            tx.execute(
-                cx.cx(),
-                "INSERT INTO pi_session_entries (seq,json) VALUES (?1,?2)",
-                &[
-                    SqliteValue::Integer(i64::try_from(seq).unwrap_or(i64::MAX)),
-                    SqliteValue::Text(json),
-                ],
-            )
-            .await,
-        )?;
+    let mut seq = start_seq + 1;
+    for chunk in entry_jsons.chunks(200) {
+        let mut sql = String::with_capacity(64 + chunk.len() * 16);
+        sql.push_str("INSERT INTO pi_session_entries (seq,json) VALUES ");
+        let mut params = Vec::with_capacity(chunk.len() * 2);
+        for (i, json) in chunk.iter().enumerate() {
+            if i > 0 { sql.push(','); }
+            sql.push_str(&format!("(?{},?{})", i * 2 + 1, i * 2 + 2));
+            params.push(SqliteValue::Integer(i64::try_from(seq).unwrap_or(i64::MAX)));
+            params.push(SqliteValue::Text(json.clone()));
+            seq += 1;
+        }
+        map_outcome(tx.execute(cx.cx(), &sql, &params).await)?;
     }
 
     // Upsert meta counters (INSERT OR REPLACE).
