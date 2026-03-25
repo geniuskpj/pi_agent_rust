@@ -3904,6 +3904,7 @@ impl Tool for FindTool {
 
         let mut child = Command::new(fd_cmd)
             .args(args)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

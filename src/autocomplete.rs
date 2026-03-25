@@ -618,6 +618,7 @@ fn find_fd_binary() -> Option<&'static str> {
         ["fd", "fdfind"].into_iter().find(|&candidate| {
             std::process::Command::new(candidate)
                 .arg("--version")
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()

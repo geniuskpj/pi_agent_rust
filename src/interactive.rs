@@ -345,6 +345,7 @@ impl TmuxWheelGuard {
             // No previous binding — unbind to revert to tmux default behavior.
             let _ = std::process::Command::new("tmux")
                 .args(["unbind-key", "-T", "root", key_name])
+                .stdin(std::process::Stdio::null())
                 .status();
         }
     }
@@ -2850,4 +2851,6 @@ impl PiApp {
 }
 
 #[cfg(test)]
+mod tests;
+cfg(test)]
 mod tests;
