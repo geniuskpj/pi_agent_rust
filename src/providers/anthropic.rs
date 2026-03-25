@@ -29,8 +29,27 @@ const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 const ANTHROPIC_OAUTH_TOKEN_PREFIX: &str = "sk-ant-oat";
+/// Beta flags added when using Anthropic OAuth bearer tokens.
+/// Override via `PI_ANTHROPIC_BETA_FLAGS`.
 const ANTHROPIC_OAUTH_BETA_FLAGS: &str = "claude-code-20250219,oauth-2025-04-20";
+/// Beta flag for Anthropic prompt caching.
+/// Override via `PI_ANTHROPIC_CACHE_BETA_FLAG`.
+const ANTHROPIC_CACHE_BETA_FLAG: &str = "prompt-caching-2024-07-31";
 const KIMI_SHARE_DIR_ENV_KEY: &str = "KIMI_SHARE_DIR";
+
+fn anthropic_oauth_beta_flags() -> String {
+    std::env::var("PI_ANTHROPIC_BETA_FLAGS")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| ANTHROPIC_OAUTH_BETA_FLAGS.to_string())
+}
+
+fn anthropic_cache_beta_flag() -> String {
+    std::env::var("PI_ANTHROPIC_CACHE_BETA_FLAG")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| ANTHROPIC_CACHE_BETA_FLAG.to_string())
+}
 
 #[inline]
 fn is_anthropic_oauth_token(token: &str) -> bool {
@@ -490,12 +509,12 @@ impl Provider for AnthropicProvider {
             }
         }
 
-        let mut beta_flags: Vec<&str> = Vec::new();
+        let mut beta_flags: Vec<String> = Vec::new();
         if anthropic_bearer_token {
-            beta_flags.push(ANTHROPIC_OAUTH_BETA_FLAGS);
+            beta_flags.push(anthropic_oauth_beta_flags());
         }
         if options.cache_retention != CacheRetention::None {
-            beta_flags.push("prompt-caching-2024-07-31");
+            beta_flags.push(anthropic_cache_beta_flag());
         }
         if !beta_flags.is_empty() {
             request = request.header("anthropic-beta", beta_flags.join(","));

@@ -25,8 +25,16 @@ use std::pin::Pin;
 // Constants
 // ============================================================================
 
-pub(crate) const DEFAULT_API_VERSION: &str = "2024-02-15-preview";
+/// Default Azure OpenAI API version.  Override via `PI_AZURE_API_VERSION`.
+pub(crate) const DEFAULT_API_VERSION: &str = "2024-12-01-preview";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+pub(crate) fn azure_api_version() -> String {
+    std::env::var("PI_AZURE_API_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_API_VERSION.to_string())
+}
 
 /// Normalize Azure role names while preserving unknown compat overrides as-is.
 fn normalize_role(role: &str) -> String {
@@ -101,7 +109,7 @@ impl AzureOpenAIProvider {
             client: Client::new(),
             deployment: deployment.into(),
             resource: resource.into(),
-            api_version: DEFAULT_API_VERSION.to_string(),
+            api_version: azure_api_version(),
             endpoint_url_override: None,
             compat: None,
         }
@@ -947,7 +955,7 @@ mod tests {
         let url = provider.endpoint_url();
         assert_eq!(
             url,
-            "https://contoso.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-02-15-preview"
+            "https://contoso.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-12-01-preview"
         );
     }
 

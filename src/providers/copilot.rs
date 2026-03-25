@@ -27,16 +27,40 @@ use super::openai::OpenAIProvider;
 const GITHUB_API_BASE: &str = "https://api.github.com";
 
 /// Editor version header value (required by Copilot API).
+/// Override via `PI_COPILOT_EDITOR_VERSION`.
 const EDITOR_VERSION: &str = "vscode/1.96.2";
 
 /// User-Agent header value (required by Copilot API).
+/// Override via `PI_COPILOT_USER_AGENT`.
 const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
 
 /// GitHub API version header.
+/// Override via `PI_GITHUB_API_VERSION`.
 const GITHUB_API_VERSION: &str = "2025-04-01";
 
 /// Safety margin: refresh the session token this many seconds before expiry.
 const TOKEN_REFRESH_MARGIN_SECS: i64 = 60;
+
+fn copilot_editor_version() -> String {
+    std::env::var("PI_COPILOT_EDITOR_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| EDITOR_VERSION.to_string())
+}
+
+fn copilot_user_agent() -> String {
+    std::env::var("PI_COPILOT_USER_AGENT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| COPILOT_USER_AGENT.to_string())
+}
+
+fn github_api_version() -> String {
+    std::env::var("PI_GITHUB_API_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| GITHUB_API_VERSION.to_string())
+}
 
 // ── Token exchange types ─────────────────────────────────────────
 
@@ -157,9 +181,9 @@ impl CopilotProvider {
             .get(&token_url)
             .header("Authorization", format!("token {}", self.github_token))
             .header("Accept", "application/json")
-            .header("Editor-Version", EDITOR_VERSION)
-            .header("User-Agent", COPILOT_USER_AGENT)
-            .header("X-Github-Api-Version", GITHUB_API_VERSION);
+            .header("Editor-Version", copilot_editor_version())
+            .header("User-Agent", copilot_user_agent())
+            .header("X-Github-Api-Version", github_api_version());
 
         let response = Box::pin(request.send())
             .await
@@ -251,14 +275,13 @@ impl Provider for CopilotProvider {
         // Add Copilot-specific headers.
         copilot_options
             .headers
-            .insert("Editor-Version".to_string(), EDITOR_VERSION.to_string());
+            .insert("Editor-Version".to_string(), copilot_editor_version());
         copilot_options
             .headers
-            .insert("User-Agent".to_string(), COPILOT_USER_AGENT.to_string());
-        copilot_options.headers.insert(
-            "X-Github-Api-Version".to_string(),
-            GITHUB_API_VERSION.to_string(),
-        );
+            .insert("User-Agent".to_string(), copilot_user_agent());
+        copilot_options
+            .headers
+            .insert("X-Github-Api-Version".to_string(), github_api_version());
         copilot_options.headers.insert(
             "Copilot-Integration-Id".to_string(),
             "vscode-chat".to_string(),

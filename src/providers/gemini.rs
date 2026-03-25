@@ -317,20 +317,33 @@ impl Provider for GeminiProvider {
                 })?;
             let is_antigravity = self.provider.eq_ignore_ascii_case("google-antigravity");
 
+            // Build dynamic identity strings from the platform module.
+            let platform = crate::platform::platform_tag();
+            let pi_version = crate::platform::VERSION;
+            let client_metadata = format!(
+                r#"{{"ideType":"CLI","platform":"{}","pluginType":"GEMINI"}}"#,
+                crate::platform::os_name().to_ascii_uppercase(),
+            );
+            let api_client_tag = format!("pi-agent-rust/{pi_version}");
+
             request = request
                 .header("Authorization", format!("Bearer {access_token}"))
                 .header("Content-Type", "application/json")
-                .header("x-goog-api-client", "gl-node/22.17.0")
-                .header(
-                    "client-metadata",
-                    r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#,
-                );
+                .header("x-goog-api-client", api_client_tag)
+                .header("client-metadata", client_metadata);
 
             if is_antigravity {
-                request = request.header("User-Agent", "antigravity/1.15.8 darwin/arm64");
+                let antigravity_version = std::env::var("PI_AI_ANTIGRAVITY_VERSION")
+                    .unwrap_or_else(|_| pi_version.to_string());
+                request = request.header(
+                    "User-Agent",
+                    format!("antigravity/{antigravity_version} {platform}"),
+                );
             } else {
-                request =
-                    request.header("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1");
+                request = request.header(
+                    "User-Agent",
+                    crate::platform::pi_user_agent(),
+                );
             }
 
             // Apply provider-specific custom headers from compat config.

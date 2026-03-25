@@ -405,7 +405,7 @@ where
 
     let api_version = trim_non_empty(env_lookup(AZURE_OPENAI_API_VERSION_ENV))
         .or(base_api_version)
-        .unwrap_or_else(|| azure::DEFAULT_API_VERSION.to_string());
+        .unwrap_or_else(azure::azure_api_version);
 
     let endpoint_host = if parse_azure_resource_from_host(&host).is_some() {
         host
@@ -2000,10 +2000,10 @@ export default function init(pi) {
             resolve_azure_provider_runtime_with_env(&entry, |_| None).expect("resolve runtime");
         assert_eq!(runtime.resource, "myresource");
         assert_eq!(runtime.deployment, "gpt-4o");
-        assert_eq!(runtime.api_version, "2024-02-15-preview");
+        assert_eq!(runtime.api_version, "2024-12-01-preview");
         assert_eq!(
             runtime.endpoint_url,
-            "https://myresource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-02-15-preview"
+            "https://myresource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-12-01-preview"
         );
     }
 
