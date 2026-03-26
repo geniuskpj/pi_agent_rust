@@ -1890,7 +1890,13 @@ pub(crate) async fn run_bash_command(
     // Wrap in ProcessGuard for cleanup (including tree kill)
     let mut guard = ProcessGuard::new(child, ProcessCleanupMode::ProcessGroupTree);
 
-    let (tx, mut rx) = mpsc::sync_channel::<Vec<u8>>(128);
+    // Use an unbounded channel so the pump threads never block on send().
+    // A bounded channel can cause a deadlock on macOS (and other platforms with
+    // small pipe buffers): if the channel fills up, the pump threads block on
+    // send(), stop reading from the OS pipe, the pipe buffer fills, and the
+    // child process blocks on write() — a circular wait that makes the child
+    // appear as a zombie (<defunct>) while the main loop spins on try_wait().
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let tx_stdout = tx.clone();
 
     // Design Decision (bd-xdcrh.4.3):
@@ -1900,8 +1906,8 @@ pub(crate) async fn run_bash_command(
     // or servers) could easily exhaust the pool's thread limit, starving the rest of the application
     // of threads needed for short-lived blocking I/O (e.g., SQLite transactions or filesystem metadata).
     // Dedicated threads cleanly isolate this unbounded blocking risk.
-    thread::spawn(move || pump_stream(stdout, &tx_stdout));
-    thread::spawn(move || pump_stream(stderr, &tx));
+    let stdout_thread = thread::spawn(move || pump_stream(stdout, &tx_stdout));
+    let stderr_thread = thread::spawn(move || pump_stream(stderr, &tx));
 
     let max_chunks_bytes = DEFAULT_MAX_BYTES.saturating_mul(2);
     let mut bash_output = BashOutputState::new(max_chunks_bytes);
@@ -1976,21 +1982,69 @@ pub(crate) async fn run_bash_command(
         sleep(now, tick).await;
     }
 
-    let now_drain = cx
-        .cx()
-        .timer_driver()
-        .map_or_else(wall_now, |timer| timer.now());
-    let drain_deadline = now_drain + Duration::from_secs(2);
-    let allow_drain_cancellation = !cancelled && !timed_out && exit_code.is_none();
-    cancelled |= drain_bash_output(
-        &mut rx,
-        &mut bash_output,
-        &cx,
-        drain_deadline,
-        tick,
-        allow_drain_cancellation,
-    )
-    .await?;
+    // With an unbounded channel the pump threads never block on send(), so
+    // they will reach EOF and exit as soon as the child closes its pipe ends.
+    // Drain any remaining chunks while waiting for the pump threads to finish.
+    // This guarantees all pipe data is captured before we build the result.
+    // The 5-second cap is a safety net for pathological cases (e.g. the child
+    // spawned a grandchild that inherited the pipe fd and is still running).
+    {
+        let drain_start = cx
+            .cx()
+            .timer_driver()
+            .map_or_else(wall_now, |timer| timer.now());
+        let drain_deadline = drain_start + Duration::from_secs(5);
+        let allow_drain_cancellation = !cancelled && !timed_out && exit_code.is_none();
+        loop {
+            // Drain everything currently available in the channel.
+            let mut got_data = false;
+            while let Ok(chunk) = rx.try_recv() {
+                ingest_bash_chunk(chunk, &mut bash_output).await?;
+                got_data = true;
+            }
+            if got_data {
+                emit_bash_update(&bash_output, on_update)?;
+            }
+
+            // If both pump threads have finished, all data is in the channel
+            // and we've drained it above, so we're done.
+            if stdout_thread.is_finished() && stderr_thread.is_finished() {
+                // One final drain in case they sent items between our last
+                // try_recv loop and the is_finished check.
+                while let Ok(chunk) = rx.try_recv() {
+                    ingest_bash_chunk(chunk, &mut bash_output).await?;
+                }
+                break;
+            }
+
+            let now = cx
+                .cx()
+                .timer_driver()
+                .map_or_else(wall_now, |timer| timer.now());
+            if now >= drain_deadline {
+                break;
+            }
+            if allow_drain_cancellation && cx.checkpoint().is_err() {
+                cancelled = true;
+                break;
+            }
+            sleep(now, tick).await;
+        }
+    }
+
+    // Explicitly reap the child process to prevent zombies. try_wait_child()
+    // uses WNOHANG which *should* reap the zombie on the first successful
+    // return, but calling wait() as a belt-and-suspenders ensures the zombie
+    // is cleaned up even if try_wait missed it (observed on macOS when the
+    // child is in its own process group).
+    if guard.child.is_some() {
+        match guard.wait() {
+            Ok(status) => {
+                exit_code.get_or_insert(exit_status_code(status));
+            }
+            Err(_) => {} // Already reaped by try_wait, which is fine
+        }
+    }
 
     drop(bash_output.temp_file.take());
 
@@ -4354,7 +4408,7 @@ fn rg_available() -> bool {
     find_rg_binary().is_some()
 }
 
-fn pump_stream<R: Read + Send + 'static>(mut reader: R, tx: &mpsc::SyncSender<Vec<u8>>) {
+fn pump_stream<R: Read + Send + 'static>(mut reader: R, tx: &mpsc::Sender<Vec<u8>>) {
     let mut buf = vec![0u8; 8192];
     loop {
         match reader.read(&mut buf) {
