@@ -1018,15 +1018,15 @@ fn slash_first_argument_token<'a>(
         return None;
     }
 
-    let token = token_at_cursor(text, cursor);
-    if text[command_end..token.range.start]
+    let segment = token_at_cursor(text, cursor);
+    if text[command_end..segment.range.start]
         .chars()
         .any(|ch| !ch.is_whitespace())
     {
         return None;
     }
 
-    Some(token)
+    Some(segment)
 }
 
 fn model_argument_token(text: &str, cursor: usize) -> Option<TokenAtCursor<'_>> {

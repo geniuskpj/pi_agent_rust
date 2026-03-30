@@ -2297,17 +2297,20 @@ mod stream_delta_batcher_tests {
         let _ = app.submit_message(r#"/deploy   --message "hello world"   --force"#);
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut completion = None;
+        let mut agent_error = None;
         while std::time::Instant::now() < deadline {
             match event_rx.try_recv() {
                 Ok(PiMsg::ExtensionCommandDone {
                     display, is_error, ..
                 }) => {
                     assert!(!is_error, "unexpected extension command error: {display}");
-                    assert_eq!(display, raw_args);
-                    return;
+                    completion = Some(display);
+                    break;
                 }
                 Ok(PiMsg::AgentError(err)) => {
-                    panic!("unexpected agent error while running extension command: {err}");
+                    agent_error = Some(err);
+                    break;
                 }
                 Ok(_) | Err(_) => {}
             }
@@ -2315,7 +2318,16 @@ mod stream_delta_batcher_tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        panic!("timed out waiting for extension command completion");
+        assert!(
+            agent_error.is_none(),
+            "unexpected agent error while running extension command: {}",
+            agent_error.unwrap_or_default()
+        );
+        assert_eq!(
+            completion.as_deref(),
+            Some(raw_args),
+            "timed out waiting for extension command completion"
+        );
     }
 
     #[test]
@@ -2345,7 +2357,7 @@ mod stream_delta_batcher_tests {
                             break message;
                         }
                         Ok(_) => {}
-                        Err(err) => panic!("event receive failed: {err}"),
+                        Err(err) => break format!("event receive failed: {err}"),
                     }
                 }
             };
@@ -2385,7 +2397,7 @@ mod stream_delta_batcher_tests {
                             break format!("done:{}", error_message.unwrap_or_default());
                         }
                         Ok(_) => {}
-                        Err(err) => panic!("event receive failed: {err}"),
+                        Err(err) => break format!("receive-error:{err}"),
                     }
                 }
             };

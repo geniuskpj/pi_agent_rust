@@ -2703,16 +2703,16 @@ mod tests {
         auth.set(
             "openai",
             AuthCredential::ApiKey {
-                key: "stored-auth-token".to_string(),
+                key: "stored-auth-sample".to_string(),
             },
         );
 
         let mut entry = test_model_entry("openai", "gpt-4o-mini");
-        entry.api_key = Some("inline-model-token".to_string());
+        entry.api_key = Some("inline-model-sample".to_string());
 
         assert_eq!(
             super::resolve_model_key_with_auth(&auth, &entry).as_deref(),
-            Some("stored-auth-token")
+            Some("stored-auth-sample")
         );
     }
 
@@ -2720,11 +2720,11 @@ mod tests {
     fn resolve_model_key_with_auth_falls_back_to_inline_key() {
         let auth = empty_auth_storage();
         let mut entry = test_model_entry("openai", "gpt-4o-mini");
-        entry.api_key = Some("inline-model-token".to_string());
+        entry.api_key = Some("inline-model-sample".to_string());
 
         assert_eq!(
             super::resolve_model_key_with_auth(&auth, &entry).as_deref(),
-            Some("inline-model-token")
+            Some("inline-model-sample")
         );
     }
 
