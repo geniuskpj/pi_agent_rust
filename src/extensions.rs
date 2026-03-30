@@ -19241,10 +19241,12 @@ fn read_pi_extensions_from_package(package_json_path: &Path) -> Result<Option<Ve
         Value::String(entry) => {
             let entry = entry.trim();
             if entry.is_empty() {
-                Ok(Some(Vec::new()))
-            } else {
-                Ok(Some(vec![entry.to_owned()]))
+                return Err(Error::config(format!(
+                    "Invalid package manifest {}: `pi.extensions` entries must be non-empty paths",
+                    package_json_path.display()
+                )));
             }
+            Ok(Some(vec![entry.to_owned()]))
         }
         Value::Array(entries) => {
             let mut out = Vec::with_capacity(entries.len());
@@ -19256,9 +19258,13 @@ fn read_pi_extensions_from_package(package_json_path: &Path) -> Result<Option<Ve
                     )));
                 };
                 let entry = entry.trim();
-                if !entry.is_empty() {
-                    out.push(entry.to_owned());
+                if entry.is_empty() {
+                    return Err(Error::config(format!(
+                        "Invalid package manifest {}: `pi.extensions` entries must be non-empty paths",
+                        package_json_path.display()
+                    )));
                 }
+                out.push(entry.to_owned());
             }
             Ok(Some(out))
         }
@@ -29171,6 +29177,33 @@ mod tests {
     }
 
     #[test]
+    fn read_pi_extensions_errors_on_empty_string_entries() {
+        let temp = tempdir().expect("tempdir");
+        let package_json = temp.path().join("package.json");
+
+        std::fs::write(&package_json, r#"{ "pi": { "extensions": "" } }"#)
+            .expect("write invalid package.json");
+        let err = read_pi_extensions_from_package(&package_json)
+            .expect_err("empty-string extensions must error");
+        assert!(
+            err.to_string()
+                .contains("`pi.extensions` entries must be non-empty paths")
+        );
+
+        std::fs::write(
+            &package_json,
+            r#"{ "pi": { "extensions": ["./index.ts", ""] } }"#,
+        )
+        .expect("write invalid package.json array");
+        let err = read_pi_extensions_from_package(&package_json)
+            .expect_err("empty-string array entries must error");
+        assert!(
+            err.to_string()
+                .contains("`pi.extensions` entries must be non-empty paths")
+        );
+    }
+
+    #[test]
     fn discover_sibling_index_entries_keeps_primary_even_when_not_sorted_first() {
         let temp = tempdir().expect("tempdir");
         let cluster = temp.path().join("bundle");
@@ -29502,6 +29535,30 @@ mod tests {
             discovered,
             vec![safe_canonicalize(&index)],
             "explicit empty pi.extensions should suppress heuristic bundle expansion"
+        );
+    }
+
+    #[test]
+    fn discover_related_extension_entries_errors_on_empty_string_manifest_entry() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("pkg");
+        std::fs::create_dir_all(&root).expect("mkdir pkg");
+
+        let index = root.join("index.ts");
+        let helper = root.join("helper.ts");
+        std::fs::write(&index, "export default function init(_pi) {}\n").expect("write index");
+        std::fs::write(&helper, "export default function extra(_pi) {}\n").expect("write helper");
+        std::fs::write(
+            root.join("package.json"),
+            r#"{ "pi": { "extensions": "" } }"#,
+        )
+        .expect("write package.json");
+
+        let err = discover_related_extension_entries(&index)
+            .expect_err("empty-string manifest entry must fail closed");
+        assert!(
+            err.to_string()
+                .contains("`pi.extensions` entries must be non-empty paths")
         );
     }
 

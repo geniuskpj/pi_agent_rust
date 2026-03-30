@@ -77,7 +77,7 @@ When a package is installed, Pi looks for resources in the following locations w
 For extension package roots, resolution is intentionally deterministic:
 
 - If `package.json` includes `pi.extensions`, only those listed entries are considered.
-- If the `pi.extensions` key is present but empty, Pi loads **no** extensions from that package.
+- If the `pi.extensions` key is present as an empty array (`[]`), Pi loads **no** extensions from that package.
 - If `pi.extensions` entries are present but none resolve to existing files, Pi loads **no** extensions from that package.
 - In both cases above, Pi does **not** implicitly fall back to `index.ts`, `index.js`, or directory-level extension loading.
 - Conventional fallback (`extensions/`, `index.ts`, `index.js`) applies only when the `pi.extensions` key is absent.
