@@ -3278,17 +3278,27 @@ fn looks_like_git_url(source: &str) -> bool {
         .any(|host| normalized.starts_with(&format!("{host}/")))
 }
 
+fn looks_like_windows_drive_absolute_path(spec: &str) -> bool {
+    let bytes = spec.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
 fn looks_like_local_path(spec: &str) -> bool {
     let spec = spec.trim();
     spec == "."
         || spec == ".."
         || spec.starts_with("file://")
+        || spec.starts_with("\\\\")
         || spec.starts_with('/')
         || spec.starts_with(".\\")
         || spec.starts_with("..\\")
         || spec.starts_with("./")
         || spec.starts_with("../")
         || spec.starts_with('~')
+        || looks_like_windows_drive_absolute_path(spec)
 }
 
 fn local_path_from_spec(spec: &str, cwd: &Path) -> PathBuf {
@@ -3297,13 +3307,22 @@ fn local_path_from_spec(spec: &str, cwd: &Path) -> PathBuf {
     let spec = spec.trim();
     if let Some(rest) = spec.strip_prefix("file://") {
         // Keep the triple-slash form (`file:///abs/path`) working by stripping only the scheme.
-        return resolve_local_path(rest, cwd);
+        return resolve_local_path(file_url_local_path(rest), cwd);
     }
     resolve_local_path(spec, cwd)
 }
 
+fn file_url_local_path(path: &str) -> &str {
+    path.strip_prefix('/')
+        .filter(|stripped| looks_like_windows_drive_absolute_path(stripped))
+        .unwrap_or(path)
+}
+
 fn resolve_local_path(input: &str, cwd: &Path) -> PathBuf {
     let trimmed = input.trim();
+    if spec_is_platform_absolute(trimmed) {
+        return PathBuf::from(trimmed);
+    }
     if trimmed == "~" {
         return normalize_dot_segments(&dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()));
     }
@@ -3322,6 +3341,12 @@ fn resolve_local_path(input: &str, cwd: &Path) -> PathBuf {
         );
     }
     normalize_dot_segments(&cwd.join(trimmed))
+}
+
+fn spec_is_platform_absolute(spec: &str) -> bool {
+    Path::new(spec).is_absolute()
+        || spec.starts_with("\\\\")
+        || looks_like_windows_drive_absolute_path(spec)
 }
 
 fn normalize_dot_segments(path: &Path) -> PathBuf {
@@ -4930,6 +4955,9 @@ mod tests {
         assert!(looks_like_local_path("./relative"));
         assert!(looks_like_local_path("../parent"));
         assert!(looks_like_local_path("/absolute"));
+        assert!(looks_like_local_path("C:/absolute"));
+        assert!(looks_like_local_path("C:\\absolute"));
+        assert!(looks_like_local_path("\\\\server\\share"));
         assert!(looks_like_local_path("~/home_relative"));
         assert!(looks_like_local_path("file:///abs/path"));
         assert!(!looks_like_local_path("npm:foo"));
@@ -5903,6 +5931,60 @@ mod tests {
             }
             other => panic!(),
         }
+    }
+
+    #[test]
+    fn parse_source_windows_drive_absolute_stays_absolute() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        match parse_source("C:\\packages\\demo", dir.path()) {
+            ParsedSource::Local { path } => {
+                assert_eq!(path, PathBuf::from("C:\\packages\\demo"));
+            }
+            other => panic!("Unexpected parsed source: {other:?}"),
+        }
+
+        match parse_source("C:/packages/demo", dir.path()) {
+            ParsedSource::Local { path } => {
+                assert_eq!(path, PathBuf::from("C:/packages/demo"));
+            }
+            other => panic!("Unexpected parsed source: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_git_source_windows_drive_path_treated_as_local_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        match parse_source("git:C:\\packages\\demo@main", dir.path()) {
+            ParsedSource::Git {
+                clone_source,
+                repo,
+                host,
+                path,
+                r#ref,
+                pinned,
+            } => {
+                assert_eq!(clone_source, "C:\\packages\\demo");
+                assert_eq!(repo, "C:\\packages\\demo");
+                assert_eq!(host, "local");
+                assert_eq!(path.len(), 16);
+                assert_eq!(r#ref, Some("main".to_string()));
+                assert!(pinned);
+            }
+            other => panic!("Unexpected parsed source: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_path_from_file_url_keeps_windows_drive_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            local_path_from_spec("file:///C:/packages/demo", dir.path()),
+            PathBuf::from("C:/packages/demo")
+        );
+        assert_eq!(
+            local_path_from_spec("file:///C:\\packages\\demo", dir.path()),
+            PathBuf::from("C:\\packages\\demo")
+        );
     }
 
     // ======================================================================
