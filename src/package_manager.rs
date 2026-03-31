@@ -3331,6 +3331,15 @@ fn file_url_local_path(path: &str) -> String {
     }
     if let Some((host, stripped)) = path.split_once('/') {
         if host.eq_ignore_ascii_case("localhost") {
+            if looks_like_windows_drive_absolute_path(stripped) {
+                return stripped.to_string();
+            }
+            if let Some(drive_path) = stripped
+                .strip_prefix('/')
+                .filter(|drive_path| looks_like_windows_drive_absolute_path(drive_path))
+            {
+                return drive_path.to_string();
+            }
             return format!("/{stripped}");
         }
     }
@@ -6029,6 +6038,14 @@ mod tests {
         assert_eq!(
             local_path_from_spec("file://localhost", cwd),
             PathBuf::from("/")
+        );
+        assert_eq!(
+            local_path_from_spec("file://localhost/C:/packages/demo", cwd),
+            PathBuf::from("C:/packages/demo")
+        );
+        assert_eq!(
+            local_path_from_spec("file://localhost/C:\\packages\\demo", cwd),
+            PathBuf::from("C:\\packages\\demo")
         );
     }
 
