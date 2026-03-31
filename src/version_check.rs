@@ -3,14 +3,20 @@
 //! Checks are non-blocking, cached for 24 hours, and configurable via
 //! `check_for_updates` in settings.json.
 
+use crate::error::{Error, Result};
+use crate::http::client::Client;
 use semver::{BuildMetadata, Version};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Current crate version (from Cargo.toml).
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// How long to cache the version check result (24 hours).
 const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+const RELEASE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+const RELEASES_URL: &str =
+    "https://api.github.com/repos/Dicklesworthstone/pi_agent_rust/releases/latest";
 
 /// Result of a version check.
 #[derive(Debug, Clone)]
@@ -98,6 +104,67 @@ fn write_cached_version_at(path: &Path, version: &str) {
     let _ = std::fs::write(path, version);
 }
 
+/// Refresh the cached latest-release version when the cache is missing, stale,
+/// or malformed. Returns the resulting status after the refresh attempt.
+pub async fn refresh_cache_if_stale(client: &Client) -> VersionCheckResult {
+    refresh_cache_if_stale_at(&cache_path(), client, CURRENT_VERSION, RELEASES_URL).await
+}
+
+async fn refresh_cache_if_stale_at(
+    path: &Path,
+    client: &Client,
+    current_version: &str,
+    release_url: &str,
+) -> VersionCheckResult {
+    if let Some(latest) = read_cached_version_at(path) {
+        if parse_semver_like(&latest).is_some() {
+            return version_status_for(current_version, latest);
+        }
+    }
+
+    match fetch_latest_release_version_from_url(client, release_url).await {
+        Ok(latest) => {
+            write_cached_version_at(path, &latest);
+            version_status_for(current_version, latest)
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "background version check failed");
+            VersionCheckResult::Failed
+        }
+    }
+}
+
+fn version_status_for(current_version: &str, latest: String) -> VersionCheckResult {
+    if is_newer(current_version, &latest) {
+        VersionCheckResult::UpdateAvailable { latest }
+    } else {
+        VersionCheckResult::UpToDate
+    }
+}
+
+async fn fetch_latest_release_version_from_url(
+    client: &Client,
+    release_url: &str,
+) -> Result<String> {
+    let response = client
+        .get(release_url)
+        .timeout(RELEASE_CHECK_TIMEOUT)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if status != 200 {
+        return Err(Error::api(format!(
+            "GitHub release lookup failed with status {status}"
+        )));
+    }
+
+    parse_github_release_version(&body)
+        .ok_or_else(|| Error::api("GitHub release lookup response missing tag_name".to_string()))
+}
+
 /// Check the latest version from cache or return None if cache is stale/missing.
 ///
 /// The actual HTTP check is performed separately (by the caller spawning
@@ -136,12 +203,44 @@ pub fn parse_github_release_version(json: &str) -> Option<String> {
     let tag = value.get("tag_name")?.as_str()?;
     // Strip leading 'v' if present
     let version = tag.strip_prefix('v').unwrap_or(tag);
+    if version.trim().is_empty() {
+        return None;
+    }
     Some(version.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn spawn_release_server(status: u16, body: &'static str) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind release server");
+        let addr = listener.local_addr().expect("release server addr");
+        let body = body.to_string();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept release request");
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            let status_text = match status {
+                200 => "OK",
+                404 => "Not Found",
+                500 => "Internal Server Error",
+                _ => "Test Response",
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {status_text}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write release response");
+        });
+        (format!("http://{addr}/releases/latest"), handle)
+    }
 
     #[test]
     fn is_newer_basic() {
@@ -217,6 +316,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_github_release_version_rejects_empty_tag() {
+        assert_eq!(parse_github_release_version(r#"{"tag_name": ""}"#), None);
+        assert_eq!(parse_github_release_version(r#"{"tag_name": "v"}"#), None);
+    }
+
+    #[test]
     fn cache_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache");
@@ -249,6 +354,85 @@ mod tests {
             check_cached_at(&path, "1.2.3"),
             VersionCheckResult::Failed
         ));
+    }
+
+    #[test]
+    fn refresh_cache_if_stale_fetches_and_writes_latest_release() {
+        asupersync::test_utils::run_test(|| async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("cache");
+            let (url, server) = spawn_release_server(200, r#"{"tag_name":"v9.9.9"}"#);
+
+            let client = Client::new();
+            let result = refresh_cache_if_stale_at(&path, &client, "1.0.0", &url).await;
+
+            assert!(matches!(
+                result,
+                VersionCheckResult::UpdateAvailable { latest } if latest == "9.9.9"
+            ));
+            assert_eq!(read_cached_version_at(&path), Some("9.9.9".to_string()));
+            server.join().expect("join release server");
+        });
+    }
+
+    #[test]
+    fn refresh_cache_if_stale_uses_fresh_cache_without_network() {
+        asupersync::test_utils::run_test(|| async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("cache");
+            write_cached_version_at(&path, "1.2.3");
+
+            let client = Client::new();
+            let result = refresh_cache_if_stale_at(
+                &path,
+                &client,
+                "1.0.0",
+                "http://127.0.0.1:9/releases/latest",
+            )
+            .await;
+
+            assert!(matches!(
+                result,
+                VersionCheckResult::UpdateAvailable { latest } if latest == "1.2.3"
+            ));
+            assert_eq!(read_cached_version_at(&path), Some("1.2.3".to_string()));
+        });
+    }
+
+    #[test]
+    fn refresh_cache_if_stale_replaces_malformed_cache() {
+        asupersync::test_utils::run_test(|| async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("cache");
+            write_cached_version_at(&path, "definitely-not-a-version");
+            let (url, server) = spawn_release_server(200, r#"{"tag_name":"v2.1.0"}"#);
+
+            let client = Client::new();
+            let result = refresh_cache_if_stale_at(&path, &client, "2.0.0", &url).await;
+
+            assert!(matches!(
+                result,
+                VersionCheckResult::UpdateAvailable { latest } if latest == "2.1.0"
+            ));
+            assert_eq!(read_cached_version_at(&path), Some("2.1.0".to_string()));
+            server.join().expect("join release server");
+        });
+    }
+
+    #[test]
+    fn refresh_cache_if_stale_fail_closed_on_invalid_release_payload() {
+        asupersync::test_utils::run_test(|| async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("cache");
+            let (url, server) = spawn_release_server(200, r#"{"name":"missing tag"}"#);
+
+            let client = Client::new();
+            let result = refresh_cache_if_stale_at(&path, &client, "1.0.0", &url).await;
+
+            assert!(matches!(result, VersionCheckResult::Failed));
+            assert_eq!(read_cached_version_at(&path), None);
+            server.join().expect("join release server");
+        });
     }
 
     mod proptest_version_check {

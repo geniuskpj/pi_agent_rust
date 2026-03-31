@@ -1609,6 +1609,7 @@ pub async fn run_interactive(
     cwd: PathBuf,
     runtime_handle: RuntimeHandle,
 ) -> anyhow::Result<()> {
+    let should_check_for_updates = config.should_check_for_updates();
     let show_hardware_cursor = config.show_hardware_cursor.unwrap_or_else(|| {
         std::env::var("PI_HARDWARE_CURSOR")
             .ok()
@@ -1634,6 +1635,13 @@ pub async fn run_interactive(
             let _ = ui_tx.send(Message::new(msg));
         }
     });
+
+    if should_check_for_updates {
+        runtime_handle.spawn(async move {
+            let client = crate::http::client::Client::new();
+            let _ = crate::version_check::refresh_cache_if_stale(&client).await;
+        });
+    }
 
     let extensions = extensions;
 
