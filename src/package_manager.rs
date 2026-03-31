@@ -276,6 +276,7 @@ impl PackageManager {
     }
 
     fn install_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
+        let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
         match parsed {
             ParsedSource::Npm { spec, .. } => self.install_npm(&spec, scope),
@@ -318,6 +319,7 @@ impl PackageManager {
     }
 
     fn remove_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
+        let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
         match parsed {
             ParsedSource::Npm { name, .. } => self.uninstall_npm(&name, scope),
@@ -345,6 +347,7 @@ impl PackageManager {
     }
 
     fn update_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
+        let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
         match parsed {
             ParsedSource::Npm { spec, pinned, .. } => {
@@ -399,6 +402,7 @@ impl PackageManager {
     }
 
     fn installed_path_sync(&self, source: &str, scope: PackageScope) -> Result<Option<PathBuf>> {
+        let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
         Ok(match parsed {
             ParsedSource::Npm { name, .. } => self.npm_install_path(&name, scope)?,
@@ -711,14 +715,16 @@ impl PackageManager {
         let mut accumulator = ResourceAccumulator::new();
         let package_sources = sources
             .iter()
-            .map(|source| ScopedPackage {
-                pkg: PackageSpec {
-                    source: source.clone(),
-                    filter: None,
-                },
-                scope,
+            .map(|source| {
+                Ok(ScopedPackage {
+                    pkg: PackageSpec {
+                        source: validate_non_empty_source(source, "Extension source")?.to_string(),
+                        filter: None,
+                    },
+                    scope,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         Box::pin(self.resolve_package_sources(&package_sources, &mut accumulator)).await?;
 
@@ -972,6 +978,7 @@ impl PackageManager {
 
     #[allow(clippy::too_many_lines)]
     fn build_lock_entry(&self, source: &str, scope: PackageScope) -> Result<PackageLockEntry> {
+        let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
         match parsed {
             ParsedSource::Npm { spec, name, pinned } => {
@@ -1450,14 +1457,21 @@ fn extract_string_array(value: Option<&Value>) -> Vec<String> {
 
 fn extract_package_spec(value: &Value) -> Option<PackageSpec> {
     if let Some(s) = value.as_str() {
+        let source = s.trim();
+        if source.is_empty() {
+            return None;
+        }
         return Some(PackageSpec {
-            source: s.to_string(),
+            source: source.to_string(),
             filter: None,
         });
     }
 
     let obj = value.as_object()?;
-    let source = obj.get("source")?.as_str()?.to_string();
+    let source = obj.get("source")?.as_str()?.trim().to_string();
+    if source.is_empty() {
+        return None;
+    }
 
     let filter = PackageFilter {
         extensions: extract_filter_field(obj, "extensions"),
@@ -1586,7 +1600,11 @@ impl PackageManager {
         let mut out: Vec<ScopedPackage> = Vec::new();
 
         for entry in packages {
-            let identity = self.package_identity(&entry.pkg.source);
+            let source = entry.pkg.source.trim();
+            if source.is_empty() {
+                continue;
+            }
+            let identity = self.package_identity(source);
             if let Some(&idx) = seen.get(&identity) {
                 let existing_scope = out[idx].scope;
                 if entry.scope == PackageScope::Project && existing_scope == PackageScope::User {
@@ -3031,6 +3049,14 @@ fn parse_source(source: &str, cwd: &Path) -> ParsedSource {
     }
 }
 
+fn validate_non_empty_source<'a>(source: &'a str, label: &str) -> Result<&'a str> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err(Error::config(format!("{label} must be non-empty")));
+    }
+    Ok(trimmed)
+}
+
 fn resolve_install_source_alias(source: &str, cwd: &Path) -> Option<String> {
     if source.is_empty() || looks_like_local_path(source) {
         return None;
@@ -4162,6 +4188,20 @@ mod tests {
     }
 
     #[test]
+    fn installed_path_sync_rejects_blank_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = PackageManager::new(dir.path().to_path_buf());
+
+        let err = manager
+            .installed_path_sync("   ", PackageScope::Project)
+            .expect_err("blank package source should fail");
+        assert!(
+            err.to_string().contains("Package source must be non-empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn remove_sync_rejects_git_host_only_source_without_deleting_host_bucket() {
         let dir = tempfile::tempdir().expect("tempdir");
         let manager = PackageManager::new(dir.path().to_path_buf());
@@ -4524,6 +4564,30 @@ mod tests {
 
         assert_eq!(accumulator.extensions.items.len(), 1);
         assert_eq!(accumulator.extensions.items[0].path, symlink_path);
+    }
+
+    #[test]
+    fn test_resolve_extension_sources_rejects_blank_source() {
+        run_async(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let manager = PackageManager::new(temp_dir.path().to_path_buf());
+            let err = manager
+                .resolve_extension_sources(
+                    &["   ".to_string()],
+                    ResolveExtensionSourcesOptions {
+                        local: false,
+                        temporary: true,
+                    },
+                )
+                .await
+                .expect_err("blank extension source should fail");
+
+            assert!(
+                err.to_string()
+                    .contains("Extension source must be non-empty"),
+                "unexpected error: {err}"
+            );
+        });
     }
 
     #[test]
@@ -5023,6 +5087,12 @@ mod tests {
         assert!(extract_package_spec(&json!(42)).is_none());
         assert!(extract_package_spec(&json!(null)).is_none());
         assert!(extract_package_spec(&json!(true)).is_none());
+    }
+
+    #[test]
+    fn extract_package_spec_rejects_blank_sources() {
+        assert!(extract_package_spec(&json!("   ")).is_none());
+        assert!(extract_package_spec(&json!({"source": " \t "})).is_none());
     }
 
     #[test]
@@ -5922,6 +5992,33 @@ mod tests {
         let deduped = manager.dedupe_packages(packages);
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].scope, PackageScope::Project);
+        assert_eq!(deduped[0].pkg.source, "npm:bar@1.0");
+    }
+
+    #[test]
+    fn dedupe_packages_skips_blank_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = PackageManager::new(dir.path().to_path_buf());
+
+        let packages = vec![
+            ScopedPackage {
+                pkg: PackageSpec {
+                    source: "   ".to_string(),
+                    filter: None,
+                },
+                scope: PackageScope::User,
+            },
+            ScopedPackage {
+                pkg: PackageSpec {
+                    source: "npm:bar@1.0".to_string(),
+                    filter: None,
+                },
+                scope: PackageScope::Project,
+            },
+        ];
+
+        let deduped = manager.dedupe_packages(packages);
+        assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].pkg.source, "npm:bar@1.0");
     }
 

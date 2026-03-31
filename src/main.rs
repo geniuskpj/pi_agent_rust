@@ -1626,7 +1626,14 @@ async fn handle_package_update(manager: &PackageManager, source: Option<String>)
     let entries = manager.list_packages().await?;
 
     if let Some(source) = source {
-        let resolved_source = manager.resolve_install_source_alias(&source);
+        let source = source.trim();
+        if source.is_empty() {
+            bail!(pi::error::Error::validation(
+                "Package source must be non-empty"
+            ));
+        }
+
+        let resolved_source = manager.resolve_install_source_alias(source);
         let identity = manager.package_identity(&resolved_source);
         for entry in entries {
             if manager.package_identity(&entry.source) != identity {
@@ -4837,6 +4844,21 @@ mod tests {
         };
         let err = coerce_extension_flag_value(&flag, "bool").expect_err("invalid bool should fail");
         assert!(err.to_string().contains("Invalid boolean value"));
+    }
+
+    #[test]
+    fn handle_package_update_rejects_blank_explicit_source() {
+        let temp = TempDir::new().expect("tempdir");
+        let manager = PackageManager::new(temp.path().to_path_buf());
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("build runtime");
+
+        let err = runtime
+            .block_on(handle_package_update(&manager, Some("   ".to_string())))
+            .expect_err("blank package update source should fail");
+
+        assert!(err.to_string().contains("Package source must be non-empty"));
     }
 
     #[test]
