@@ -2511,7 +2511,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
         fn pump_stream<R: std::io::Read>(
             mut reader: R,
-            tx: &std::sync::mpsc::Sender<ExecStreamFrame>,
+            tx: &std::sync::mpsc::SyncSender<ExecStreamFrame>,
             stdout: bool,
         ) -> std::result::Result<(), String> {
             let mut buf = [0u8; 4096];
@@ -2723,7 +2723,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
             let cmd = cmd.to_string();
             let args = args.clone();
-            let (tx, rx) = std::sync::mpsc::channel::<ExecStreamFrame>();
+            let (tx, rx) = mpsc::sync_channel::<ExecStreamFrame>(1024);
             let cancel = Arc::new(AtomicBool::new(false));
             let cancel_worker = Arc::clone(&cancel);
             let call_id_for_error = call_id.to_string();
@@ -2894,7 +2894,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
             fn pump_stream(
                 mut reader: impl std::io::Read,
-                tx: &std::sync::mpsc::Sender<StreamChunk>,
+                tx: &std::sync::mpsc::SyncSender<StreamChunk>,
                 kind: StreamKind,
             ) {
                 let mut buf = [0u8; 8192];
@@ -2931,7 +2931,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 let stdout = child.stdout.take().ok_or("Missing stdout pipe")?;
                 let stderr = child.stderr.take().ok_or("Missing stderr pipe")?;
 
-                let (tx, rx) = std::sync::mpsc::channel::<StreamChunk>();
+                let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(128);
                 let tx_stdout = tx.clone();
                 let _stdout_handle =
                     thread::spawn(move || pump_stream(stdout, &tx_stdout, StreamKind::Stdout));
@@ -2969,6 +2969,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 };
 
                 let status = loop {
+                    // Drain available
                     while let Ok(chunk) = rx.try_recv() {
                         ingest_chunk(chunk.kind, chunk.bytes);
                     }
@@ -2986,7 +2987,10 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         }
                     }
 
-                    thread::sleep(Duration::from_millis(10));
+                    match rx.recv_timeout(Duration::from_millis(10)) {
+                        Ok(chunk) => ingest_chunk(chunk.kind, chunk.bytes),
+                        Err(_) => {} // Timeout or disconnected
+                    }
                 };
 
                 let drain_deadline = Instant::now() + Duration::from_secs(2);

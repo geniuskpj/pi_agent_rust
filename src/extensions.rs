@@ -22281,7 +22281,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
     max_capture_bytes: u64,
 ) -> HostcallOutcome {
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::sync::mpsc;
 
     enum ExecStreamFrame {
         Stdout(String),
@@ -22292,7 +22292,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
 
     fn pump_stream<R: std::io::Read>(
         mut reader: R,
-        tx: &std::sync::mpsc::Sender<ExecStreamFrame>,
+        tx: &std::sync::mpsc::SyncSender<ExecStreamFrame>,
         stdout: bool,
     ) -> std::result::Result<(), String> {
         let mut buf = [0u8; 4096];
@@ -22598,7 +22598,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                     };
                 }
 
-                match rx.recv_timeout(Duration::from_millis(25)) {
+                match rx.try_recv() {
                     Ok(ExecStreamFrame::Stdout(chunk)) => {
                         let mut m = serde_json::Map::with_capacity(1);
                         m.insert("stdout".into(), Value::String(chunk));
@@ -22641,8 +22641,10 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             message,
                         };
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
+                    Err(mpsc::TryRecvError::Empty) => {
+                        extension_wait_sleep(Duration::from_millis(25)).await;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
                         return HostcallOutcome::Error {
                             code: "internal".to_string(),
                             message: "exec stream channel closed".to_string(),
