@@ -134,6 +134,7 @@ fn synth_hostcall_extension(ext_index: usize) -> String {
 struct LoadedExtensions {
     manager: ExtensionManager,
     count: usize,
+    _harness: common::TestHarness,
 }
 
 fn load_synthetic_extensions(sources: &[(String, String)]) -> LoadedExtensions {
@@ -183,10 +184,7 @@ fn load_synthetic_extensions(sources: &[(String, String)]) -> LoadedExtensions {
         }
     });
 
-    // Keep harness alive to preserve temp dir
-    std::mem::forget(harness);
-
-    LoadedExtensions { manager, count }
+    LoadedExtensions { manager, count, _harness: harness }
 }
 
 // ─── Benchmark Runner ───────────────────────────────────────────────────────
