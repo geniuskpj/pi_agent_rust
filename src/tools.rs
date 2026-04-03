@@ -2297,7 +2297,11 @@ fn normalize_to_lf(text: &str) -> String {
     out
 }
 
-fn normalize_line_endings_chunk(chunk: &[u8], pending_cr: &mut bool) -> Vec<u8> {
+fn normalize_line_endings_chunk<'a>(chunk: &'a [u8], pending_cr: &mut bool) -> std::borrow::Cow<'a, [u8]> {
+    if !*pending_cr && memchr::memchr(b'\r', chunk).is_none() {
+        return std::borrow::Cow::Borrowed(chunk);
+    }
+
     let mut normalized = Vec::with_capacity(chunk.len().saturating_add(usize::from(*pending_cr)));
     let mut idx = 0;
 
@@ -2330,7 +2334,7 @@ fn normalize_line_endings_chunk(chunk: &[u8], pending_cr: &mut bool) -> Vec<u8> 
         }
     }
 
-    normalized
+    std::borrow::Cow::Owned(normalized)
 }
 
 fn restore_line_endings(text: &str, ending: &str) -> String {
