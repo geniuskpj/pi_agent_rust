@@ -1027,7 +1027,8 @@ fn convert_message_to_openai(message: &Message) -> Vec<OpenAIMessage<'_>> {
                     ContentBlock::Text(t) => Some(t.text.as_str()),
                     _ => None,
                 })
-                .collect::<String>();
+                .collect::<Vec<_>>()
+                .join("\n\n");
 
             // Collect tool calls
             let tool_calls: Vec<OpenAIToolCallRef<'_>> = assistant
