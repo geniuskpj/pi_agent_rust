@@ -1890,13 +1890,12 @@ pub(crate) async fn run_bash_command(
     // Wrap in ProcessGuard for cleanup (including tree kill)
     let mut guard = ProcessGuard::new(child, ProcessCleanupMode::ProcessGroupTree);
 
-    // Use an unbounded channel so the pump threads never block on send().
-    // A bounded channel can cause a deadlock on macOS (and other platforms with
-    // small pipe buffers): if the channel fills up, the pump threads block on
-    // send(), stop reading from the OS pipe, the pipe buffer fills, and the
-    // child process blocks on write() — a circular wait that makes the child
-    // appear as a zombie (<defunct>) while the main loop spins on try_wait().
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    // We use a bounded channel to provide backpressure. If the child process
+    // produces output faster than the async loop can drain it (and spill to disk),
+    // the pump threads will block on send(), which stops them from reading from the OS pipe.
+    // The OS pipe buffer will fill up, causing the child's `write()` calls to block.
+    // This correctly pauses the child until we catch up, preventing unbounded memory growth (OOM).
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1024);
     let tx_stdout = tx.clone();
 
     // Design Decision (bd-xdcrh.4.3):
@@ -4403,7 +4402,7 @@ fn rg_available() -> bool {
     find_rg_binary().is_some()
 }
 
-fn pump_stream<R: Read + Send + 'static>(mut reader: R, tx: &mpsc::Sender<Vec<u8>>) {
+fn pump_stream<R: Read + Send + 'static>(mut reader: R, tx: &mpsc::SyncSender<Vec<u8>>) {
     let mut buf = vec![0u8; 8192];
     loop {
         match reader.read(&mut buf) {
@@ -4664,6 +4663,7 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
             if !state.spill_failed {
                 tracing::warn!("Bash output exceeded hard limit; stopping file log");
                 close_spill_file = true;
+                state.spill_failed = true;
             }
         }
         if abandon_spill_file {

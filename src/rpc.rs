@@ -4226,6 +4226,7 @@ async fn ingest_bash_rpc_chunk(
             if !*spill_failed {
                 tracing::warn!("Bash output exceeded hard limit; stopping file log");
                 close_spill_file = true;
+                *spill_failed = true;
             }
         }
     }
@@ -4264,7 +4265,7 @@ async fn run_bash_rpc(
 
     fn pump_stream(
         mut reader: impl std::io::Read,
-        tx: std::sync::mpsc::Sender<StreamChunk>,
+        tx: std::sync::mpsc::SyncSender<StreamChunk>,
         kind: StreamKind,
     ) {
         let mut buf = [0u8; 8192];
@@ -4315,10 +4316,12 @@ async fn run_bash_rpc(
     let mut guard =
         crate::tools::ProcessGuard::new(child, crate::tools::ProcessCleanupMode::ProcessGroupTree);
 
-    // Keep the pipe pump threads non-blocking on send(). A bounded channel can
-    // deadlock if the shell floods stdout/stderr faster than the async loop
-    // drains it, which in turn stops pipe draining and can strand the child.
-    let (tx, rx) = std::sync::mpsc::channel::<StreamChunk>();
+    // We use a bounded channel to provide backpressure. If the child process
+    // produces output faster than the async loop can drain it (and spill to disk),
+    // the pump threads will block on send(), which stops them from reading from the OS pipe.
+    // The OS pipe buffer will fill up, causing the child's `write()` calls to block.
+    // This correctly pauses the child until we catch up, preventing unbounded memory growth (OOM).
+    let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(1024);
     let tx_stdout = tx.clone();
     let _stdout_handle =
         std::thread::spawn(move || pump_stream(stdout, tx_stdout, StreamKind::Stdout));

@@ -478,7 +478,6 @@ where
     fn process_chunk_with_utf8_tail(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
         self.utf8_buffer.extend_from_slice(bytes);
         let mut processed = 0;
-        let mut first_error: Option<std::io::Error> = None;
         loop {
             match std::str::from_utf8(&self.utf8_buffer[processed..]) {
                 Ok(s) => {
@@ -486,7 +485,7 @@ where
                         Self::feed_parsed_chunk(&mut self.parser, &mut self.pending_events, s);
                     }
                     self.utf8_buffer.clear();
-                    return first_error.map_or(Ok(()), Err);
+                    return Ok(());
                 }
                 Err(err) => {
                     let valid_len = err.valid_up_to();
@@ -501,15 +500,12 @@ where
 
                     if let Some(invalid_len) = err.error_len() {
                         processed += invalid_len;
-                        if first_error.is_none() {
-                            first_error = Some(Self::invalid_utf8_error());
-                        }
                     } else {
                         // Move remaining bytes to start of utf8_buffer
                         let remaining = self.utf8_buffer.len() - processed;
                         self.utf8_buffer.copy_within(processed.., 0);
                         self.utf8_buffer.truncate(remaining);
-                        return first_error.map_or(Ok(()), Err);
+                        return Ok(());
                     }
                 }
             }
