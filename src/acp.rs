@@ -154,21 +154,8 @@ fn json_rpc_notification(method: &str, params: Value) -> String {
 // ACP Protocol types
 // ============================================================================
 
-/// ACP server capabilities returned in `initialize`.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AcpServerCapabilities {
-    streaming: bool,
-    tool_approval: bool,
-}
-
-/// ACP server info.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AcpServerInfo {
-    name: String,
-    version: String,
-}
+// Note: AcpServerCapabilities and AcpServerInfo are constructed inline
+// via json!() in handle_initialize for simplicity.
 
 /// ACP model descriptor.
 #[derive(Debug, Clone, Serialize)]
@@ -217,24 +204,20 @@ enum AcpContentItem {
     },
 }
 
-/// Permission request sent as a callback to the client.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AcpPermissionRequest {
-    tool_name: String,
-    tool_input: Value,
-    description: String,
-}
+// Permission callback support is not yet implemented; tool_approval
+// capability is advertised as false until the ACP spec stabilises the
+// request_permission flow.
 
 // ============================================================================
 // ACP Session state
 // ============================================================================
 
 struct AcpSessionState {
-    agent_session: AgentSession,
+    /// The agent session. Wrapped in Option so it can be temporarily taken
+    /// out during prompt execution without holding the session lock.
+    agent_session: Option<AgentSession>,
     cwd: PathBuf,
     session_id: String,
-    abort_handle: Option<AbortHandle>,
 }
 
 // ============================================================================
@@ -489,9 +472,26 @@ async fn run(
                     continue;
                 };
 
+                // Check if this session already has an active prompt.
+                {
+                    let has_active = if let Ok(guard) = active_prompts.lock(&cx).await {
+                        guard.keys().any(|k| k.starts_with(&format!("{session_id}:")))
+                    } else {
+                        false
+                    };
+                    if has_active {
+                        let _ = out_tx.send(json_rpc_error(
+                            id,
+                            PROMPT_IN_PROGRESS,
+                            format!("Session {session_id} already has an active prompt"),
+                        ));
+                        continue;
+                    }
+                }
+
                 // Generate a prompt ID for tracking.
                 let prompt_seq = prompt_counter.fetch_add(1, Ordering::SeqCst);
-                let prompt_id = format!("prompt-{prompt_seq}");
+                let prompt_id = format!("{session_id}:prompt-{prompt_seq}");
 
                 // Create an abort handle for this prompt.
                 let (abort_handle, abort_signal) = AbortHandle::new();
@@ -672,18 +672,28 @@ async fn run(
                 }
             }
 
-            // Client-side callbacks: read_text_file / write_text_file
-            // These are requests FROM the client, but in ACP the server
-            // can also issue them. For now we handle them as no-ops with
-            // appropriate error if the server doesn't support them.
+            // File I/O methods. Paths must be under a known session's cwd
+            // to prevent arbitrary filesystem access.
             "read_text_file" => {
-                let path = request
-                    .params
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let path_str = match request.params.get("path").and_then(Value::as_str) {
+                    Some(p) if !p.is_empty() => p,
+                    _ => {
+                        let _ = out_tx.send(json_rpc_error(
+                            id,
+                            INVALID_PARAMS,
+                            "Missing or empty required parameter: path",
+                        ));
+                        continue;
+                    }
+                };
+                let session_id = request.params.get("sessionId").and_then(Value::as_str);
 
-                match std::fs::read_to_string(path) {
+                if let Err(msg) = validate_file_path(path_str, session_id, &sessions, &cx).await {
+                    let _ = out_tx.send(json_rpc_error(id, INVALID_PARAMS, msg));
+                    continue;
+                }
+
+                match std::fs::read_to_string(path_str) {
                     Ok(contents) => {
                         let _ = out_tx.send(json_rpc_ok(
                             id,
@@ -701,18 +711,36 @@ async fn run(
             }
 
             "write_text_file" => {
-                let path = request
-                    .params
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let contents = request
-                    .params
-                    .get("contents")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let path_str = match request.params.get("path").and_then(Value::as_str) {
+                    Some(p) if !p.is_empty() => p,
+                    _ => {
+                        let _ = out_tx.send(json_rpc_error(
+                            id,
+                            INVALID_PARAMS,
+                            "Missing or empty required parameter: path",
+                        ));
+                        continue;
+                    }
+                };
+                let contents = match request.params.get("contents").and_then(Value::as_str) {
+                    Some(c) => c,
+                    None => {
+                        let _ = out_tx.send(json_rpc_error(
+                            id,
+                            INVALID_PARAMS,
+                            "Missing required parameter: contents",
+                        ));
+                        continue;
+                    }
+                };
+                let session_id = request.params.get("sessionId").and_then(Value::as_str);
 
-                match std::fs::write(path, contents) {
+                if let Err(msg) = validate_file_path(path_str, session_id, &sessions, &cx).await {
+                    let _ = out_tx.send(json_rpc_error(id, INVALID_PARAMS, msg));
+                    continue;
+                }
+
+                match std::fs::write(path_str, contents) {
                     Ok(()) => {
                         let _ = out_tx.send(json_rpc_ok(id, json!({ "success": true })));
                     }
@@ -741,6 +769,82 @@ async fn run(
 }
 
 // ============================================================================
+// Path validation
+// ============================================================================
+
+/// Validate that a file path is under at least one session's cwd.
+/// If a sessionId is provided, validates against that specific session.
+/// Otherwise, validates against any active session's cwd.
+/// Returns `Ok(())` if valid, `Err(message)` if rejected.
+async fn validate_file_path(
+    path_str: &str,
+    session_id: Option<&str>,
+    sessions: &Arc<Mutex<HashMap<String, Arc<Mutex<AcpSessionState>>>>>,
+    cx: &AgentCx,
+) -> std::result::Result<(), String> {
+    let resolved = match std::path::Path::new(path_str).canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            // If the file doesn't exist yet (write case), canonicalize the parent.
+            let parent = std::path::Path::new(path_str).parent();
+            match parent.and_then(|p| p.canonicalize().ok()) {
+                Some(p) => p.join(
+                    std::path::Path::new(path_str)
+                        .file_name()
+                        .unwrap_or_default(),
+                ),
+                None => return Err(format!("Path does not exist and parent is invalid: {path_str}")),
+            }
+        }
+    };
+
+    let guard = sessions.lock(cx).await.map_err(|e| format!("Lock failed: {e}"))?;
+
+    if guard.is_empty() {
+        return Err("No active sessions — cannot validate file path".to_string());
+    }
+
+    let allowed_cwds: Vec<PathBuf> = if let Some(sid) = session_id {
+        match guard.get(sid) {
+            Some(state) => {
+                if let Ok(s) = state.lock(cx).await {
+                    vec![s.cwd.clone()]
+                } else {
+                    return Err("Session lock failed".to_string());
+                }
+            }
+            None => return Err(format!("Session not found: {sid}")),
+        }
+    } else {
+        let mut cwds = Vec::new();
+        for state in guard.values() {
+            if let Ok(s) = state.lock(cx).await {
+                cwds.push(s.cwd.clone());
+            }
+        }
+        cwds
+    };
+
+    // Canonicalize each cwd and check if the resolved path starts with it.
+    for cwd in &allowed_cwds {
+        if let Ok(canonical_cwd) = cwd.canonicalize() {
+            if resolved.starts_with(&canonical_cwd) {
+                return Ok(());
+            }
+        }
+        // Also check without canonicalization for cwd (it may not exist on disk).
+        if resolved.starts_with(cwd) {
+            return Ok(());
+        }
+    }
+
+    Err(format!(
+        "Path '{}' is outside all session working directories",
+        path_str,
+    ))
+}
+
+// ============================================================================
 // Method handlers
 // ============================================================================
 
@@ -754,7 +858,7 @@ fn handle_initialize(_options: &AcpOptions) -> Value {
         },
         "capabilities": {
             "streaming": true,
-            "toolApproval": true,
+            "toolApproval": false,
         },
     })
 }
@@ -889,10 +993,9 @@ async fn handle_session_new(
     Ok((
         session_id.clone(),
         AcpSessionState {
-            agent_session,
+            agent_session: Some(agent_session),
             cwd,
             session_id,
-            abort_handle: None,
         },
     ))
 }
@@ -918,7 +1021,12 @@ async fn run_prompt(
         session_id_events,
     );
 
-    let result = {
+    // Take the agent_session out of the lock, run the prompt, then put it back.
+    // This avoids holding the session mutex across the entire prompt execution,
+    // which could block other operations (session/list, cancel, etc.) for minutes.
+    // Safety: the concurrent-prompt guard in the dispatcher prevents a second
+    // prompt on the same session, so no one will see the None state.
+    let mut agent_session = {
         let mut guard = match session_state.lock(&cx).await {
             Ok(guard) => guard,
             Err(err) => {
@@ -933,12 +1041,30 @@ async fn run_prompt(
                 return;
             }
         };
-
-        guard
-            .agent_session
-            .run_text_with_abort(message, Some(abort_signal), event_handler)
-            .await
+        match guard.agent_session.take() {
+            Some(session) => session,
+            None => {
+                let _ = out_tx.send(json_rpc_notification(
+                    "prompt/end",
+                    json!({
+                        "promptId": prompt_id,
+                        "sessionId": session_id,
+                        "error": "Session is busy (agent_session unavailable)",
+                    }),
+                ));
+                return;
+            }
+        }
     };
+
+    let result = agent_session
+        .run_text_with_abort(message, Some(abort_signal), event_handler)
+        .await;
+
+    // Put the agent_session back.
+    if let Ok(mut guard) = session_state.lock(&cx).await {
+        guard.agent_session = Some(agent_session);
+    }
 
     // Send prompt/end notification.
     match result {
@@ -950,7 +1076,8 @@ async fn run_prompt(
                     "promptId": prompt_id,
                     "sessionId": session_id,
                     "content": content,
-                    "stopReason": format!("{:?}", msg.stop_reason).to_lowercase(),
+                    "stopReason": serde_json::to_value(&msg.stop_reason)
+                        .unwrap_or_else(|_| json!("unknown")),
                 }),
             ));
         }
