@@ -135,6 +135,8 @@ fn json_rpc_notification(method: &str, params: Value) -> String {
 // ACP Protocol types
 // ============================================================================
 
+type AcpSessionsMap = Arc<Mutex<HashMap<String, Arc<Mutex<AcpSessionState>>>>>;
+
 // Note: AcpServerCapabilities and AcpServerInfo are constructed inline
 // via json!() in handle_initialize for simplicity.
 
@@ -272,7 +274,7 @@ async fn run(
     out_tx: std::sync::mpsc::SyncSender<String>,
 ) -> Result<()> {
     let cx = AgentCx::for_current_or_request();
-    let sessions: Arc<Mutex<HashMap<String, Arc<Mutex<AcpSessionState>>>>> =
+    let sessions: AcpSessionsMap =
         Arc::new(Mutex::new(HashMap::new()));
     let prompt_counter = Arc::new(AtomicU64::new(0));
     let active_prompts: Arc<Mutex<HashMap<String, AbortHandle>>> =
@@ -443,11 +445,7 @@ async fn run(
 
                 // Check if this session already has an active prompt.
                 {
-                    let has_active = if let Ok(guard) = active_prompts.lock(&cx).await {
-                        guard.keys().any(|k| k.starts_with(&format!("{session_id}:")))
-                    } else {
-                        false
-                    };
+                    let has_active = active_prompts.lock(&cx).await.is_ok_and(|guard| guard.keys().any(|k| k.starts_with(&format!("{session_id}:"))));
                     if has_active {
                         let _ = out_tx.send(json_rpc_error(
                             id,
@@ -518,7 +516,7 @@ async fn run(
                     continue;
                 };
 
-                let aborted = active_prompts.lock(&cx).await.map_or(false, |guard| guard.get(&prompt_id).map_or(false, |handle| {
+                let aborted = active_prompts.lock(&cx).await.is_ok_and(|guard| guard.get(&prompt_id).is_some_and(|handle| {
                     handle.abort();
                     true
                 }));
@@ -535,14 +533,10 @@ async fn run(
             }
 
             "session/list" => {
-                let session_list: Vec<Value> = if let Ok(guard) = sessions.lock(&cx).await {
-                    guard
-                        .keys()
-                        .map(|sid| json!({ "sessionId": sid }))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let session_list: Vec<Value> = sessions.lock(&cx).await.map_or_else(|_| Vec::new(), |guard| guard
+                    .keys()
+                    .map(|sid| json!({ "sessionId": sid }))
+                    .collect());
 
                 let _ = out_tx.send(json_rpc_ok(id, json!({ "sessions": session_list })));
             }
@@ -563,7 +557,7 @@ async fn run(
                     continue;
                 };
 
-                let exists = sessions.lock(&cx).await.map_or(false, |guard| guard.contains_key(&session_id));
+                let exists = sessions.lock(&cx).await.is_ok_and(|guard| guard.contains_key(&session_id));
 
                 if exists {
                     let models: Vec<AcpModel> = options
@@ -608,7 +602,7 @@ async fn run(
                     continue;
                 };
 
-                let exists = sessions.lock(&cx).await.map_or(false, |guard| guard.contains_key(&session_id));
+                let exists = sessions.lock(&cx).await.is_ok_and(|guard| guard.contains_key(&session_id));
 
                 if exists {
                     let _ = out_tx.send(json_rpc_ok(
@@ -648,8 +642,22 @@ async fn run(
                     continue;
                 }
 
-                match std::fs::read_to_string(path_str) {
-                    Ok(contents) => {
+                let max_bytes = 10 * 1024 * 1024; // 10MB limit for ACP
+                match asupersync::fs::metadata(path_str).await {
+                    Ok(meta) if meta.len() > max_bytes => {
+                        let _ = out_tx.send(json_rpc_error(
+                            id,
+                            INTERNAL_ERROR,
+                            format!("File too large ({} bytes). Maximum allowed via ACP is {} bytes.", meta.len(), max_bytes),
+                        ));
+                        continue;
+                    }
+                    _ => {}
+                }
+
+                match asupersync::fs::read(path_str).await {
+                    Ok(bytes) => {
+                        let contents = String::from_utf8_lossy(&bytes).into_owned();
                         let _ = out_tx.send(json_rpc_ok(
                             id,
                             json!({ "contents": contents }),
@@ -692,7 +700,7 @@ async fn run(
                     continue;
                 }
 
-                match std::fs::write(path_str, contents) {
+                match asupersync::fs::write(path_str, contents.as_bytes()).await {
                     Ok(()) => {
                         let _ = out_tx.send(json_rpc_ok(id, json!({ "success": true })));
                     }
@@ -731,22 +739,21 @@ async fn run(
 async fn validate_file_path(
     path_str: &str,
     session_id: Option<&str>,
-    sessions: &Arc<Mutex<HashMap<String, Arc<Mutex<AcpSessionState>>>>>,
+    sessions: &AcpSessionsMap,
     cx: &AgentCx,
 ) -> std::result::Result<(), String> {
-    let resolved = match std::path::Path::new(path_str).canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            // If the file doesn't exist yet (write case), canonicalize the parent.
-            let parent = std::path::Path::new(path_str).parent();
-            match parent.and_then(|p| p.canonicalize().ok()) {
-                Some(p) => p.join(
-                    std::path::Path::new(path_str)
-                        .file_name()
-                        .unwrap_or_default(),
-                ),
-                None => return Err(format!("Path does not exist and parent is invalid: {path_str}")),
-            }
+    let resolved = if let Ok(p) = std::path::Path::new(path_str).canonicalize() {
+        p
+    } else {
+        // If the file doesn't exist yet (write case), canonicalize the parent.
+        let parent = std::path::Path::new(path_str).parent();
+        match parent.and_then(|p| p.canonicalize().ok()) {
+            Some(p) => p.join(
+                std::path::Path::new(path_str)
+                    .file_name()
+                    .unwrap_or_default(),
+            ),
+            None => return Err(format!("Path does not exist and parent is invalid: {path_str}")),
         }
     };
 
@@ -791,8 +798,7 @@ async fn validate_file_path(
     }
 
     Err(format!(
-        "Path '{}' is outside all session working directories",
-        path_str,
+        "Path '{path_str}' is outside all session working directories",
     ))
 }
 
@@ -870,8 +876,7 @@ async fn handle_session_new(
     let cwd = params
         .get("cwd")
         .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        .map_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")), PathBuf::from);
 
     // Create a new in-memory session.
     let mut session = Session::in_memory();
