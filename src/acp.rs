@@ -122,25 +122,6 @@ fn json_rpc_error(id: Value, code: i64, message: impl Into<String>) -> String {
     .expect("serialize json-rpc error")
 }
 
-fn json_rpc_error_with_data(
-    id: Value,
-    code: i64,
-    message: impl Into<String>,
-    data: Value,
-) -> String {
-    serde_json::to_string(&JsonRpcResponse {
-        jsonrpc: "2.0".to_string(),
-        id,
-        result: None,
-        error: Some(JsonRpcError {
-            code,
-            message: message.into(),
-            data: Some(data),
-        }),
-    })
-    .expect("serialize json-rpc error with data")
-}
-
 fn json_rpc_notification(method: &str, params: Value) -> String {
     serde_json::to_string(&JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
@@ -193,14 +174,6 @@ enum AcpContentItem {
         id: String,
         name: String,
         input: Value,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        #[serde(rename = "toolUseId")]
-        tool_use_id: String,
-        content: String,
-        #[serde(rename = "isError")]
-        is_error: bool,
     },
 }
 
