@@ -148,7 +148,7 @@ pub fn classify_failure(output: &str) -> FlakeClassification {
 
         // Temp directory race
         if (trimmed.contains("no such file or directory") || trimmed.contains("enoent"))
-            && trimmed.contains("tmp")
+            && (trimmed.contains("/tmp") || trimmed.contains("\\tmp") || trimmed.contains("tmpdir"))
         {
             return FlakeClassification::Transient {
                 category: FlakeCategory::TmpdirRace,
