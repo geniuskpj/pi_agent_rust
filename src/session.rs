@@ -51,6 +51,19 @@ fn finish_worker_result<T, E>(
     recv_result.map_err(|_| crate::Error::session(cancelled_message))?
 }
 
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 fn save_jsonl_full_rewrite_blocking(
     path: &Path,
     sessions_root: &Path,
@@ -63,7 +76,7 @@ fn save_jsonl_full_rewrite_blocking(
     let (header_to_write, entries_to_write) =
         prepare_jsonl_full_rewrite(path, header, entries, persisted_entry_count, header_dirty)?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let temp_file = tempfile::NamedTempFile::new_in(parent)?;
+    let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
     {
         let mut writer = std::io::BufWriter::with_capacity(1 << 20, temp_file.as_file());
         serde_json::to_writer(&mut writer, &header_to_write)?;
@@ -74,9 +87,11 @@ fn save_jsonl_full_rewrite_blocking(
         }
         writer.flush()?;
     }
+    temp_file.as_file_mut().sync_all().map_err(|e| crate::Error::Io(Box::new(e)))?;
     temp_file
         .persist(path)
         .map_err(|e| crate::Error::Io(Box::new(e.error)))?;
+    sync_parent_dir(path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut entries_for_stats = entries_to_write.clone();
     let finalized = finalize_loaded_entries(&mut entries_for_stats);
     let message_count = finalized.message_count;
@@ -105,6 +120,7 @@ fn append_jsonl_entries_blocking(
         .open(path)
         .map_err(|e| crate::Error::Io(Box::new(e)))?;
     file.write_all(serialized_entries)?;
+    file.sync_all().map_err(|e| crate::Error::Io(Box::new(e)))?;
 
     enqueue_session_index_snapshot_update(sessions_root, path, header, message_count, session_name);
     Ok(())
