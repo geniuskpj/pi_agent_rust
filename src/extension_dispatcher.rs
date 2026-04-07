@@ -2778,18 +2778,16 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         thread::sleep(Duration::from_millis(10));
                     };
 
-                    let stdout_result = stdout_handle
-                        .join()
-                        .map_err(|_| "stdout reader thread panicked".to_string())?;
-                    if let Err(err) = stdout_result {
-                        return Err(format!("Read stdout: {err}"));
-                    }
-
-                    let stderr_result = stderr_handle
-                        .join()
-                        .map_err(|_| "stderr reader thread panicked".to_string())?;
-                    if let Err(err) = stderr_result {
-                        return Err(format!("Read stderr: {err}"));
+                    let drain_start = Instant::now();
+                    let drain_deadline = drain_start + Duration::from_secs(5);
+                    loop {
+                        if stdout_handle.is_finished() && stderr_handle.is_finished() {
+                            break;
+                        }
+                        if Instant::now() >= drain_deadline {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
                     }
 
                     // Explicitly reap to avoid leaving a zombie behind after a

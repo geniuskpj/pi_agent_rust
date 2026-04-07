@@ -22554,18 +22554,16 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                         thread::sleep(Duration::from_millis(10));
                     };
 
-                    let stdout_result = stdout_handle
-                        .join()
-                        .map_err(|_| "stdout reader thread panicked".to_string())?;
-                    if let Err(err) = stdout_result {
-                        return Err(format!("Read stdout: {err}"));
-                    }
-
-                    let stderr_result = stderr_handle
-                        .join()
-                        .map_err(|_| "stderr reader thread panicked".to_string())?;
-                    if let Err(err) = stderr_result {
-                        return Err(format!("Read stderr: {err}"));
+                    let drain_start = Instant::now();
+                    let drain_deadline = drain_start + Duration::from_secs(5);
+                    loop {
+                        if stdout_handle.is_finished() && stderr_handle.is_finished() {
+                            break;
+                        }
+                        if Instant::now() >= drain_deadline {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
                     }
 
                     // Explicitly reap to avoid leaving a zombie behind after a
@@ -22674,19 +22672,39 @@ async fn dispatch_hostcall_exec_ref_with_limit(
             let mut child = command.spawn().map_err(|err| err.to_string())?;
             let pid = child.id();
 
-            let mut stdout = child.stdout.take().ok_or("Missing stdout pipe")?;
-            let mut stderr = child.stderr.take().ok_or("Missing stderr pipe")?;
+            let stdout = child.stdout.take().ok_or("Missing stdout pipe")?;
+            let stderr = child.stderr.take().ok_or("Missing stderr pipe")?;
 
-            let stdout_handle = thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
-                crate::tools::read_to_end_capped_and_drain(&mut stdout, max_capture_bytes)
-            });
-            let stderr_handle = thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
-                crate::tools::read_to_end_capped_and_drain(&mut stderr, max_capture_bytes)
-            });
+            let (tx_stream, rx_stream) = mpsc::sync_channel::<ExecStreamFrame>(1024);
+            let stdout_tx = tx_stream.clone();
+
+            let _stdout_handle =
+                thread::spawn(move || pump_stream(stdout, &stdout_tx, true));
+            let _stderr_handle =
+                thread::spawn(move || pump_stream(stderr, &tx_stream, false));
 
             let start = Instant::now();
             let mut killed = false;
+            let mut stdout_acc = String::new();
+            let mut stderr_acc = String::new();
+
+            let mut ingest_frame = |frame: ExecStreamFrame| {
+                match frame {
+                    ExecStreamFrame::Stdout(s) if (stdout_acc.len() as u64) < max_capture_bytes => {
+                        stdout_acc.push_str(&s);
+                    }
+                    ExecStreamFrame::Stderr(s) if (stderr_acc.len() as u64) < max_capture_bytes => {
+                        stderr_acc.push_str(&s);
+                    }
+                    _ => {}
+                }
+            };
+
             let status = loop {
+                while let Ok(frame) = rx_stream.try_recv() {
+                    ingest_frame(frame);
+                }
+
                 if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
                     break status;
                 }
@@ -22700,36 +22718,41 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                     }
                 }
 
-                thread::sleep(Duration::from_millis(10));
+                if let Ok(frame) = rx_stream.recv_timeout(Duration::from_millis(10)) {
+                    ingest_frame(frame);
+                }
             };
 
-            // Explicitly reap the child to prevent zombies on macOS.
-            // try_wait() uses WNOHANG which may not fully reap when the
-            // child is in its own process group.
-            let _ = child.wait();
-
-            let stdout_bytes = stdout_handle
-                .join()
-                .map_err(|_| "stdout reader thread panicked".to_string())?
-                .map_err(|err| format!("Read stdout: {err}"))?;
-            let stderr_bytes = stderr_handle
-                .join()
-                .map_err(|_| "stderr reader thread panicked".to_string())?
-                .map_err(|err| format!("Read stderr: {err}"))?;
-
-            let mut stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-            if stdout_bytes.len() as u64 > max_capture_bytes {
-                stdout.push_str("\n... [stdout truncated] ...");
+            let drain_deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match rx_stream.try_recv() {
+                    Ok(frame) => ingest_frame(frame),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        if Instant::now() >= drain_deadline {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                }
             }
-            let mut stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
-            if stderr_bytes.len() as u64 > max_capture_bytes {
-                stderr.push_str("\n... [stderr truncated] ...");
+
+            drop(rx_stream); // Unblock pump threads if they are blocked on send
+            let _ = child.wait(); // Explicitly reap
+
+            if stdout_acc.len() as u64 >= max_capture_bytes {
+                stdout_acc.truncate(usize::try_from(max_capture_bytes).unwrap_or(usize::MAX));
+                stdout_acc.push_str("\n... [stdout truncated] ...");
+            }
+            if stderr_acc.len() as u64 >= max_capture_bytes {
+                stderr_acc.truncate(usize::try_from(max_capture_bytes).unwrap_or(usize::MAX));
+                stderr_acc.push_str("\n... [stderr truncated] ...");
             }
             let code = exit_status_code(status);
 
             Ok(json!({
-                "stdout": stdout,
-                "stderr": stderr,
+                "stdout": stdout_acc,
+                "stderr": stderr_acc,
                 "code": code,
                 "killed": killed,
             }))

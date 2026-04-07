@@ -14580,28 +14580,6 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                     }),
                 )?;
 
-                // __pi_crypto_sha256_hex_native(text) -> hex string
-                global.set(
-                    "__pi_crypto_sha256_hex_native",
-                    Func::from(
-                        move |_ctx: Ctx<'_>, text: String| -> rquickjs::Result<String> {
-                            tracing::debug!(
-                                event = "pijs.crypto.sha256_hex",
-                                input_len = text.len(),
-                                "crypto sha256"
-                            );
-                            let mut bytes = Vec::with_capacity(text.len());
-                            for ch in text.chars() {
-                                bytes.push(ch as u8);
-                            }
-                            let mut hasher = Sha256::new();
-                            hasher.update(&bytes);
-                            let digest = hasher.finalize();
-                            Ok(hex_lower(&digest))
-                        },
-                    ),
-                )?;
-
                 // __pi_crypto_random_bytes_native(len) -> byte-like JS value
                 // (string/Array/Uint8Array/ArrayBuffer depending on bridge coercion).
                 // The JS shim normalizes this into plain number[] bytes.
@@ -15019,7 +14997,6 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                               max_buffer: Opt<f64>|
                               -> rquickjs::Result<String> {
                             use std::process::{Command, Stdio};
-                            use std::sync::atomic::AtomicBool;
                             use std::time::{Duration, Instant};
 
                             tracing::debug!(
@@ -15116,6 +15093,38 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                 .unwrap_or(10 * 1024 * 1024);
 
                             let result: std::result::Result<serde_json::Value, String> = (|| {
+                                #[derive(Clone, Copy)]
+                                enum StreamKind {
+                                    Stdout,
+                                    Stderr,
+                                }
+                                struct StreamChunk {
+                                    kind: StreamKind,
+                                    bytes: Vec<u8>,
+                                }
+                                fn pump_stream(
+                                    mut reader: impl std::io::Read,
+                                    tx: &std::sync::mpsc::SyncSender<StreamChunk>,
+                                    kind: StreamKind,
+                                ) {
+                                    let mut buf = [0u8; 8192];
+                                    loop {
+                                        let read = match reader.read(&mut buf) {
+                                            Ok(0) => break,
+                                            Ok(read) => read,
+                                            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                                            Err(_) => break,
+                                        };
+                                        let chunk = StreamChunk {
+                                            kind,
+                                            bytes: buf[..read].to_vec(),
+                                        };
+                                        if tx.send(chunk).is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 let mut command = Command::new(&cmd);
                                 command
                                     .args(&args)
@@ -15133,34 +15142,57 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                 let stderr_pipe =
                                     child.stderr.take().ok_or("Missing stderr pipe")?;
 
-                                let limit_exceeded = Arc::new(AtomicBool::new(false));
-                                let limit_exceeded_stdout = limit_exceeded.clone();
-                                let limit_exceeded_stderr = limit_exceeded.clone();
-
-                                let stdout_handle = std::thread::spawn(move || {
-                                    capture_with_max_buffer(
-                                        stdout_pipe,
-                                        limit_bytes,
-                                        limit_exceeded_stdout.as_ref(),
-                                        "stdout",
-                                    )
-                                });
-                                let stderr_handle = std::thread::spawn(move || {
-                                    capture_with_max_buffer(
-                                        stderr_pipe,
-                                        limit_bytes,
-                                        limit_exceeded_stderr.as_ref(),
-                                        "stderr",
-                                    )
-                                });
+                                let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(128);
+                                let tx_stdout = tx.clone();
+                                let _stdout_handle =
+                                    std::thread::spawn(move || pump_stream(stdout_pipe, &tx_stdout, StreamKind::Stdout));
+                                let _stderr_handle =
+                                    std::thread::spawn(move || pump_stream(stderr_pipe, &tx, StreamKind::Stderr));
 
                                 let start = Instant::now();
                                 let mut killed = false;
+                                let mut limit_exceeded = false;
+                                let mut limit_error: Option<String> = None;
+
+                                let mut stdout_bytes = Vec::new();
+                                let mut stderr_bytes = Vec::new();
+
+                                macro_rules! ingest_chunk {
+                                    ($kind:expr, $bytes:expr) => {
+                                        if !limit_exceeded {
+                                            match $kind {
+                                                StreamKind::Stdout => {
+                                                    if stdout_bytes.len() + $bytes.len() > limit_bytes {
+                                                        stdout_bytes.extend_from_slice(&$bytes[..limit_bytes.saturating_sub(stdout_bytes.len())]);
+                                                        limit_exceeded = true;
+                                                        limit_error = Some("stdout maxBuffer length exceeded".to_string());
+                                                    } else {
+                                                        stdout_bytes.extend($bytes);
+                                                    }
+                                                }
+                                                StreamKind::Stderr => {
+                                                    if stderr_bytes.len() + $bytes.len() > limit_bytes {
+                                                        stderr_bytes.extend_from_slice(&$bytes[..limit_bytes.saturating_sub(stderr_bytes.len())]);
+                                                        limit_exceeded = true;
+                                                        limit_error = Some("stderr maxBuffer length exceeded".to_string());
+                                                    } else {
+                                                        stderr_bytes.extend($bytes);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    };
+                                }
+
                                 let status = loop {
+                                    while let Ok(chunk) = rx.try_recv() {
+                                        ingest_chunk!(chunk.kind, chunk.bytes);
+                                    }
+
                                     if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
                                         break st;
                                     }
-                                    if !killed && limit_exceeded.load(AtomicOrdering::Relaxed) {
+                                    if !killed && limit_exceeded {
                                         killed = true;
                                         crate::tools::kill_process_group_tree(Some(pid));
                                         let _ = child.kill();
@@ -15174,20 +15206,31 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                             break child.wait().map_err(|e| e.to_string())?;
                                         }
                                     }
-                                    std::thread::sleep(Duration::from_millis(5));
+                                    if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(5)) {
+                                        ingest_chunk!(chunk.kind, chunk.bytes);
+                                    }
                                 };
 
-                                let (stdout_bytes, stdout_err) = stdout_handle
-                                    .join()
-                                    .map_err(|_| "stdout reader thread panicked".to_string())?;
-                                let (stderr_bytes, stderr_err) = stderr_handle
-                                    .join()
-                                    .map_err(|_| "stderr reader thread panicked".to_string())?;
+                                let drain_deadline = Instant::now() + Duration::from_secs(2);
+                                loop {
+                                    match rx.try_recv() {
+                                        Ok(chunk) => ingest_chunk!(chunk.kind, chunk.bytes),
+                                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                            if Instant::now() >= drain_deadline {
+                                                break;
+                                            }
+                                            std::thread::sleep(Duration::from_millis(10));
+                                        }
+                                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                                    }
+                                }
+
+                                drop(rx);
+                                let _ = child.wait();
 
                                 let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
                                 let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
                                 let code = status.code();
-                                let error = stdout_err.or(stderr_err);
 
                                 Ok(serde_json::json!({
                                     "stdout": stdout,
@@ -15195,7 +15238,7 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                     "status": code,
                                     "killed": killed,
                                     "pid": pid,
-                                    "error": error
+                                    "error": limit_error
                                 }))
                             })(
                             );
@@ -17316,7 +17359,6 @@ function __pi_crypto_bytes_to_array(raw) {
 }
 
 pi.crypto = {
-    sha256Hex: __pi_crypto_sha256_hex_native,
     randomBytes: function(n) {
         return __pi_crypto_bytes_to_array(__pi_crypto_random_bytes_native(n));
     },
@@ -17866,19 +17908,7 @@ if (typeof globalThis.crypto.subtle.digest !== 'function') {
             throw new Error('crypto.subtle.digest: only SHA-256 is supported');
         }
         const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-        let textChunks = [];
-        let chunk = [];
-        for (let i = 0; i < bytes.length; i++) {
-            chunk.push(bytes[i]);
-            if (chunk.length >= 4096) {
-                textChunks.push(String.fromCharCode.apply(null, chunk));
-                chunk.length = 0;
-            }
-        }
-        if (chunk.length > 0) {
-            textChunks.push(String.fromCharCode.apply(null, chunk));
-        }
-        const hex = __pi_crypto_sha256_hex_native(textChunks.join(''));
+        const hex = __pi_crypto_hash_native('sha256', bytes, 'hex');
         const out = new Uint8Array(hex.length / 2);
         for (let i = 0; i < out.length; i++) {
             out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -21429,7 +21459,6 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                     globalThis.base = pi.path.basename("/a/b/c.txt");
                     globalThis.norm = pi.path.normalize("/a/./b//../c/");
 
-                    globalThis.hash = pi.crypto.sha256Hex("abc");
                     globalThis.bytes = pi.crypto.randomBytes(32);
 
                     globalThis.now = pi.time.nowMs();
@@ -21450,12 +21479,6 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 ("joined", serde_json::json!("/a/c")),
                 ("base", serde_json::json!("c.txt")),
                 ("norm", serde_json::json!("/a/c")),
-                (
-                    "hash",
-                    serde_json::json!(
-                        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-                    ),
-                ),
             ] {
                 assert_eq!(get_global_json(&runtime, key).await, expected);
             }
