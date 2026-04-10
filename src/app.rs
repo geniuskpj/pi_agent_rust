@@ -149,12 +149,12 @@ pub fn build_system_prompt(
     package_dir: &Path,
     test_mode: bool,
     include_cwd: bool,
-) -> String {
+) -> Result<String> {
     use std::fmt::Write as _;
 
-    let custom_prompt = resolve_prompt_input(cli.system_prompt.as_deref(), "system prompt");
+    let custom_prompt = resolve_prompt_input(cli.system_prompt.as_deref(), "system prompt")?;
     let append_prompt =
-        resolve_prompt_input(cli.append_system_prompt.as_deref(), "append system prompt");
+        resolve_prompt_input(cli.append_system_prompt.as_deref(), "append system prompt")?;
     let context_files = load_project_context_files(cwd, global_dir);
 
     let mut prompt =
@@ -192,23 +192,21 @@ pub fn build_system_prompt(
         let _ = write!(prompt, "\nCurrent working directory: {cwd_display}");
     }
 
-    prompt
+    Ok(prompt)
 }
 
-fn resolve_prompt_input(input: Option<&str>, description: &str) -> Option<String> {
-    let value = input?;
+fn resolve_prompt_input(input: Option<&str>, description: &str) -> Result<Option<String>> {
+    let Some(value) = input else {
+        return Ok(None);
+    };
 
     let path = Path::new(value);
     if path.exists() {
-        match std::fs::read_to_string(path) {
-            Ok(content) => Some(content),
-            Err(err) => {
-                eprintln!("Warning: Could not read {description} file {value}: {err}");
-                Some(value.to_string())
-            }
-        }
+        let content = std::fs::read_to_string(path)
+            .map_err(|err| anyhow::anyhow!("Could not read {description} file {value}: {err}"))?;
+        Ok(Some(content))
     } else {
-        Some(value.to_string())
+        Ok(Some(value.to_string()))
     }
 }
 

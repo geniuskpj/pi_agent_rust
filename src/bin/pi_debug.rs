@@ -211,7 +211,7 @@ async fn run_debug(mut cli: cli::Cli, runtime_handle: RuntimeHandle) -> Result<(
         &package_dir,
         test_mode,
         !cli.hide_cwd_in_prompt,
-    );
+    )?;
     let provider =
         providers::create_provider(&selection.model_entry, None).map_err(anyhow::Error::new)?;
     let stream_options = pi::app::build_stream_options(&config, resolved_key, &selection, &session);

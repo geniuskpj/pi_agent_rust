@@ -432,7 +432,8 @@ fn build_system_prompt_includes_custom_append_context_and_skills() {
         &package_dir,
         false,
         true,
-    );
+    )
+    .expect("build system prompt");
 
     harness.log().info_ctx("prompt", "Prompt fragments", |ctx| {
         ctx.push(("len".into(), prompt.len().to_string()));
@@ -490,6 +491,68 @@ fn prepare_initial_message_wraps_files_and_appends_first_message() {
     let blocks = build_initial_content(&initial);
     assert_eq!(blocks.len(), 1);
     assert!(matches!(&blocks[0], ContentBlock::Text(_)));
+}
+
+#[test]
+fn build_system_prompt_rejects_unreadable_system_prompt_path() {
+    let harness = TestHarness::new("build_system_prompt_rejects_unreadable_system_prompt_path");
+    let global_dir = harness.create_dir("global");
+    let package_dir = harness.create_dir("package");
+    let prompt_dir = harness.create_dir("prompt-dir");
+    let cli = cli::Cli::parse_from([
+        "pi",
+        "--system-prompt",
+        prompt_dir.to_string_lossy().as_ref(),
+    ]);
+
+    let err = build_system_prompt(
+        &cli,
+        harness.temp_dir(),
+        &["read"],
+        None,
+        &global_dir,
+        &package_dir,
+        true,
+        true,
+    )
+    .expect_err("directory path should not become literal prompt text");
+
+    assert!(
+        err.to_string()
+            .contains("Could not read system prompt file"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn build_system_prompt_rejects_unreadable_append_prompt_path() {
+    let harness = TestHarness::new("build_system_prompt_rejects_unreadable_append_prompt_path");
+    let global_dir = harness.create_dir("global");
+    let package_dir = harness.create_dir("package");
+    let prompt_dir = harness.create_dir("append-dir");
+    let cli = cli::Cli::parse_from([
+        "pi",
+        "--append-system-prompt",
+        prompt_dir.to_string_lossy().as_ref(),
+    ]);
+
+    let err = build_system_prompt(
+        &cli,
+        harness.temp_dir(),
+        &["read"],
+        None,
+        &global_dir,
+        &package_dir,
+        true,
+        true,
+    )
+    .expect_err("directory path should not become literal append prompt text");
+
+    assert!(
+        err.to_string()
+            .contains("Could not read append system prompt file"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

@@ -1636,7 +1636,8 @@ pub async fn create_agent_session(options: SessionOptions) -> Result<AgentSessio
         &package_dir,
         std::env::var_os("PI_TEST_MODE").is_some(),
         options.include_cwd_in_prompt,
-    );
+    )
+    .map_err(|err| Error::validation(err.to_string()))?;
 
     let provider = providers::create_provider(&selection.model_entry, None)
         .map_err(|e| Error::provider("sdk", e.to_string()))?;

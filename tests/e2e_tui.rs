@@ -211,6 +211,7 @@ fn build_vcr_system_prompt_for_args(
         true,
         true,
     )
+    .expect("build vcr system prompt")
 }
 
 fn build_vcr_system_prompt(workdir: &Path, env_root: &Path) -> String {
