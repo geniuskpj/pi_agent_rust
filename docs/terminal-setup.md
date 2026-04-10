@@ -73,9 +73,9 @@ If you want the hardware cursor visible, set `PI_HARDWARE_CURSOR=1` before runni
 
 ## Image Support
 
-Pi detects terminal capabilities to display images inline (e.g., when using the `read` tool on an
-image file). If the terminal does not support images, Pi shows a placeholder like
-`[Image: 1024x768 placeholder]`.
+Pi detects terminal capabilities to display images inline (currently Kitty-compatible terminals such
+as Kitty, WezTerm, and Ghostty, plus iTerm2). For unsupported terminals, Pi falls back to a stable
+placeholder such as `[image: image/png, 1024x768]`.
 
 To block images entirely, set:
 

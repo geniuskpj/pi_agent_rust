@@ -1,10 +1,8 @@
 //! Terminal image helpers.
 //!
-//! The current TUI renders images as **stable text placeholders** like
-//! `[image: image/png]`. This keeps output deterministic and test-friendly.
-//!
-//! Encoding helpers for Kitty/iTerm2 are kept around for future native inline
-//! rendering support, but are not used by the TUI today.
+//! Pi renders image blocks inline when the terminal advertises a supported
+//! protocol (Kitty or iTerm2). Unsupported terminals fall back to stable text
+//! placeholders like `[image: image/png]`.
 
 use base64::Engine as _;
 use std::sync::OnceLock;
@@ -252,19 +250,40 @@ const fn is_jpeg_sof_marker(marker: u8) -> bool {
 ///
 /// Returns the string to write to the terminal.
 ///
-/// Note: today this always returns a plain-text placeholder (see module docs).
 pub fn render_inline(image_b64: &str, mime_type: &str, max_cols: usize) -> String {
-    let _ = max_cols;
-
-    // Keep TUI output deterministic across terminals by always emitting a plain-text
-    // placeholder. (Protocol detection + escape-sequence rendering lives in helpers
-    // above for future use.)
     let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(image_b64) else {
         return placeholder(mime_type, None, None);
     };
 
+    render_inline_bytes(&bytes, mime_type, max_cols, detect_protocol())
+}
+
+fn render_inline_bytes(
+    bytes: &[u8],
+    mime_type: &str,
+    max_cols: usize,
+    protocol: ImageProtocol,
+) -> String {
     let dims = image_dimensions(&bytes);
-    placeholder(mime_type, dims.map(|(w, _)| w), dims.map(|(_, h)| h))
+    let placeholder = placeholder(mime_type, dims.map(|(w, _)| w), dims.map(|(_, h)| h));
+
+    if bytes.is_empty() {
+        return placeholder;
+    }
+
+    let cols = max_cols.max(1);
+    match protocol {
+        ImageProtocol::Kitty => {
+            let encoded = encode_kitty(bytes, cols);
+            if encoded.is_empty() {
+                placeholder
+            } else {
+                encoded
+            }
+        }
+        ImageProtocol::Iterm2 => encode_iterm2(bytes, cols),
+        ImageProtocol::Unsupported => placeholder,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -439,17 +458,50 @@ mod tests {
     fn render_inline_with_unknown_image_bytes_omits_dimensions() {
         let b64 = base64::engine::general_purpose::STANDARD.encode(b"not-an-image");
         let result = render_inline(&b64, "image/webp", 80);
-        assert_eq!(result, "[image: image/webp]");
+        match detect_protocol() {
+            ImageProtocol::Kitty => assert!(result.starts_with("\x1b_G")),
+            ImageProtocol::Iterm2 => assert!(result.starts_with("\x1b]1337;File=")),
+            ImageProtocol::Unsupported => assert_eq!(result, "[image: image/webp]"),
+        }
     }
 
     #[test]
     fn render_inline_unsupported_with_decodable_image() {
-        // Force unsupported by not setting any terminal env vars.
-        // In CI/test environments, detect_protocol() typically returns Unsupported.
-        // We test the placeholder path directly.
+        let result =
+            render_inline_bytes(b"pretend-png", "image/png", 80, ImageProtocol::Unsupported);
+        assert_eq!(result, "[image: image/png]");
+    }
+
+    #[test]
+    fn render_inline_unsupported_with_known_dimensions_keeps_placeholder_metadata() {
         let result = placeholder("image/png", Some(640), Some(480));
         assert!(result.contains("640x480"));
         assert!(result.contains("image/png"));
+    }
+
+    #[test]
+    fn render_inline_kitty_with_decodable_image_uses_escape_sequence() {
+        let result = render_inline_bytes(b"hello", "image/png", 40, ImageProtocol::Kitty);
+        assert!(result.starts_with("\x1b_G"));
+        assert!(result.contains("a=T"));
+        assert!(result.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn render_inline_iterm2_with_decodable_image_uses_escape_sequence() {
+        let result = render_inline_bytes(b"hello", "image/png", 40, ImageProtocol::Iterm2);
+        assert!(result.starts_with("\x1b]1337;File="));
+        assert!(result.contains("inline=1"));
+        assert!(result.ends_with('\x07'));
+    }
+
+    #[test]
+    fn render_inline_supported_with_empty_bytes_falls_back_to_placeholder() {
+        let kitty = render_inline_bytes(b"", "image/png", 40, ImageProtocol::Kitty);
+        assert_eq!(kitty, "[image: image/png]");
+
+        let iterm2 = render_inline_bytes(b"", "image/png", 40, ImageProtocol::Iterm2);
+        assert_eq!(iterm2, "[image: image/png]");
     }
 
     #[test]
@@ -546,8 +598,7 @@ mod tests {
         png_data[16..20].copy_from_slice(&200u32.to_be_bytes());
         png_data[20..24].copy_from_slice(&150u32.to_be_bytes());
 
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
-        let result = render_inline(&b64, "image/png", 80);
+        let result = render_inline_bytes(&png_data, "image/png", 80, ImageProtocol::Unsupported);
         assert_eq!(result, "[image: image/png, 200x150]");
     }
 
@@ -671,7 +722,7 @@ mod tests {
                 let _ = render_inline(&b64, &mime, 80);
             }
 
-            /// `render_inline` with valid PNG base64 includes dimensions.
+            /// Unsupported terminals preserve dimensions in placeholders.
             #[test]
             fn render_inline_png_has_dims(w in 1..5000u32, h in 1..5000u32) {
                 let mut png = vec![0u8; 32];
@@ -680,19 +731,17 @@ mod tests {
                 png[12..16].copy_from_slice(b"IHDR");
                 png[16..20].copy_from_slice(&w.to_be_bytes());
                 png[20..24].copy_from_slice(&h.to_be_bytes());
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-                let result = render_inline(&b64, "image/png", 80);
+                let result = render_inline_bytes(&png, "image/png", 80, ImageProtocol::Unsupported);
                 assert!(result.contains(&format!("{w}x{h}")));
             }
 
-            /// `render_inline` always includes the MIME label in the placeholder.
+            /// Unsupported terminals always include the MIME label in the placeholder.
             #[test]
             fn render_inline_preserves_mime_label(
                 data in proptest::collection::vec(any::<u8>(), 0..512),
                 mime in "[a-z]{1,10}/[a-z0-9.+-]{1,20}"
             ) {
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                let result = render_inline(&b64, &mime, 80);
+                let result = render_inline_bytes(&data, &mime, 80, ImageProtocol::Unsupported);
                 assert!(result.contains(&mime));
             }
 
