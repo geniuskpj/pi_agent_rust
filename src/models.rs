@@ -3248,6 +3248,12 @@ mod tests {
         assert!(alibaba_cn.auth_header);
         assert!(alibaba_cn.base_url.contains("dashscope.aliyuncs.com"));
 
+        let alibaba_us =
+            ad_hoc_provider_defaults("alibaba-us").expect("expected defaults for alibaba-us");
+        assert_eq!(alibaba_us.api, "openai-completions");
+        assert!(alibaba_us.auth_header);
+        assert!(alibaba_us.base_url.contains("dashscope-us.aliyuncs.com"));
+
         let kimi_for_coding = ad_hoc_provider_defaults("kimi-for-coding")
             .expect("expected defaults for kimi-for-coding");
         assert_eq!(kimi_for_coding.api, "anthropic-messages");
@@ -3387,11 +3393,16 @@ mod tests {
     fn ad_hoc_alibaba_cn_is_distinct_from_alibaba_family_aliases() {
         let alibaba = ad_hoc_provider_defaults("alibaba").expect("alibaba defaults");
         let alibaba_cn = ad_hoc_provider_defaults("alibaba-cn").expect("alibaba-cn defaults");
+        let alibaba_us = ad_hoc_provider_defaults("alibaba-us").expect("alibaba-us defaults");
         assert_eq!(canonical_provider_id("dashscope"), Some("alibaba"));
         assert_eq!(canonical_provider_id("alibaba-cn"), Some("alibaba-cn"));
+        assert_eq!(canonical_provider_id("alibaba-us"), Some("alibaba-us"));
         assert_eq!(alibaba.api, "openai-completions");
         assert_eq!(alibaba_cn.api, "openai-completions");
+        assert_eq!(alibaba_us.api, "openai-completions");
         assert_ne!(alibaba.base_url, alibaba_cn.base_url);
+        assert_ne!(alibaba.base_url, alibaba_us.base_url);
+        assert_ne!(alibaba_cn.base_url, alibaba_us.base_url);
     }
 
     #[test]

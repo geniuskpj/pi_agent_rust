@@ -960,6 +960,23 @@ pub const PROVIDER_METADATA: &[ProviderMetadata] = &[
         test_obligations: TEST_REQUIRED,
     },
     ProviderMetadata {
+        canonical_id: "alibaba-us",
+        display_name: Some("Alibaba US"),
+        aliases: &[],
+        auth_env_keys: &["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+        onboarding: ProviderOnboardingMode::OpenAICompatiblePreset,
+        routing_defaults: Some(ProviderRoutingDefaults {
+            api: "openai-completions",
+            base_url: "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+            auth_header: true,
+            reasoning: true,
+            input: &INPUT_TEXT,
+            context_window: 128_000,
+            max_tokens: 16_384,
+        }),
+        test_obligations: TEST_REQUIRED,
+    },
+    ProviderMetadata {
         canonical_id: "kimi-for-coding",
         display_name: Some("Kimi for Coding"),
         aliases: &["kimi-coding", "kimi-code"],
@@ -1557,6 +1574,7 @@ pub const PROVIDER_METADATA: &[ProviderMetadata] = &[
 ];
 
 pub fn provider_metadata(provider_id: &str) -> Option<&'static ProviderMetadata> {
+    let provider_id = provider_id.trim();
     if provider_id.is_empty() {
         return None;
     }
@@ -1649,6 +1667,16 @@ mod tests {
         assert_eq!(kimi_coding_alias.canonical_id, "kimi-for-coding");
         let kimi_code_alias = provider_metadata("kimi-code").expect("kimi-code alias metadata");
         assert_eq!(kimi_code_alias.canonical_id, "kimi-for-coding");
+    }
+
+    #[test]
+    fn metadata_trims_provider_id_whitespace() {
+        let meta = provider_metadata("  openai  ").expect("openai metadata");
+        assert_eq!(meta.canonical_id, "openai");
+        assert_eq!(
+            canonical_provider_id("  openrouter ").expect("openrouter canonical"),
+            "openrouter"
+        );
     }
 
     #[test]
@@ -1784,6 +1812,10 @@ mod tests {
         );
         assert_eq!(
             provider_auth_env_keys("alibaba"),
+            &["DASHSCOPE_API_KEY", "QWEN_API_KEY"]
+        );
+        assert_eq!(
+            provider_auth_env_keys("alibaba-us"),
             &["DASHSCOPE_API_KEY", "QWEN_API_KEY"]
         );
     }
@@ -2285,9 +2317,10 @@ mod tests {
     }
 
     #[test]
-    fn batch_b1_metadata_resolves_all_six_providers() {
+    fn batch_b1_metadata_resolves_all_seven_providers() {
         let ids = [
             "alibaba-cn",
+            "alibaba-us",
             "kimi-for-coding",
             "minimax",
             "minimax-cn",
@@ -2310,6 +2343,10 @@ mod tests {
         assert_eq!(
             provider_metadata("alibaba-cn").unwrap().auth_env_keys,
             &["DASHSCOPE_API_KEY"]
+        );
+        assert_eq!(
+            provider_metadata("alibaba-us").unwrap().auth_env_keys,
+            &["DASHSCOPE_API_KEY", "QWEN_API_KEY"]
         );
         assert_eq!(
             provider_metadata("kimi-for-coding").unwrap().auth_env_keys,
@@ -2344,6 +2381,11 @@ mod tests {
         assert!(alibaba_cn.auth_header);
         assert!(alibaba_cn.base_url.contains("dashscope.aliyuncs.com"));
 
+        let alibaba_us = provider_routing_defaults("alibaba-us").expect("alibaba-us defaults");
+        assert_eq!(alibaba_us.api, "openai-completions");
+        assert!(alibaba_us.auth_header);
+        assert!(alibaba_us.base_url.contains("dashscope-us.aliyuncs.com"));
+
         let kimi = provider_routing_defaults("kimi-for-coding").expect("kimi-for-coding defaults");
         assert_eq!(kimi.api, "anthropic-messages");
         assert!(!kimi.auth_header);
@@ -2366,9 +2408,13 @@ mod tests {
     fn batch_b1_family_coherence_is_explicit() {
         let alibaba_global = provider_routing_defaults("alibaba").expect("alibaba defaults");
         let alibaba_cn = provider_routing_defaults("alibaba-cn").expect("alibaba-cn defaults");
+        let alibaba_us = provider_routing_defaults("alibaba-us").expect("alibaba-us defaults");
         assert_eq!(alibaba_global.api, "openai-completions");
         assert_eq!(alibaba_cn.api, "openai-completions");
+        assert_eq!(alibaba_us.api, "openai-completions");
         assert_ne!(alibaba_global.base_url, alibaba_cn.base_url);
+        assert_ne!(alibaba_global.base_url, alibaba_us.base_url);
+        assert_ne!(alibaba_cn.base_url, alibaba_us.base_url);
 
         let kimi_alias = canonical_provider_id("kimi").expect("kimi alias");
         let kimi_coding = canonical_provider_id("kimi-for-coding").expect("kimi-for-coding");

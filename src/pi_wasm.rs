@@ -945,6 +945,17 @@ pub(crate) fn inject_wasm_globals(
             Func::from(
                 move |ctx: Ctx<'_>, bytes_val: Value<'_>| -> rquickjs::Result<u32> {
                     let bytes = extract_bytes(&ctx, &bytes_val)?;
+                    if bytes.len() > MAX_VIRTUAL_FILE_BYTES {
+                        return Err(throw_wasm(
+                            &ctx,
+                            "CompileError",
+                            &format!(
+                                "Module exceeds PiWasm limit ({} > {} bytes)",
+                                bytes.len(),
+                                MAX_VIRTUAL_FILE_BYTES
+                            ),
+                        ));
+                    }
                     let mut bridge = st.borrow_mut();
                     if bridge.modules.len() >= bridge.max_modules {
                         return Err(throw_wasm(
@@ -963,6 +974,22 @@ pub(crate) fn inject_wasm_globals(
                     Ok(id)
                 },
             ),
+        )?;
+    }
+
+    // ---- __pi_wasm_validate_native(bytes) → bool ----
+    {
+        let st = Rc::clone(state);
+        global.set(
+            "__pi_wasm_validate_native",
+            Func::from(move |ctx: Ctx<'_>, bytes_val: Value<'_>| -> rquickjs::Result<bool> {
+                let bytes = extract_bytes(&ctx, &bytes_val)?;
+                if bytes.len() > MAX_VIRTUAL_FILE_BYTES {
+                    return Ok(false);
+                }
+                let bridge = st.borrow();
+                Ok(WasmModule::from_binary(&bridge.engine, &bytes).is_ok())
+            }),
         )?;
     }
 
@@ -1374,6 +1401,21 @@ const WASM_POLYFILL_JS: &str = r#"
     throw new CompileError("Invalid source: expected ArrayBuffer, TypedArray, or byte array");
   }
 
+  function resolveStreamingBytes(source) {
+    if (source && typeof source.arrayBuffer === "function") {
+      return source.arrayBuffer();
+    }
+    if (source && typeof source.then === "function") {
+      return source.then(function(resp) {
+        if (resp && typeof resp.arrayBuffer === "function") {
+          return resp.arrayBuffer();
+        }
+        return resp;
+      });
+    }
+    return source;
+  }
+
   function buildExports(instanceId) {
     var info = JSON.parse(__pi_wasm_get_exports_native(instanceId));
     var exports = {};
@@ -1457,16 +1499,39 @@ const WASM_POLYFILL_JS: &str = r#"
       }
     },
 
-    validate: function(_bytes) {
-      throw new Error("WebAssembly.validate not yet supported in PiJS");
+    validate: function(source) {
+      var bytes = normalizeBytes(source);
+      return __pi_wasm_validate_native(bytes);
     },
 
-    instantiateStreaming: function() {
-      throw new Error("WebAssembly.instantiateStreaming not supported in PiJS");
+    instantiateStreaming: function(source, imports) {
+      try {
+        var bytesOrPromise = resolveStreamingBytes(source);
+        if (bytesOrPromise && typeof bytesOrPromise.then === "function") {
+          return bytesOrPromise.then(
+            function(bytes) { return WebAssembly.instantiate(bytes, imports); },
+            function(err) { return syncReject(err); }
+          );
+        }
+        return WebAssembly.instantiate(bytesOrPromise, imports);
+      } catch (e) {
+        return syncReject(e);
+      }
     },
 
-    compileStreaming: function() {
-      throw new Error("WebAssembly.compileStreaming not supported in PiJS");
+    compileStreaming: function(source) {
+      try {
+        var bytesOrPromise = resolveStreamingBytes(source);
+        if (bytesOrPromise && typeof bytesOrPromise.then === "function") {
+          return bytesOrPromise.then(
+            function(bytes) { return WebAssembly.compile(bytes); },
+            function(err) { return syncReject(err); }
+          );
+        }
+        return WebAssembly.compile(bytesOrPromise);
+      } catch (e) {
+        return syncReject(e);
+      }
     },
 
     Memory: function(descriptor) {
@@ -1786,6 +1851,54 @@ mod tests {
     }
 
     #[test]
+    fn js_polyfill_webassembly_validate_accepts_valid_module() {
+        let wasm_bytes = wat_to_wasm(r"(module)");
+        run_wasm_test(|ctx, _state| {
+            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
+            for (i, &b) in wasm_bytes.iter().enumerate() {
+                arr.set(i, i32::from(b)).unwrap();
+            }
+            ctx.globals().set("__test_bytes", arr).unwrap();
+
+            let result: bool = ctx
+                .eval("WebAssembly.validate(__test_bytes)")
+                .expect("validate");
+            assert!(result);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_validate_rejects_invalid_module() {
+        run_wasm_test(|ctx, _state| {
+            let result: bool = ctx
+                .eval("WebAssembly.validate([0, 1, 2, 3])")
+                .expect("validate");
+            assert!(!result);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_validate_does_not_register_module() {
+        let wasm_bytes = wat_to_wasm(r"(module)");
+        run_wasm_test(|ctx, state| {
+            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
+            for (i, &b) in wasm_bytes.iter().enumerate() {
+                arr.set(i, i32::from(b)).unwrap();
+            }
+            ctx.globals().set("__test_bytes", arr).unwrap();
+
+            let before = state.borrow().modules.len();
+            let result: bool = ctx
+                .eval("WebAssembly.validate(__test_bytes)")
+                .expect("validate");
+            let after = state.borrow().modules.len();
+
+            assert!(result);
+            assert_eq!(before, after);
+        });
+    }
+
+    #[test]
     fn instantiate_nonexistent_module_fails() {
         run_wasm_test(|ctx, _state| {
             let result: rquickjs::Result<u32> = ctx.eval("__pi_wasm_instantiate_native(99999)");
@@ -2031,6 +2144,70 @@ mod tests {
                 )
                 .expect("polyfill instantiate");
             assert_eq!(result, 30);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_compile_streaming() {
+        let wasm_bytes = wat_to_wasm(
+            r#"(module
+              (func (export "add") (param i32 i32) (result i32)
+                local.get 0 local.get 1 i32.add)
+            )"#,
+        );
+        run_wasm_test(|ctx, _state| {
+            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
+            for (i, &b) in wasm_bytes.iter().enumerate() {
+                arr.set(i, i32::from(b)).unwrap();
+            }
+            ctx.globals().set("__test_bytes", arr).unwrap();
+
+            let result: i32 = ctx
+                .eval(
+                    r"
+                    var __test_result = -1;
+                    var __resp = { arrayBuffer: function() { return new Uint8Array(__test_bytes).buffer; } };
+                    WebAssembly.compileStreaming(__resp).then(function(mod) {
+                        WebAssembly.instantiate(mod).then(function(r) {
+                            __test_result = r.instance.exports.add(2, 3);
+                        });
+                    });
+                    __test_result;
+                ",
+                )
+                .expect("polyfill compileStreaming");
+            assert_eq!(result, 5);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_instantiate_streaming() {
+        let wasm_bytes = wat_to_wasm(
+            r#"(module
+              (func (export "add") (param i32 i32) (result i32)
+                local.get 0 local.get 1 i32.add)
+            )"#,
+        );
+        run_wasm_test(|ctx, _state| {
+            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
+            for (i, &b) in wasm_bytes.iter().enumerate() {
+                arr.set(i, i32::from(b)).unwrap();
+            }
+            ctx.globals().set("__test_bytes", arr).unwrap();
+
+            let result: i32 = ctx
+                .eval(
+                    r"
+                    var __test_result = -1;
+                    var __resp = { arrayBuffer: function() { return new Uint8Array(__test_bytes).buffer; } };
+                    WebAssembly.instantiateStreaming(__resp).then(function(r) {
+                        __test_result = r.instance.exports.add(6, 7);
+                    });
+                    __test_result;
+                ",
+                )
+                .expect("polyfill instantiateStreaming");
+            assert_eq!(result, 13);
         });
     }
 

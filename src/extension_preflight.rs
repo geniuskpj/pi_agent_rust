@@ -369,19 +369,14 @@ pub fn known_module_support(specifier: &str) -> Option<ModuleSupport> {
 
         // P1 — partial
         "crypto" => Some(ModuleSupport::Partial),
-        "readline" => {
-            if normalized == "readline/promises" {
-                Some(ModuleSupport::Missing)
-            } else {
-                Some(ModuleSupport::Partial)
-            }
-        }
+        "readline" | "test" => Some(ModuleSupport::Partial),
         "http" | "https" => Some(ModuleSupport::Partial),
 
         // P2 — stubs
         "zlib"
         | "tty"
         | "assert"
+        | "http2"
         | "vm"
         | "v8"
         | "perf_hooks"
@@ -427,11 +422,17 @@ pub fn module_remediation(specifier: &str, support: ModuleSupport) -> Option<Str
         ("crypto", ModuleSupport::Partial) => Some(
             "Only createHash, randomBytes, and randomUUID are available. For other crypto ops, consider using the Web Crypto API.".to_string()
         ),
-        ("readline", ModuleSupport::Partial) => Some(
-            "Basic readline is available but readline/promises is not. Use callback-based readline API.".to_string()
+        ("readline", ModuleSupport::Partial | ModuleSupport::Stub) => Some(
+            "Readline uses pi.ui('input') when UI is available; otherwise prompts return empty strings. readline/promises mirrors this behavior.".to_string()
+        ),
+        ("test", ModuleSupport::Partial) => Some(
+            "node:test includes a minimal runner (test/describe/it + hooks + run). Reporters, snapshots, and concurrency controls are not supported.".to_string()
         ),
         ("http" | "https", ModuleSupport::Partial) => Some(
             "HTTP client functionality is available via fetch(). HTTP server functionality is not supported.".to_string()
+        ),
+        ("http2", ModuleSupport::Stub) => Some(
+            "node:http2 is stubbed; use fetch() for client requests instead.".to_string()
         ),
         ("net", ModuleSupport::ErrorThrow) => Some(
             "Raw TCP sockets are not available. Use fetch() for HTTP or the pi.http hostcall for network requests.".to_string()
@@ -2970,6 +2971,27 @@ mod tests {
     }
 
     #[test]
+    fn known_modules_readline_partial() {
+        assert_eq!(
+            known_module_support("node:readline"),
+            Some(ModuleSupport::Partial)
+        );
+        assert_eq!(
+            known_module_support("readline/promises"),
+            Some(ModuleSupport::Partial)
+        );
+    }
+
+    #[test]
+    fn known_modules_test_partial() {
+        assert_eq!(
+            known_module_support("node:test"),
+            Some(ModuleSupport::Partial)
+        );
+        assert_eq!(known_module_support("test"), Some(ModuleSupport::Partial));
+    }
+
+    #[test]
     fn known_modules_error_throw() {
         assert_eq!(
             known_module_support("node:net"),
@@ -2986,6 +3008,7 @@ mod tests {
     fn known_modules_stubs() {
         assert_eq!(known_module_support("zlib"), Some(ModuleSupport::Stub));
         assert_eq!(known_module_support("node:vm"), Some(ModuleSupport::Stub));
+        assert_eq!(known_module_support("node:http2"), Some(ModuleSupport::Stub));
         assert_eq!(known_module_support("chokidar"), Some(ModuleSupport::Stub));
     }
 
@@ -3014,6 +3037,27 @@ mod tests {
         let r = module_remediation("fs/promises", ModuleSupport::Partial);
         assert!(r.is_some());
         assert!(r.unwrap().contains("synchronous"));
+    }
+
+    #[test]
+    fn remediation_for_readline_partial_mentions_ui() {
+        let r = module_remediation("node:readline", ModuleSupport::Partial);
+        assert!(r.is_some());
+        assert!(r.unwrap().contains("pi.ui"));
+    }
+
+    #[test]
+    fn remediation_for_node_test_partial() {
+        let r = module_remediation("node:test", ModuleSupport::Partial);
+        assert!(r.is_some());
+        assert!(r.unwrap().contains("node:test"));
+    }
+
+    #[test]
+    fn remediation_for_http2_stub() {
+        let r = module_remediation("node:http2", ModuleSupport::Stub);
+        assert!(r.is_some());
+        assert!(r.unwrap().contains("http2"));
     }
 
     // ---- extract helpers ----

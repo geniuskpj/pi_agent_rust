@@ -103,6 +103,10 @@ pub struct Config {
     #[serde(alias = "enableSkillCommands")]
     pub enable_skill_commands: Option<bool>,
 
+    // Extension tool hook behavior
+    #[serde(alias = "failClosedHooks")]
+    pub fail_closed_hooks: Option<bool>,
+
     // Extension Policy
     #[serde(alias = "extensionPolicy")]
     pub extension_policy: Option<ExtensionPolicyConfig>,
@@ -522,6 +526,7 @@ impl Config {
             prompts: other.prompts.or(base.prompts),
             themes: other.themes.or(base.themes),
             enable_skill_commands: other.enable_skill_commands.or(base.enable_skill_commands),
+            fail_closed_hooks: other.fail_closed_hooks.or(base.fail_closed_hooks),
 
             // Extension Policy
             extension_policy: merge_extension_policy(base.extension_policy, other.extension_policy),
@@ -648,6 +653,13 @@ impl Config {
 
     pub fn enable_skill_commands(&self) -> bool {
         self.enable_skill_commands.unwrap_or(true)
+    }
+
+    pub fn fail_closed_hooks(&self) -> bool {
+        if let Some(value) = parse_env_bool("PI_EXTENSION_HOOKS_FAIL_CLOSED") {
+            return value;
+        }
+        self.fail_closed_hooks.unwrap_or(false)
     }
 
     /// Resolve the extension policy from config, CLI override, and env var.
@@ -845,27 +857,6 @@ impl Config {
     /// 2. `extensionRisk` config
     /// 3. deterministic defaults
     pub fn resolve_extension_risk_with_metadata(&self) -> ResolvedExtensionRisk {
-        fn parse_env_bool(name: &str) -> Option<bool> {
-            std::env::var(name).ok().and_then(|v| {
-                let t = v.trim();
-                if t.eq_ignore_ascii_case("1")
-                    || t.eq_ignore_ascii_case("true")
-                    || t.eq_ignore_ascii_case("yes")
-                    || t.eq_ignore_ascii_case("on")
-                {
-                    Some(true)
-                } else if t.eq_ignore_ascii_case("0")
-                    || t.eq_ignore_ascii_case("false")
-                    || t.eq_ignore_ascii_case("no")
-                    || t.eq_ignore_ascii_case("off")
-                {
-                    Some(false)
-                } else {
-                    None
-                }
-            })
-        }
-
         fn parse_env_f64(name: &str) -> Option<f64> {
             std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
         }
@@ -964,6 +955,27 @@ impl Config {
 
 fn env_lookup(var: &str) -> Option<String> {
     std::env::var(var).ok()
+}
+
+fn parse_env_bool(name: &str) -> Option<bool> {
+    std::env::var(name).ok().and_then(|v| {
+        let t = v.trim();
+        if t.eq_ignore_ascii_case("1")
+            || t.eq_ignore_ascii_case("true")
+            || t.eq_ignore_ascii_case("yes")
+            || t.eq_ignore_ascii_case("on")
+        {
+            Some(true)
+        } else if t.eq_ignore_ascii_case("0")
+            || t.eq_ignore_ascii_case("false")
+            || t.eq_ignore_ascii_case("no")
+            || t.eq_ignore_ascii_case("off")
+        {
+            Some(false)
+        } else {
+            None
+        }
+    })
 }
 
 fn global_dir_from_env<F>(get_env: F) -> PathBuf

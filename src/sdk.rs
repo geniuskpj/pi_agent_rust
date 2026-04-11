@@ -1654,6 +1654,7 @@ pub async fn create_agent_session(options: SessionOptions) -> Result<AgentSessio
         max_tool_iterations: options.max_tool_iterations,
         stream_options,
         block_images: config.image_block_images(),
+        fail_closed_hooks: config.fail_closed_hooks(),
     };
 
     let tools = ToolRegistry::new(&enabled_tools, &cwd, Some(&config));
@@ -1848,6 +1849,7 @@ mod tests {
                 max_tool_iterations: 50,
                 stream_options: StreamOptions::default(),
                 block_images: false,
+                fail_closed_hooks: false,
             },
         );
 
@@ -1958,6 +1960,7 @@ mod tests {
                 max_tool_iterations: 50,
                 stream_options: StreamOptions::default(),
                 block_images: false,
+                fail_closed_hooks: false,
             },
         );
 

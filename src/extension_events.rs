@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::extensions::{EXTENSION_EVENT_TIMEOUT_MS, ExtensionRuntimeHandle};
-use crate::model::{AssistantMessage, ContentBlock, ImageContent, Message, ToolResultMessage};
+use crate::model::{
+    AssistantMessage, ContentBlock, CustomMessage, ImageContent, Message, ToolResultMessage,
+};
 
 /// Events that can be dispatched to extension handlers.
 ///
@@ -154,6 +156,13 @@ pub struct InputEventResult {
     pub reason: Option<String>,
 }
 
+/// Result from a before_agent_start event handler.
+#[derive(Debug, Clone)]
+pub struct BeforeAgentStartOutcome {
+    pub messages: Vec<CustomMessage>,
+    pub system_prompt: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum InputEventOutcome {
     Continue {
@@ -163,6 +172,20 @@ pub enum InputEventOutcome {
     Block {
         reason: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionBeforeCompactOutcome {
+    pub cancel: bool,
+    pub compaction: Option<SessionBeforeCompactCompaction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionBeforeCompactCompaction {
+    pub summary: String,
+    pub first_kept_entry_id: String,
+    pub tokens_before: u64,
+    pub details: Option<Value>,
 }
 
 #[must_use]
@@ -251,6 +274,162 @@ pub fn apply_input_event_response(
         text: original_text,
         images: original_images,
     }
+}
+
+#[must_use]
+pub fn apply_session_before_compact_response(
+    response: Option<Value>,
+    fallback_tokens_before: u64,
+) -> SessionBeforeCompactOutcome {
+    let Some(response) = response else {
+        return SessionBeforeCompactOutcome::default();
+    };
+
+    if response.is_null() {
+        return SessionBeforeCompactOutcome::default();
+    }
+
+    if response.as_bool() == Some(false) {
+        return SessionBeforeCompactOutcome {
+            cancel: true,
+            compaction: None,
+        };
+    }
+
+    let Some(obj) = response.as_object() else {
+        return SessionBeforeCompactOutcome::default();
+    };
+
+    let cancel = obj
+        .get("cancel")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || obj
+            .get("cancelled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+    if cancel {
+        return SessionBeforeCompactOutcome {
+            cancel: true,
+            compaction: None,
+        };
+    }
+
+    let Some(compaction_value) = obj.get("compaction") else {
+        return SessionBeforeCompactOutcome::default();
+    };
+    let Some(compaction_obj) = compaction_value.as_object() else {
+        return SessionBeforeCompactOutcome::default();
+    };
+
+    let summary = compaction_obj
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let first_kept_entry_id = compaction_obj
+        .get("firstKeptEntryId")
+        .or_else(|| compaction_obj.get("first_kept_entry_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let Some(summary) = summary else {
+        return SessionBeforeCompactOutcome::default();
+    };
+    let Some(first_kept_entry_id) = first_kept_entry_id else {
+        return SessionBeforeCompactOutcome::default();
+    };
+
+    let tokens_before = compaction_obj
+        .get("tokensBefore")
+        .or_else(|| compaction_obj.get("tokens_before"))
+        .and_then(Value::as_u64)
+        .unwrap_or(fallback_tokens_before);
+    let details = compaction_obj.get("details").cloned();
+
+    SessionBeforeCompactOutcome {
+        cancel: false,
+        compaction: Some(SessionBeforeCompactCompaction {
+            summary,
+            first_kept_entry_id,
+            tokens_before,
+            details,
+        }),
+    }
+}
+
+#[must_use]
+pub fn apply_before_agent_start_response(
+    response: Option<Value>,
+    timestamp: i64,
+) -> BeforeAgentStartOutcome {
+    let mut outcome = BeforeAgentStartOutcome {
+        messages: Vec::new(),
+        system_prompt: None,
+    };
+
+    let Some(response) = response else {
+        return outcome;
+    };
+
+    if response.is_null() {
+        return outcome;
+    }
+
+    let Some(obj) = response.as_object() else {
+        return outcome;
+    };
+
+    if let Some(system_prompt) = obj
+        .get("systemPrompt")
+        .or_else(|| obj.get("system_prompt"))
+        .and_then(Value::as_str)
+    {
+        outcome.system_prompt = Some(system_prompt.to_string());
+    }
+
+    if let Some(messages_value) = obj.get("messages") {
+        if let Some(list) = messages_value.as_array() {
+            for item in list {
+                if let Some(msg) = parse_custom_message(item, timestamp) {
+                    outcome.messages.push(msg);
+                }
+            }
+        } else if let Some(msg) = parse_custom_message(messages_value, timestamp) {
+            outcome.messages.push(msg);
+        }
+        return outcome;
+    }
+
+    if let Some(message_value) = obj.get("message") {
+        if let Some(msg) = parse_custom_message(message_value, timestamp) {
+            outcome.messages.push(msg);
+        }
+    }
+
+    outcome
+}
+
+fn parse_custom_message(value: &Value, timestamp: i64) -> Option<CustomMessage> {
+    let obj = value.as_object()?;
+    let custom_type = obj
+        .get("customType")
+        .or_else(|| obj.get("custom_type"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let content = obj.get("content").and_then(Value::as_str)?.to_string();
+    let display = obj
+        .get("display")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let details = obj.get("details").cloned();
+    Some(CustomMessage {
+        content,
+        custom_type,
+        display,
+        details,
+        timestamp,
+    })
 }
 
 fn parse_input_event_images_opt(obj: &serde_json::Map<String, Value>) -> Option<Vec<ImageContent>> {

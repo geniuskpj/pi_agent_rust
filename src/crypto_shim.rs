@@ -4,9 +4,18 @@
 //! cryptographic operations (SHA-256, SHA-512, SHA-1, MD5, HMAC, random bytes,
 //! UUID generation, constant-time comparison) to the `node:crypto` JS module.
 
+use pbkdf2::pbkdf2_hmac;
 use rquickjs::prelude::Func;
+use scrypt::{scrypt, Params as ScryptParams};
 use sha2::{Digest, Sha256};
 use uuid::Builder;
+
+const KDF_MAX_OUTPUT_BYTES: usize = 1_048_576; // 1MB
+const KDF_MAX_PBKDF2_ITERATIONS: u32 = 1_000_000;
+const KDF_MAX_SCRYPT_LOG_N: u8 = 20; // N <= 2^20
+const KDF_MAX_SCRYPT_R: u32 = 16;
+const KDF_MAX_SCRYPT_P: u32 = 16;
+const KDF_MAX_SCRYPT_MEM_BYTES: usize = 32 * 1024 * 1024; // 32MB
 
 /// Register all crypto hostcalls on the QuickJS global object.
 ///
@@ -18,6 +27,8 @@ pub fn register_crypto_hostcalls(global: &rquickjs::Object<'_>) -> rquickjs::Res
     register_random_int_hostcall(global)?;
     register_random_bytes_hostcall(global)?;
     register_timing_safe_equal_hostcall(global)?;
+    register_pbkdf2_hostcall(global)?;
+    register_scrypt_hostcall(global)?;
     Ok(())
 }
 
@@ -211,6 +222,182 @@ fn register_timing_safe_equal_hostcall(global: &rquickjs::Object<'_>) -> rquickj
     )
 }
 
+fn register_pbkdf2_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Result<()> {
+    // __pi_crypto_pbkdf2_native(password, salt, iterations, keylen, digest, encoding) -> digest string
+    global.set(
+        "__pi_crypto_pbkdf2_native",
+        Func::from(
+            |password: rquickjs::TypedArray<'_, u8>,
+             salt: rquickjs::TypedArray<'_, u8>,
+             iterations: u32,
+             keylen: usize,
+             digest: String,
+             encoding: String|
+             -> rquickjs::Result<String> {
+                if iterations == 0 {
+                    return Err(rquickjs::Error::new_from_js(
+                        "number",
+                        "pbkdf2 iterations must be positive",
+                    ));
+                }
+                if keylen == 0 {
+                    return Err(rquickjs::Error::new_from_js(
+                        "number",
+                        "pbkdf2 keylen must be positive",
+                    ));
+                }
+                if keylen > KDF_MAX_OUTPUT_BYTES {
+                    let msg = format!(
+                        "pbkdf2 keylen exceeds maximum ({KDF_MAX_OUTPUT_BYTES} bytes)"
+                    );
+                    return Err(rquickjs::Error::new_into_js_message(
+                        "number",
+                        "pbkdf2",
+                        msg,
+                    ));
+                }
+                if iterations > KDF_MAX_PBKDF2_ITERATIONS {
+                    let msg = format!(
+                        "pbkdf2 iterations exceeds maximum ({KDF_MAX_PBKDF2_ITERATIONS})"
+                    );
+                    return Err(rquickjs::Error::new_into_js_message(
+                        "number",
+                        "pbkdf2",
+                        msg,
+                    ));
+                }
+                let password_bytes = password
+                    .as_bytes()
+                    .ok_or_else(|| rquickjs::Error::new_from_js("buffer", "Detached buffer"))?;
+                let salt_bytes = salt
+                    .as_bytes()
+                    .ok_or_else(|| rquickjs::Error::new_from_js("buffer", "Detached buffer"))?;
+                let mut out = vec![0u8; keylen];
+                let () = match digest.as_str() {
+                    "sha256" => {
+                        pbkdf2_hmac::<Sha256>(password_bytes, salt_bytes, iterations, &mut out);
+                    }
+                    "sha512" => {
+                        pbkdf2_hmac::<sha2::Sha512>(
+                            password_bytes,
+                            salt_bytes,
+                            iterations,
+                            &mut out,
+                        );
+                    }
+                    "sha1" => {
+                        pbkdf2_hmac::<sha1::Sha1>(password_bytes, salt_bytes, iterations, &mut out);
+                    }
+                    "md5" => {
+                        pbkdf2_hmac::<md5::Md5>(password_bytes, salt_bytes, iterations, &mut out);
+                    }
+                    _ => {
+                        return Err(rquickjs::Error::new_from_js(
+                            "string",
+                            "unsupported pbkdf2 digest",
+                        ));
+                    }
+                };
+                Ok(encode_output(&out, &encoding))
+            },
+        ),
+    )
+}
+
+fn register_scrypt_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Result<()> {
+    // __pi_crypto_scrypt_native(password, salt, keylen, log_n, r, p, encoding) -> digest string
+    global.set(
+        "__pi_crypto_scrypt_native",
+        Func::from(
+            |password: rquickjs::TypedArray<'_, u8>,
+             salt: rquickjs::TypedArray<'_, u8>,
+             keylen: usize,
+             log_n: u8,
+             r: u32,
+             p: u32,
+             encoding: String|
+             -> rquickjs::Result<String> {
+                if keylen == 0 {
+                    return Err(rquickjs::Error::new_from_js(
+                        "number",
+                        "scrypt keylen must be positive",
+                    ));
+                }
+                if keylen > KDF_MAX_OUTPUT_BYTES {
+                    let msg = format!(
+                        "scrypt keylen exceeds maximum ({KDF_MAX_OUTPUT_BYTES} bytes)"
+                    );
+                    return Err(rquickjs::Error::new_into_js_message(
+                        "number",
+                        "scrypt",
+                        msg,
+                    ));
+                }
+                if log_n > KDF_MAX_SCRYPT_LOG_N {
+                    let msg = format!(
+                        "scrypt N exceeds maximum (2^{KDF_MAX_SCRYPT_LOG_N})"
+                    );
+                    return Err(rquickjs::Error::new_into_js_message(
+                        "number",
+                        "scrypt",
+                        msg,
+                    ));
+                }
+                if r == 0 || p == 0 {
+                    return Err(rquickjs::Error::new_from_js(
+                        "number",
+                        "scrypt r/p must be positive",
+                    ));
+                }
+                if r > KDF_MAX_SCRYPT_R || p > KDF_MAX_SCRYPT_P {
+                    let msg = format!(
+                        "scrypt r/p exceeds maximum (r<= {KDF_MAX_SCRYPT_R}, p<= {KDF_MAX_SCRYPT_P})"
+                    );
+                    return Err(rquickjs::Error::new_into_js_message(
+                        "number",
+                        "scrypt",
+                        msg,
+                    ));
+                }
+                let n = 1usize
+                    .checked_shl(u32::from(log_n))
+                    .ok_or_else(|| rquickjs::Error::new_from_js("number", "invalid scrypt N"))?;
+                let mem_bytes = 128usize
+                    .checked_mul(r as usize)
+                    .and_then(|value| value.checked_mul(n))
+                    .and_then(|value| value.checked_mul(p as usize))
+                    .ok_or_else(|| {
+                        rquickjs::Error::new_from_js("number", "scrypt memory size overflow")
+                    })?;
+                if mem_bytes > KDF_MAX_SCRYPT_MEM_BYTES {
+                    let msg = format!(
+                        "scrypt parameters exceed memory limit ({KDF_MAX_SCRYPT_MEM_BYTES} bytes)"
+                    );
+                    return Err(rquickjs::Error::new_into_js_message(
+                        "number",
+                        "scrypt",
+                        msg,
+                    ));
+                }
+                let password_bytes = password
+                    .as_bytes()
+                    .ok_or_else(|| rquickjs::Error::new_from_js("buffer", "Detached buffer"))?;
+                let salt_bytes = salt
+                    .as_bytes()
+                    .ok_or_else(|| rquickjs::Error::new_from_js("buffer", "Detached buffer"))?;
+                let params = ScryptParams::new(log_n, r, p, keylen).map_err(|_| {
+                    rquickjs::Error::new_from_js("number", "invalid scrypt params")
+                })?;
+                let mut out = vec![0u8; keylen];
+                scrypt(password_bytes, salt_bytes, &params, &mut out).map_err(|_| {
+                    rquickjs::Error::new_from_js("crypto", "scrypt derivation failed")
+                })?;
+                Ok(encode_output(&out, &encoding))
+            },
+        ),
+    )
+}
+
 /// Encode bytes as hex or base64 string.
 fn encode_output(bytes: &[u8], encoding: &str) -> String {
     match encoding {
@@ -349,6 +536,14 @@ function toUint8Array(input) {
   return new TextEncoder().encode(String(input ?? ''));
 }
 
+function normalizeDigestName(input) {
+  if (input === undefined || input === null) return 'sha1';
+  return String(input)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
 function unsupportedCryptoApi(name) {
   throw new Error(`${name} is not implemented in the Pi node:crypto shim`);
 }
@@ -362,6 +557,10 @@ export function randomUUID() {
 }
 
 export function createHash(algorithm) {
+  if (algorithm === undefined || algorithm === null || String(algorithm).trim() === '') {
+    throw new Error('createHash: algorithm is required');
+  }
+  const algo = normalizeDigestName(algorithm);
   const chunks = [];
   let finalized = false;
   return {
@@ -379,7 +578,7 @@ export function createHash(algorithm) {
       finalized = true;
       const hashNative = requireCryptoHostcall('__pi_crypto_hash_native', 'createHash');
       const data = combineChunks(chunks);
-      const hex = hashNative(algorithm, data, 'hex');
+      const hex = hashNative(algo, data, 'hex');
       if (!encoding) return hexToBuffer(hex);
       if (encoding === 'hex') return hex;
       if (encoding === 'base64') {
@@ -392,6 +591,10 @@ export function createHash(algorithm) {
 }
 
 export function createHmac(algorithm, key) {
+  if (algorithm === undefined || algorithm === null || String(algorithm).trim() === '') {
+    throw new Error('createHmac: algorithm is required');
+  }
+  const algo = normalizeDigestName(algorithm);
   const chunks = [];
   const keyBuf = toUint8Array(key);
   let finalized = false;
@@ -410,7 +613,7 @@ export function createHmac(algorithm, key) {
       finalized = true;
       const hmacNative = requireCryptoHostcall('__pi_crypto_hmac_native', 'createHmac');
       const data = combineChunks(chunks);
-      const hex = hmacNative(algorithm, keyBuf, data, 'hex');
+      const hex = hmacNative(algo, keyBuf, data, 'hex');
       if (!encoding) return hexToBuffer(hex);
       if (encoding === 'hex') return hex;
       if (encoding === 'base64') {
@@ -423,7 +626,7 @@ export function createHmac(algorithm, key) {
 }
 
 export function randomBytes(size) {
-  if (!Number.isInteger(size) || size < 0) {
+  if (!Number.isSafeInteger(size) || size < 0) {
     throw new Error('randomBytes: size must be a non-negative integer');
   }
   const randomBytesNative = requireCryptoHostcall(
@@ -435,8 +638,11 @@ export function randomBytes(size) {
 
 export function randomInt(min, max) {
   if (max === undefined) { max = min; min = 0; }
-  if (!Number.isInteger(min) || !Number.isInteger(max)) {
-    throw new Error('randomInt: min/max must be integers');
+  if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) {
+    throw new Error('randomInt: min/max must be safe integers');
+  }
+  if (min >= max) {
+    throw new Error('randomInt: min must be less than max');
   }
   const randomIntNative = requireCryptoHostcall(
     '__pi_crypto_random_int_native',
@@ -461,12 +667,45 @@ export function getHashes() {
 }
 
 export function pbkdf2Sync(password, salt, iterations, keylen, digest) {
-  unsupportedCryptoApi('pbkdf2Sync');
+  const algo = normalizeDigestName(digest);
+  if (!Number.isSafeInteger(iterations) || iterations <= 0) {
+    throw new Error('pbkdf2Sync: iterations must be a positive integer');
+  }
+  if (!Number.isSafeInteger(keylen) || keylen <= 0) {
+    throw new Error('pbkdf2Sync: keylen must be a positive integer');
+  }
+  if (iterations > 1000000) {
+    throw new Error('pbkdf2Sync: iterations must be <= 1000000');
+  }
+  if (keylen > 1048576) {
+    throw new Error('pbkdf2Sync: keylen must be <= 1048576');
+  }
+  const pbkdf2Native = requireCryptoHostcall(
+    '__pi_crypto_pbkdf2_native',
+    'pbkdf2Sync',
+  );
+  const hex = pbkdf2Native(
+    toUint8Array(password),
+    toUint8Array(salt),
+    iterations,
+    keylen,
+    algo,
+    'hex',
+  );
+  return hexToBuffer(hex);
 }
 
 export function pbkdf2(password, salt, iterations, keylen, digest, callback) {
+  if (typeof digest === 'function') {
+    callback = digest;
+    digest = undefined;
+  }
+  if (typeof callback !== 'function') {
+    throw new Error('pbkdf2: callback is required');
+  }
   try {
-    callback(unsupportedCryptoApi('pbkdf2'));
+    const value = pbkdf2Sync(password, salt, iterations, keylen, digest);
+    callback(null, value);
   } catch (e) {
     callback(e);
   }
@@ -480,14 +719,75 @@ export function createDecipheriv(algorithm, key, iv) {
   unsupportedCryptoApi('createDecipheriv');
 }
 
-export function scryptSync(password, salt, keylen) {
-  unsupportedCryptoApi('scryptSync');
+export function scryptSync(password, salt, keylen, options) {
+  if (!Number.isSafeInteger(keylen) || keylen <= 0) {
+    throw new Error('scryptSync: keylen must be a positive integer');
+  }
+  if (keylen > 1048576) {
+    throw new Error('scryptSync: keylen must be <= 1048576');
+  }
+  let encoding;
+  let opts = {};
+  if (typeof options === 'string') {
+    encoding = options;
+  } else if (options && typeof options === 'object') {
+    opts = options;
+    if (typeof options.encoding === 'string') {
+      encoding = options.encoding;
+    }
+  }
+  const nRaw = Number.isSafeInteger(opts.N)
+    ? opts.N
+    : (Number.isSafeInteger(opts.cost) ? opts.cost : 16384);
+  const r = Number.isSafeInteger(opts.r) ? opts.r : 8;
+  const p = Number.isSafeInteger(opts.p) ? opts.p : 1;
+  if (r <= 0 || p <= 0) {
+    throw new Error('scryptSync: r/p must be positive integers');
+  }
+  if (!Number.isSafeInteger(nRaw) || nRaw <= 1) {
+    throw new Error('scryptSync: N must be an integer > 1');
+  }
+  const logN = Math.log2(nRaw);
+  if (!Number.isFinite(logN) || Math.floor(logN) !== logN) {
+    throw new Error('scryptSync: N must be a power of two');
+  }
+  if (logN > 20) {
+    throw new Error('scryptSync: N must be <= 2^20');
+  }
+  if (r > 16 || p > 16) {
+    throw new Error('scryptSync: r/p must be <= 16');
+  }
+  const maxMem = 32 * 1024 * 1024;
+  const n = 1 << logN;
+  const memBytes = 128 * r * n * p;
+  if (memBytes > maxMem) {
+    throw new Error(`scryptSync: parameters exceed memory limit (${maxMem} bytes)`);
+  }
+  const scryptNative = requireCryptoHostcall(
+    '__pi_crypto_scrypt_native',
+    'scryptSync',
+  );
+  const hex = scryptNative(
+    toUint8Array(password),
+    toUint8Array(salt),
+    keylen,
+    logN,
+    r,
+    p,
+    'hex',
+  );
+  const buffer = hexToBuffer(hex);
+  return encoding ? buffer.toString(encoding) : buffer;
 }
 
 export function scrypt(password, salt, keylen, options, callback) {
   if (typeof options === 'function') { callback = options; }
+  if (typeof callback !== 'function') {
+    throw new Error('scrypt: callback is required');
+  }
   try {
-    callback(unsupportedCryptoApi('scrypt'));
+    const value = scryptSync(password, salt, keylen, options);
+    callback(null, value);
   } catch (e) {
     callback(e);
   }

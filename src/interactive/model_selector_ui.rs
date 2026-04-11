@@ -166,8 +166,12 @@ impl PiApp {
             }
         };
 
-        if let Err(message) =
-            self.switch_active_model(&next, provider_impl, resolved_key_opt.as_deref())
+        if let Err(message) = self.switch_active_model(
+            &next,
+            provider_impl,
+            resolved_key_opt.as_deref(),
+            "selector",
+        )
         {
             self.status_message = Some(message);
             return;

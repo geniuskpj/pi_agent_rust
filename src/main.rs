@@ -13,6 +13,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, UNIX_EPOCH};
@@ -916,7 +917,7 @@ async fn run(
     )
     .await;
 
-    let resources = match resources_result {
+    let mut resources = match resources_result {
         Ok(resources) => resources,
         Err(err) => {
             if resource_cli.has_explicit_paths() {
@@ -1238,6 +1239,7 @@ async fn run(
         max_tool_iterations: 50,
         stream_options,
         block_images: config.image_block_images(),
+        fail_closed_hooks: config.fail_closed_hooks(),
     };
 
     let tools = ToolRegistry::new(&enabled_tools, &cwd, Some(&config));
@@ -1362,6 +1364,38 @@ async fn run(
                             "Failed to refresh extension OAuth tokens, continuing with existing credentials"
                         );
                     }
+                }
+            }
+
+            let discovered = region.manager().discover_resources(&cwd, "startup").await;
+            if !discovered.is_empty() {
+                if let Err(err) = resources.extend_with_paths(&cwd, &discovered) {
+                    tracing::warn!(
+                        event = "pi.resources.startup.extension_paths_failed",
+                        error = %err,
+                        "Failed to apply extension-discovered resource paths"
+                    );
+                } else {
+                    let skills_prompt = if enabled_tools.contains(&"read") {
+                        resources.format_skills_for_prompt()
+                    } else {
+                        String::new()
+                    };
+                    let system_prompt = pi::app::build_system_prompt(
+                        &cli,
+                        &cwd,
+                        &enabled_tools,
+                        if skills_prompt.is_empty() {
+                            None
+                        } else {
+                            Some(skills_prompt.as_str())
+                        },
+                        &global_dir,
+                        &package_dir,
+                        test_mode,
+                        !cli.hide_cwd_in_prompt,
+                    )?;
+                    agent_session.agent.set_system_prompt(Some(system_prompt));
                 }
             }
         }
@@ -3225,6 +3259,7 @@ fn list_models(registry: &ModelRegistry, pattern: Option<&str>) {
 
     let rows = build_model_rows(&models);
     print_model_table(&rows);
+    maybe_print_list_models_note(&rows, pattern);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3259,8 +3294,29 @@ fn list_models_from_cached_rows(rows: &[CachedModelRow], pattern: Option<&str>) 
             return;
         }
         print_model_table(&filtered);
+        maybe_print_list_models_note(&filtered, Some(pattern));
     } else {
         print_model_table(rows);
+        maybe_print_list_models_note(rows, None);
+    }
+}
+
+fn maybe_print_list_models_note<R: ModelTableRow>(rows: &[R], pattern: Option<&str>) {
+    if pattern.is_some() {
+        return;
+    }
+
+    let mut providers = BTreeSet::new();
+    for row in rows {
+        providers.insert(row.provider());
+    }
+    let shown = providers.len();
+    let total = PROVIDER_METADATA.len();
+
+    if shown < total {
+        println!(
+            "Showing {shown} of {total} providers. Run `pi --list-providers` to see all."
+        );
     }
 }
 
@@ -4324,6 +4380,7 @@ async fn run_print_mode(
             finish_print_text_response(
                 &message,
                 snapshot_print_text_stream_state(&text_stream_state),
+                config,
             )?;
         }
     }
@@ -4347,6 +4404,7 @@ async fn run_print_mode(
             finish_print_text_response(
                 &response,
                 snapshot_print_text_stream_state(&text_stream_state),
+                config,
             )?;
         }
     }
@@ -4436,6 +4494,7 @@ fn reset_print_text_stream_state(state: &Arc<StdMutex<PrintTextStreamState>>) {
 fn finish_print_text_response(
     message: &AssistantMessage,
     stream_state: PrintTextStreamState,
+    config: &Config,
 ) -> Result<()> {
     if matches!(message.stop_reason, StopReason::Error | StopReason::Aborted) {
         emit_trailing_print_newline(stream_state)?;
@@ -4462,7 +4521,12 @@ fn finish_print_text_response(
 
             if !markdown.is_empty() {
                 let console = PiConsole::new();
-                console.render_markdown(&markdown);
+                let code_block_indent = config
+                    .markdown
+                    .as_ref()
+                    .and_then(|m| m.code_block_indent)
+                    .map(|indent| indent as usize);
+                console.render_markdown_with_indent(&markdown, code_block_indent);
             }
         } else {
             pi::app::output_final_text(message);

@@ -320,7 +320,7 @@ fn compare_optional_semantic_value(
     kind: DiffKind,
     diffs: &mut Vec<DiffItem>,
 ) {
-    if expected.is_none() && actual.is_none() {
+    if missing_equals_null_or_empty_array(expected, actual) {
         return;
     }
     let left = expected.unwrap_or(&Value::Null);
@@ -2681,6 +2681,24 @@ mod tests {
     use serde_json::{Map, Value, json};
     use std::collections::BTreeSet;
 
+    fn base_conformance_output() -> Value {
+        json!({
+            "extension_id": "ext",
+            "name": "Ext",
+            "version": "1.0.0",
+            "registrations": {
+                "commands": [],
+                "shortcuts": [],
+                "flags": [],
+                "providers": [],
+                "tool_defs": [],
+                "models": [],
+                "event_hooks": []
+            },
+            "hostcall_log": []
+        })
+    }
+
     #[test]
     fn ignores_registration_ordering_by_key() {
         let expected = json!({
@@ -2813,6 +2831,19 @@ mod tests {
             }
         });
 
+        compare_conformance_output(&expected, &actual).unwrap();
+    }
+
+    #[test]
+    fn optional_events_missing_equals_empty_array() {
+        let expected = base_conformance_output();
+        let mut actual = base_conformance_output();
+        actual["events"] = Value::Array(Vec::new());
+        compare_conformance_output(&expected, &actual).unwrap();
+
+        let mut expected = base_conformance_output();
+        expected["events"] = Value::Array(Vec::new());
+        let actual = base_conformance_output();
         compare_conformance_output(&expected, &actual).unwrap();
     }
 

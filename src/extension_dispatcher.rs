@@ -1943,7 +1943,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
     #[allow(clippy::future_not_send)]
     async fn dispatch_hostcall_io_uring(&self, request: &HostcallRequest) -> IoUringBridgeDispatch {
-        if !self.js_runtime().is_hostcall_pending(&request.call_id) {
+        if !self.js_runtime().is_hostcall_active(&request.call_id) {
             return IoUringBridgeDispatch {
                 outcome: HostcallOutcome::Error {
                     code: "cancelled".to_string(),
@@ -1958,7 +1958,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
         // Keep bridge semantics explicit while delegating execution to the
         // existing fast hostcall path until the ring executor lands.
         let delegated_outcome = self.dispatch_hostcall_fast(request).await;
-        if !self.js_runtime().is_hostcall_pending(&request.call_id) {
+        if !self.js_runtime().is_hostcall_active(&request.call_id) {
             return IoUringBridgeDispatch {
                 outcome: HostcallOutcome::Error {
                     code: "cancelled".to_string(),
@@ -2813,11 +2813,12 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
             let mut sequence = 0_u64;
             loop {
-                if !self.js_runtime().is_hostcall_pending(call_id) {
+                if !self.js_runtime().is_hostcall_active(call_id) {
                     cancel.store(true, AtomicOrdering::SeqCst);
-                    return HostcallOutcome::Error {
-                        code: "cancelled".to_string(),
-                        message: "exec stream cancelled".to_string(),
+                    return HostcallOutcome::StreamChunk {
+                        sequence,
+                        chunk: serde_json::Value::Null,
+                        is_final: false,
                     };
                 }
 

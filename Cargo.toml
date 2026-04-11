@@ -96,6 +96,8 @@ sha2 = "0.10"
 sha1 = "0.10"
 md-5 = "0.10"
 hmac = "0.12"
+pbkdf2 = { version = "0.12.2", features = ["hmac"] }
+scrypt = { version = "0.11.0", default-features = false }
 getrandom = "0.4.1"
 regex = "1.12.3"
 semver = "1.0.27"

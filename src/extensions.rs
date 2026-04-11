@@ -22,6 +22,7 @@ use crate::hostcall_superinstructions::{
 };
 use crate::hostcall_trace_jit::{GuardContext, TraceJitCompiler};
 use crate::permissions::{PermissionStore, PersistedDecision};
+use crate::resources::ExtensionResourcePaths;
 use crate::scheduler::HostcallOutcome;
 use crate::session::SessionMessage;
 use crate::tools::ToolRegistry;
@@ -12507,7 +12508,19 @@ impl ExtensionUiRequest {
     pub fn expects_response(&self) -> bool {
         matches!(
             self.method.as_str(),
-            "select" | "confirm" | "input" | "editor" | "custom"
+            "select"
+                | "confirm"
+                | "input"
+                | "editor"
+                | "custom"
+                | "getEditorText"
+                | "get_editor_text"
+                | "getAllThemes"
+                | "get_all_themes"
+                | "getTheme"
+                | "get_theme"
+                | "setTheme"
+                | "set_theme"
         )
     }
 
@@ -15156,6 +15169,8 @@ pub enum ExtensionEventName {
     Input,
     /// Before the agent starts processing.
     BeforeAgentStart,
+    /// Before provider call; can modify context messages.
+    Context,
     /// Agent started processing.
     AgentStart,
     /// Agent ended processing.
@@ -15180,6 +15195,8 @@ pub enum ExtensionEventName {
     ToolCall,
     /// Tool result (post-exec; can modify).
     ToolResult,
+    /// Session start.
+    SessionStart,
     /// Session before switch.
     SessionBeforeSwitch,
     /// Session switched.
@@ -15192,6 +15209,18 @@ pub enum ExtensionEventName {
     SessionBeforeCompact,
     /// Session compacted.
     SessionCompact,
+    /// Resource discovery request.
+    ResourcesDiscover,
+    /// Model selection changed.
+    ModelSelect,
+    /// User-initiated bash command.
+    UserBash,
+    /// Session before tree view.
+    SessionBeforeTree,
+    /// Session tree navigation.
+    SessionTree,
+    /// Session shutdown.
+    SessionShutdown,
 }
 
 impl std::fmt::Display for ExtensionEventName {
@@ -15200,6 +15229,7 @@ impl std::fmt::Display for ExtensionEventName {
             Self::Startup => "startup",
             Self::Input => "input",
             Self::BeforeAgentStart => "before_agent_start",
+            Self::Context => "context",
             Self::AgentStart => "agent_start",
             Self::AgentEnd => "agent_end",
             Self::TurnStart => "turn_start",
@@ -15212,12 +15242,19 @@ impl std::fmt::Display for ExtensionEventName {
             Self::ToolExecutionEnd => "tool_execution_end",
             Self::ToolCall => "tool_call",
             Self::ToolResult => "tool_result",
+            Self::SessionStart => "session_start",
             Self::SessionBeforeSwitch => "session_before_switch",
             Self::SessionSwitch => "session_switch",
             Self::SessionBeforeFork => "session_before_fork",
             Self::SessionFork => "session_fork",
             Self::SessionBeforeCompact => "session_before_compact",
             Self::SessionCompact => "session_compact",
+            Self::ResourcesDiscover => "resources_discover",
+            Self::ModelSelect => "model_select",
+            Self::UserBash => "user_bash",
+            Self::SessionBeforeTree => "session_before_tree",
+            Self::SessionTree => "session_tree",
+            Self::SessionShutdown => "session_shutdown",
         };
         write!(f, "{name}")
     }
@@ -16469,6 +16506,7 @@ mod native_runtime_experimental {
                                     slash_commands: snapshot.slash_commands,
                                     shortcuts: snapshot.shortcuts,
                                     providers: snapshot.providers,
+                                    mcp_servers: snapshot.mcp_servers,
                                     flags: snapshot.flags,
                                     event_hooks: snapshot.event_hooks,
                                     active_tools: snapshot.active_tools,
@@ -16776,6 +16814,8 @@ struct JsExtensionSnapshot {
     #[serde(default)]
     providers: Vec<Value>,
     #[serde(default)]
+    mcp_servers: Vec<Value>,
+    #[serde(default)]
     flags: Vec<Value>,
     #[serde(default)]
     event_hooks: Vec<String>,
@@ -17053,6 +17093,12 @@ enum JsRuntimeCommand {
         flag_name: String,
         value: Value,
         reply: oneshot::Sender<Result<()>>,
+    },
+    RegisterMcpServer {
+        extension_id: String,
+        name: String,
+        spec: Value,
+        reply: oneshot::Sender<Result<Value>>,
     },
     /// Drain accumulated auto-repair events from the runtime.
     DrainRepairEvents {
@@ -17476,6 +17522,25 @@ impl JsExtensionRuntimeHandle {
                                 .await;
                             let _ = reply.send(&cx, result);
                         }
+                        JsRuntimeCommand::RegisterMcpServer {
+                            extension_id,
+                            name,
+                            spec,
+                            reply,
+                        } => {
+                            let result = js_runtime
+                                .with_ctx(|ctx| {
+                                    let global = ctx.globals();
+                                    let register_fn: rquickjs::Function<'_> = global
+                                        .get("__pi_register_mcp_server_for_extension")?;
+                                    let spec_js = json_to_js(&ctx, &spec)?;
+                                    let value: rquickjs::Value<'_> =
+                                        register_fn.call((extension_id.as_str(), name.as_str(), spec_js))?;
+                                    js_to_json(&value)
+                                })
+                                .await;
+                            let _ = reply.send(&cx, result);
+                        }
                         JsRuntimeCommand::DrainRepairEvents { reply } => {
                             let events = js_runtime.drain_repair_events();
                             let _ = reply.send(&cx, events);
@@ -17854,6 +17919,41 @@ impl JsExtensionRuntimeHandle {
             })
     }
 
+    pub async fn register_mcp_server(
+        &self,
+        extension_id: String,
+        name: String,
+        spec: Value,
+    ) -> Result<Value> {
+        let timeout_ms = EXTENSION_QUERY_BUDGET_MS;
+        let cx = cx_with_deadline(timeout_ms);
+        let (reply_tx, mut reply_rx) = oneshot::channel();
+        let command = JsRuntimeCommand::RegisterMcpServer {
+            extension_id,
+            name,
+            spec,
+            reply: reply_tx,
+        };
+        let fut = async move {
+            self.sender
+                .send(&cx, command)
+                .await
+                .map_err(|_| Error::extension("JS extension runtime channel closed"))?;
+            reply_rx
+                .recv(&cx)
+                .await
+                .map_err(|_| Error::extension("JS extension runtime task cancelled"))?
+        };
+
+        timeout(wall_now(), Duration::from_millis(timeout_ms), Box::pin(fut))
+            .await
+            .unwrap_or_else(|_| {
+                Err(Error::extension(format!(
+                    "JS extension runtime MCP registration timed out after {timeout_ms}ms"
+                )))
+            })
+    }
+
     /// Drain all accumulated auto-repair events from the JS runtime.
     pub async fn drain_repair_events(&self) -> Vec<ExtensionRepairEvent> {
         let cx = cx_with_deadline(EXTENSION_QUERY_BUDGET_MS);
@@ -18049,6 +18149,8 @@ mod native_runtime_duplicate_scaffold {
         shortcuts: Vec<Value>,
         #[serde(default)]
         providers: Vec<Value>,
+        #[serde(default)]
+        mcp_servers: Vec<Value>,
         #[serde(default)]
         flags: Vec<Value>,
         #[serde(default)]
@@ -18636,6 +18738,7 @@ mod native_runtime_duplicate_scaffold {
                 slash_commands: descriptor.slash_commands,
                 shortcuts: descriptor.shortcuts,
                 providers: descriptor.providers,
+                mcp_servers: descriptor.mcp_servers,
                 flags: descriptor.flags,
                 event_hooks: descriptor.event_hooks,
                 active_tools: descriptor.active_tools,
@@ -19299,6 +19402,30 @@ fn find_package_json_ancestors(mut dir: Option<&Path>) -> Vec<PathBuf> {
         dir = current.parent();
     }
     out
+}
+
+fn collect_extension_roots_from_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    for entry_path in paths {
+        let Some(parent) = entry_path.parent() else {
+            continue;
+        };
+        let root = safe_canonicalize(parent);
+        if seen.insert(root.clone()) {
+            roots.push(root);
+        }
+
+        for package_json in find_package_json_ancestors(Some(parent)) {
+            if let Some(package_dir) = package_json.parent() {
+                let root = safe_canonicalize(package_dir);
+                if seen.insert(root.clone()) {
+                    roots.push(root);
+                }
+            }
+        }
+    }
+    roots
 }
 
 fn extract_node_modules_package_name(entry: &str) -> Option<String> {
@@ -20144,7 +20271,7 @@ async fn pump_js_runtime_once(runtime: &PiJsRuntime, host: &JsRuntimeHost) -> Re
         req: HostcallRequest,
     ) -> Option<(String, HostcallOutcome, u64)> {
         let call_id = req.call_id.clone();
-        if !runtime.is_hostcall_pending(&call_id) {
+        if !runtime.is_hostcall_active(&call_id) {
             tracing::debug!(
                 event = "pijs.hostcall.skip_cancelled",
                 call_id = %call_id,
@@ -22485,10 +22612,11 @@ async fn dispatch_hostcall_exec_ref_with_limit(
 
     if stream {
         if let Some(runtime) = runtime {
-            if !runtime.is_hostcall_pending(call_id) {
-                return HostcallOutcome::Error {
-                    code: "timeout".to_string(),
-                    message: "exec stream cancelled".to_string(),
+            if !runtime.is_hostcall_active(call_id) {
+                return HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: Value::Null,
+                    is_final: false,
                 };
             }
 
@@ -22588,11 +22716,12 @@ async fn dispatch_hostcall_exec_ref_with_limit(
             let mut sequence = 0_u64;
             let call_id_owned = call_id.to_string();
             loop {
-                if !runtime.is_hostcall_pending(call_id) {
+                if !runtime.is_hostcall_active(call_id) {
                     cancel.store(true, AtomicOrdering::SeqCst);
-                    return HostcallOutcome::Error {
-                        code: "timeout".to_string(),
-                        message: "exec stream cancelled".to_string(),
+                    return HostcallOutcome::StreamChunk {
+                        sequence,
+                        chunk: Value::Null,
+                        is_final: false,
                     };
                 }
 
@@ -23877,6 +24006,8 @@ pub(crate) struct RegistrySnapshot {
     pub active_tools: Option<Vec<String>>,
     /// Registered provider specs.
     pub providers: Vec<Value>,
+    /// Registered MCP server specs.
+    pub mcp_servers: Vec<Value>,
     /// Registered flags.
     pub flags: Vec<Value>,
     /// Current working directory.
@@ -23977,6 +24108,7 @@ struct CachedEventContext {
 #[derive(Default)]
 struct ExtensionManagerInner {
     extensions: Vec<RegisterPayload>,
+    extension_roots: Vec<PathBuf>,
     extension_versions: HashMap<String, String>,
     runtime: Option<ExtensionRuntimeHandle>,
     #[cfg(feature = "wasm-host")]
@@ -23986,6 +24118,7 @@ struct ExtensionManagerInner {
     session: Option<Arc<dyn ExtensionSession>>,
     active_tools: Option<Vec<String>>,
     providers: Vec<Value>,
+    mcp_servers: Vec<Value>,
     flags: Vec<Value>,
     cwd: Option<String>,
     model_registry_values: HashMap<String, String>,
@@ -24120,6 +24253,13 @@ impl ExtensionRegion {
             .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
             return true; // already done
+        }
+        if let Err(err) = self
+            .manager
+            .dispatch_event(ExtensionEventName::SessionShutdown, None)
+            .await
+        {
+            tracing::warn!("session_shutdown extension hook failed (fail-open): {err}");
         }
         self.manager.shutdown(self.cleanup_budget).await
     }
@@ -24365,6 +24505,7 @@ impl ExtensionManager {
             session: inner.session.clone(),
             active_tools: inner.active_tools.clone(),
             providers: inner.providers.clone(),
+            mcp_servers: inner.mcp_servers.clone(),
             flags: inner.flags.clone(),
             cwd: inner.cwd.clone(),
             model_registry_values: inner.model_registry_values.clone(),
@@ -27170,11 +27311,63 @@ impl ExtensionManager {
         self.read_snapshot().active_tools.clone()
     }
 
+    fn extension_roots(&self) -> Vec<PathBuf> {
+        let guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.extension_roots.clone()
+    }
+
+    fn resolve_resource_paths(
+        cwd: &Path,
+        roots: &[PathBuf],
+        raw_paths: Vec<String>,
+    ) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+
+        for raw in raw_paths {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let candidate = PathBuf::from(trimmed);
+            let resolved = if candidate.is_absolute() {
+                candidate
+            } else {
+                let mut resolved = None;
+                for root in roots {
+                    let joined = root.join(&candidate);
+                    if joined.exists() {
+                        resolved = Some(joined);
+                        break;
+                    }
+                }
+                resolved.unwrap_or_else(|| cwd.join(&candidate))
+            };
+
+            let key = safe_canonicalize(&resolved);
+            if seen.insert(key) {
+                out.push(resolved);
+            }
+        }
+
+        out
+    }
+
     #[allow(clippy::significant_drop_tightening, clippy::too_many_lines)]
     pub async fn load_js_extensions(&self, specs: Vec<JsExtensionLoadSpec>) -> Result<()> {
         let runtime = self
             .runtime()
             .ok_or_else(|| Error::extension("Extension runtime not configured"))?;
+
+        let entry_paths = specs
+            .iter()
+            .map(|spec| spec.entry_path.clone())
+            .collect::<Vec<_>>();
+        let extension_roots = collect_extension_roots_from_paths(&entry_paths);
 
         let compat_hints_by_extension = if compat_static_registration_enabled() {
             Some(build_compat_registration_hints(&specs))
@@ -27188,6 +27381,7 @@ impl ExtensionManager {
         let mut extension_versions = HashMap::new();
         let mut active_tools: Option<Vec<String>> = None;
         let mut all_providers = Vec::new();
+        let mut all_mcp_servers = Vec::new();
         let mut all_flags = Vec::new();
         for snapshot in snapshots {
             let JsExtensionSnapshot {
@@ -27198,6 +27392,7 @@ impl ExtensionManager {
                 mut tools,
                 mut slash_commands,
                 providers,
+                mcp_servers,
                 shortcuts,
                 flags,
                 event_hooks,
@@ -27215,6 +27410,13 @@ impl ExtensionManager {
                 }
             }
             all_providers.extend(providers);
+            all_mcp_servers.extend(mcp_servers.into_iter().map(|mut server| {
+                if let Some(obj) = server.as_object_mut() {
+                    obj.entry("extension_id".to_string())
+                        .or_insert_with(|| Value::String(id.clone()));
+                }
+                server
+            }));
             let extension_name = if name.is_empty() {
                 id.clone()
             } else {
@@ -27255,9 +27457,11 @@ impl ExtensionManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.extensions = payloads;
+            guard.extension_roots = extension_roots;
             guard.extension_versions = extension_versions;
             guard.active_tools = active_tools;
             guard.providers = all_providers;
+            guard.mcp_servers = all_mcp_servers;
             guard.flags = all_flags;
             // Rebuild hook_bitmap from the freshly-loaded extensions so that
             // dispatch_tool_result / dispatch_event can find registered hooks.
@@ -27283,7 +27487,7 @@ impl ExtensionManager {
         Ok(())
     }
 
-    #[allow(clippy::significant_drop_tightening)]
+    #[allow(clippy::significant_drop_tightening, clippy::too_many_lines)]
     pub async fn load_native_extensions(
         &self,
         specs: Vec<NativeRustExtensionLoadSpec>,
@@ -27292,11 +27496,18 @@ impl ExtensionManager {
             .runtime()
             .ok_or_else(|| Error::extension("Extension runtime not configured"))?;
 
+        let entry_paths = specs
+            .iter()
+            .map(|spec| spec.entry_path.clone())
+            .collect::<Vec<_>>();
+        let extension_roots = collect_extension_roots_from_paths(&entry_paths);
+
         let snapshots = runtime.load_native_extensions_snapshots(specs).await?;
         let mut payloads = Vec::new();
         let mut extension_versions = HashMap::new();
         let mut active_tools: Option<Vec<String>> = None;
         let mut all_providers = Vec::new();
+        let mut all_mcp_servers = Vec::new();
         let mut all_flags = Vec::new();
 
         for snapshot in snapshots {
@@ -27308,12 +27519,20 @@ impl ExtensionManager {
                 tools,
                 slash_commands,
                 providers,
+                mcp_servers,
                 shortcuts,
                 flags,
                 event_hooks,
                 active_tools: ext_active_tools,
             } = snapshot;
             all_providers.extend(providers);
+            all_mcp_servers.extend(mcp_servers.into_iter().map(|mut server| {
+                if let Some(obj) = server.as_object_mut() {
+                    obj.entry("extension_id".to_string())
+                        .or_insert_with(|| Value::String(id.clone()));
+                }
+                server
+            }));
             let extension_name = if name.is_empty() {
                 id.clone()
             } else {
@@ -27355,9 +27574,11 @@ impl ExtensionManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.extensions = payloads;
+            guard.extension_roots = extension_roots;
             guard.extension_versions = extension_versions;
             guard.active_tools = active_tools;
             guard.providers = all_providers;
+            guard.mcp_servers = all_mcp_servers;
             guard.flags = all_flags;
             guard.hook_bitmap.clear();
             let hooks: Vec<String> = guard
@@ -27388,6 +27609,12 @@ impl ExtensionManager {
         specs: Vec<WasmExtensionLoadSpec>,
         tools: Arc<ToolRegistry>,
     ) -> Result<()> {
+        let entry_paths = specs
+            .iter()
+            .map(|spec| spec.entry_path.clone())
+            .collect::<Vec<_>>();
+        let extension_roots = collect_extension_roots_from_paths(&entry_paths);
+
         let mut wasm_handles = Vec::new();
         let mut registrations = Vec::new();
 
@@ -27420,6 +27647,18 @@ impl ExtensionManager {
                 .inner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !extension_roots.is_empty() {
+                let mut seen = HashSet::new();
+                for root in &guard.extension_roots {
+                    seen.insert(safe_canonicalize(root));
+                }
+                for root in extension_roots {
+                    let key = safe_canonicalize(&root);
+                    if seen.insert(key) {
+                        guard.extension_roots.push(root);
+                    }
+                }
+            }
             for registration in &registrations {
                 guard
                     .extension_versions
@@ -27575,6 +27814,39 @@ impl ExtensionManager {
         self.refresh_snapshot_with_guard_release(guard);
     }
 
+    /// Dynamically register an MCP server at runtime (from a hostcall).
+    pub fn register_mcp_server(&self, mut spec: Value) {
+        let name = spec
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        if name.is_empty() {
+            tracing::warn!(
+                event = "pi.extensions.mcp_invalid_spec",
+                "Skipping MCP server registration with missing name"
+            );
+            return;
+        }
+        let name = name.to_string();
+        if let Some(obj) = spec.as_object_mut() {
+            if obj.get("name").and_then(Value::as_str) != Some(name.as_str()) {
+                obj.insert("name".to_string(), Value::String(name.clone()));
+            }
+        }
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.mcp_servers.retain(|s| {
+            s.get("name")
+                .and_then(Value::as_str)
+                .is_none_or(|existing| existing != name.as_str())
+        });
+        guard.mcp_servers.push(spec);
+        self.refresh_snapshot_with_guard_release(guard);
+    }
+
     /// Dynamically register a flag at runtime (from a hostcall).
     pub fn register_flag(&self, spec: Value) {
         let mut guard = self
@@ -27616,6 +27888,13 @@ impl ExtensionManager {
     /// Uses the pre-computed snapshot (RCU) instead of locking the mutex.
     pub fn extension_providers(&self) -> Vec<Value> {
         self.read_snapshot().providers.clone()
+    }
+
+    /// Return extension-registered MCP server specs as raw JSON.
+    ///
+    /// Uses the pre-computed snapshot (RCU) instead of locking the mutex.
+    pub fn extension_mcp_servers(&self) -> Vec<Value> {
+        self.read_snapshot().mcp_servers.clone()
     }
 
     /// Return true if an extension provider is backed by a JS `streamSimple` handler.
@@ -28204,6 +28483,87 @@ impl ExtensionManager {
         timeout_ms: u64,
     ) -> Result<Option<Value>> {
         self.dispatch_event_value(event, data, timeout_ms).await
+    }
+
+    pub async fn discover_resources(
+        &self,
+        cwd: &Path,
+        reason: &str,
+    ) -> ExtensionResourcePaths {
+        let payload = json!({
+            "cwd": cwd.display().to_string(),
+            "reason": reason,
+        });
+
+        let response = match self
+            .dispatch_event_with_response(
+                ExtensionEventName::ResourcesDiscover,
+                Some(payload),
+                EXTENSION_EVENT_TIMEOUT_MS,
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(
+                    event = "ext.resources_discover.failed",
+                    error = %err,
+                    "Failed to dispatch resources_discover"
+                );
+                return ExtensionResourcePaths::default();
+            }
+        };
+
+        let Some(value) = response else {
+            return ExtensionResourcePaths::default();
+        };
+        let Some(obj) = value.as_object() else {
+            return ExtensionResourcePaths::default();
+        };
+
+        let collect_paths = |keys: &[&str]| -> Vec<String> {
+            let mut out = Vec::new();
+            for key in keys {
+                let Some(value) = obj.get(*key) else {
+                    continue;
+                };
+                match value {
+                    Value::Array(values) => {
+                        for entry in values {
+                            if let Some(path) = entry.as_str() {
+                                let trimmed = path.trim();
+                                if !trimmed.is_empty() {
+                                    out.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                    Value::String(path) => {
+                        let trimmed = path.trim();
+                        if !trimmed.is_empty() {
+                            out.push(trimmed.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            out
+        };
+
+        let skill_paths = collect_paths(&["skillPaths", "skill_paths"]);
+        let prompt_paths = collect_paths(&["promptPaths", "prompt_paths"]);
+        let theme_paths = collect_paths(&["themePaths", "theme_paths"]);
+
+        if skill_paths.is_empty() && prompt_paths.is_empty() && theme_paths.is_empty() {
+            return ExtensionResourcePaths::default();
+        }
+
+        let roots = self.extension_roots();
+        ExtensionResourcePaths {
+            skill_paths: Self::resolve_resource_paths(cwd, &roots, skill_paths),
+            prompt_paths: Self::resolve_resource_paths(cwd, &roots, prompt_paths),
+            theme_paths: Self::resolve_resource_paths(cwd, &roots, theme_paths),
+        }
     }
 
     /// Dispatch a cancellable event to all registered extensions.
@@ -31233,6 +31593,48 @@ mod tests {
             result.error.as_ref().expect("error").code,
             HostCallErrorCode::Denied
         );
+    }
+
+    #[test]
+    fn fs_connector_respects_per_extension_deny() {
+        let dir = tempdir().expect("tempdir");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).expect("create project dir");
+
+        let inside = project.join("inside.txt");
+        std::fs::write(&inside, "hello").expect("write inside");
+
+        let mut policy = ExtensionPolicy::default();
+        policy.per_extension.insert(
+            "ext-untrusted".to_string(),
+            ExtensionOverride {
+                deny: vec!["read".to_string()],
+                ..ExtensionOverride::default()
+            },
+        );
+
+        let scopes = FsScopes::for_cwd(&project).expect("scopes");
+        let connector = FsConnector::new(&project, policy, scopes).expect("connector");
+
+        let call = HostCallPayload {
+            call_id: "call-ext-deny".to_string(),
+            capability: "read".to_string(),
+            method: "fs".to_string(),
+            params: json!({ "op": "read", "path": "inside.txt" }),
+            timeout_ms: None,
+            cancel_token: None,
+            context: None,
+        };
+
+        let denied = connector.handle_host_call(&call, Some("ext-untrusted"));
+        assert!(denied.is_error);
+        assert_eq!(
+            denied.error.as_ref().expect("error").code,
+            HostCallErrorCode::Denied
+        );
+
+        let allowed = connector.handle_host_call(&call, Some("ext-trusted"));
+        assert!(!allowed.is_error);
     }
 
     #[test]

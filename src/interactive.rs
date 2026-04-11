@@ -789,6 +789,8 @@ impl PiApp {
                     .unwrap_or("tree");
                 let next = if current.eq_ignore_ascii_case("tree") {
                     "fork"
+                } else if current.eq_ignore_ascii_case("fork") {
+                    "none"
                 } else {
                     "tree"
                 };
@@ -797,6 +799,7 @@ impl PiApp {
                     json!({ "double_escape_action": next }),
                 ) {
                     self.config.double_escape_action = Some(next.to_string());
+                    self.last_escape_time = None;
                     self.status_message = Some(format!("Updated doubleEscapeAction: {next}"));
                 }
             }
@@ -1793,6 +1796,8 @@ pub enum PiMsg {
     EnqueuePendingInput(PendingInput),
     /// Internal: shut down the async→UI message bridge (used for clean exit).
     UiShutdown,
+    /// Periodic autocomplete refresh tick (background file index).
+    AutocompleteRefresh,
     /// Text delta from assistant.
     TextDelta(String),
     /// Thinking delta from assistant.
@@ -1849,6 +1854,11 @@ pub enum PiMsg {
     },
     /// Set the editor contents (used by /tree selection of user/custom messages).
     SetEditorText(String),
+    /// Open the session tree selector (async from extension hooks).
+    OpenTree {
+        initial_selected_id: Option<String>,
+        label: Option<String>,
+    },
     /// Reloaded skills/prompts/themes/extensions.
     ResourcesReloaded {
         resources: ResourceLoader,
@@ -2300,9 +2310,19 @@ impl PiApp {
         })
     }
 
+    fn autocomplete_refresh_cmd() -> Option<Cmd> {
+        if std::env::var_os("PI_TEST_MODE").is_some() {
+            return None;
+        }
+        Some(Cmd::new(|| {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            Message::new(PiMsg::AutocompleteRefresh)
+        }))
+    }
+
     fn startup_init_cmd(input_cmd: Option<Cmd>, pending_cmd: Option<Cmd>) -> Option<Cmd> {
         let startup_cmd = sequence(vec![Some(Self::initial_window_size_cmd()), pending_cmd]);
-        batch(vec![input_cmd, startup_cmd])
+        batch(vec![input_cmd, startup_cmd, Self::autocomplete_refresh_cmd()])
     }
 
     /// Create a new Pi application.
@@ -2445,6 +2465,9 @@ impl PiApp {
         }
         let mut autocomplete = AutocompleteState::new(cwd.clone(), autocomplete_catalog);
         autocomplete.max_visible = autocomplete_max_visible;
+        if std::env::var_os("PI_TEST_MODE").is_none() {
+            autocomplete.provider.refresh_background();
+        }
 
         let git_branch = read_git_branch(&cwd);
         let startup_welcome = build_startup_welcome_message(&config);

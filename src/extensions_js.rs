@@ -4575,9 +4575,11 @@ impl InterruptBudget {
 #[derive(Debug, Default)]
 struct HostcallTracker {
     pending: HashSet<String>,
+    cancelled: HashSet<String>,
     call_to_timer: HashMap<String, u64>,
     timer_to_call: HashMap<u64, String>,
     enqueued_at_ms: HashMap<String, u64>,
+    stream_last_seq: HashMap<String, u64>,
 }
 
 enum HostcallCompletion {
@@ -4591,13 +4593,17 @@ enum HostcallCompletion {
 impl HostcallTracker {
     fn clear(&mut self) {
         self.pending.clear();
+        self.cancelled.clear();
         self.call_to_timer.clear();
         self.timer_to_call.clear();
         self.enqueued_at_ms.clear();
+        self.stream_last_seq.clear();
     }
 
     fn register(&mut self, call_id: String, timer_id: Option<u64>, enqueued_at_ms: u64) {
         self.pending.insert(call_id.clone());
+        self.cancelled.remove(&call_id);
+        self.stream_last_seq.remove(&call_id);
         if let Some(timer_id) = timer_id {
             self.call_to_timer.insert(call_id.clone(), timer_id);
             self.timer_to_call.insert(timer_id, call_id.clone());
@@ -4614,6 +4620,47 @@ impl HostcallTracker {
         self.pending.contains(call_id)
     }
 
+    fn is_active(&self, call_id: &str) -> bool {
+        self.pending.contains(call_id) && !self.cancelled.contains(call_id)
+    }
+
+    fn cancel(&mut self, call_id: &str) -> Option<u64> {
+        if !self.pending.contains(call_id) {
+            return None;
+        }
+        self.cancelled.insert(call_id.to_string());
+        let timer_id = self.call_to_timer.remove(call_id);
+        if let Some(timer_id) = timer_id {
+            self.timer_to_call.remove(&timer_id);
+        }
+        timer_id
+    }
+
+    fn record_stream_seq(&mut self, call_id: &str, sequence: u64) {
+        if !self.pending.contains(call_id) {
+            return;
+        }
+        let entry = self
+            .stream_last_seq
+            .entry(call_id.to_string())
+            .or_insert(sequence);
+        if sequence > *entry {
+            *entry = sequence;
+        }
+    }
+
+    fn stream_next_seq(&self, call_id: &str) -> Option<u64> {
+        if !self.pending.contains(call_id) {
+            return None;
+        }
+        Some(
+            self.stream_last_seq
+                .get(call_id)
+                .copied()
+                .map_or(0, |seq| seq.saturating_add(1)),
+        )
+    }
+
     fn queue_wait_ms(&self, call_id: &str, now_ms: u64) -> Option<u64> {
         self.enqueued_at_ms
             .get(call_id)
@@ -4628,6 +4675,8 @@ impl HostcallTracker {
 
         let timer_id = self.call_to_timer.remove(call_id);
         self.enqueued_at_ms.remove(call_id);
+        self.cancelled.remove(call_id);
+        self.stream_last_seq.remove(call_id);
         if let Some(timer_id) = timer_id {
             self.timer_to_call.remove(&timer_id);
         }
@@ -4639,6 +4688,8 @@ impl HostcallTracker {
         let call_id = self.timer_to_call.remove(&timer_id)?;
         self.call_to_timer.remove(&call_id);
         self.enqueued_at_ms.remove(&call_id);
+        self.cancelled.remove(&call_id);
+        self.stream_last_seq.remove(&call_id);
         if !self.pending.remove(&call_id) {
             return None;
         }
@@ -4874,13 +4925,17 @@ fn canonical_node_builtin(spec: &str) -> Option<&'static str> {
         "http" | "node:http" => Some("node:http"),
         "https" | "node:https" => Some("node:https"),
         "http2" | "node:http2" => Some("node:http2"),
+        "timers" | "node:timers" => Some("node:timers"),
         "util" | "node:util" => Some("node:util"),
         "readline" | "node:readline" => Some("node:readline"),
+        "readline/promises" | "node:readline/promises" => Some("node:readline/promises"),
         "url" | "node:url" => Some("node:url"),
         "net" | "node:net" => Some("node:net"),
         "events" | "node:events" => Some("node:events"),
         "buffer" | "node:buffer" => Some("node:buffer"),
         "assert" | "node:assert" => Some("node:assert"),
+        "assert/strict" | "node:assert/strict" => Some("node:assert/strict"),
+        "test" | "node:test" => Some("node:test"),
         "stream" | "node:stream" => Some("node:stream"),
         "stream/web" | "node:stream/web" => Some("node:stream/web"),
         "module" | "node:module" => Some("node:module"),
@@ -7492,7 +7547,7 @@ export default { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, Te
 export const VERSION = "0.0.0";
 
 export const DEFAULT_MAX_LINES = 2000;
-export const DEFAULT_MAX_BYTES = 50 * 1024;
+export const DEFAULT_MAX_BYTES = 1_000_000;
 
 export function formatSize(bytes) {
   const b = Number(bytes ?? 0);
@@ -7680,7 +7735,7 @@ export function createBashTool(_cwd, _opts = {}) {
   return {
     name: "bash",
     label: "bash",
-    description: "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+    description: "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 1MB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
     parameters: {
       type: "object",
       properties: {
@@ -7699,7 +7754,7 @@ export function createReadTool(_cwd, _opts = {}) {
   return {
     name: "read",
     label: "read",
-    description: "Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+    description: "Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 1MB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
     parameters: {
       type: "object",
       properties: {
@@ -9104,6 +9159,7 @@ import * as os from "node:os";
 import * as crypto from "node:crypto";
 import * as url from "node:url";
 import * as processMod from "node:process";
+import * as timersMod from "node:timers";
 import * as buffer from "node:buffer";
 import * as childProcess from "node:child_process";
 import * as http from "node:http";
@@ -9117,8 +9173,10 @@ import * as stringDecoder from "node:string_decoder";
 import * as http2 from "node:http2";
 import * as util from "node:util";
 import * as readline from "node:readline";
+import * as readlinePromises from "node:readline/promises";
 import * as querystring from "node:querystring";
 import * as assertMod from "node:assert";
+import * as assertStrict from "node:assert/strict";
 import * as constantsMod from "node:constants";
 import * as tls from "node:tls";
 import * as tty from "node:tty";
@@ -9127,6 +9185,7 @@ import * as perfHooks from "node:perf_hooks";
 import * as vm from "node:vm";
 import * as v8 from "node:v8";
 import * as workerThreads from "node:worker_threads";
+import * as testMod from "node:test";
 
 function __normalizeBuiltin(id) {
   const spec = String(id ?? "");
@@ -9152,6 +9211,9 @@ function __normalizeBuiltin(id) {
     case "process":
     case "node:process":
       return "node:process";
+    case "timers":
+    case "node:timers":
+      return "node:timers";
     case "buffer":
     case "node:buffer":
       return "node:buffer";
@@ -9191,12 +9253,21 @@ function __normalizeBuiltin(id) {
     case "readline":
     case "node:readline":
       return "node:readline";
+    case "readline/promises":
+    case "node:readline/promises":
+      return "node:readline/promises";
     case "querystring":
     case "node:querystring":
       return "node:querystring";
     case "assert":
     case "node:assert":
       return "node:assert";
+    case "assert/strict":
+    case "node:assert/strict":
+      return "node:assert/strict";
+    case "test":
+    case "node:test":
+      return "node:test";
     case "module":
     case "node:module":
       return "node:module";
@@ -9237,6 +9308,7 @@ const __builtinModules = {
   "node:crypto": crypto,
   "node:url": url,
   "node:process": processMod,
+  "node:timers": timersMod,
   "node:buffer": buffer,
   "node:child_process": childProcess,
   "node:http": http,
@@ -9250,8 +9322,11 @@ const __builtinModules = {
   "node:http2": http2,
   "node:util": util,
   "node:readline": readline,
+  "node:readline/promises": readlinePromises,
   "node:querystring": querystring,
   "node:assert": assertMod,
+  "node:assert/strict": assertStrict,
+  "node:test": testMod,
   "node:module": { createRequire },
   "node:constants": constantsMod,
   "node:tls": tls,
@@ -10650,12 +10725,39 @@ export default { inspect, promisify, stripVTControlCharacters, deprecate, inheri
     modules.insert(
         "node:readline".to_string(),
         r"
-// Stub readline module - interactive prompts are not available in PiJS
+// Readline shim backed by pi.ui('input') when UI is available.
+
+function __pi_readline_prompt(query) {
+  const message = String(query === undefined || query === null ? '' : query);
+  const piRef = globalThis.pi;
+  if (piRef && typeof piRef.ui === 'function') {
+    try {
+      return Promise.resolve(
+        piRef.ui('input', { title: message })
+      ).then((value) => (value === undefined || value === null ? '' : String(value)))
+        .catch(() => '');
+    } catch (_err) {
+      return Promise.resolve('');
+    }
+  }
+  return Promise.resolve('');
+}
 
 export function createInterface(_opts) {
   return {
-    question: (_query, callback) => {
-      if (typeof callback === 'function') callback('');
+    question: (query, optionsOrCb, maybeCb) => {
+      const cb = typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb;
+      if (typeof cb !== 'function') {
+        void __pi_readline_prompt(query);
+        return;
+      }
+      if (!globalThis.pi || typeof globalThis.pi.ui !== 'function') {
+        cb('');
+        return;
+      }
+      void __pi_readline_prompt(query).then((answer) => {
+        cb(answer);
+      });
     },
     close: () => {},
     on: () => {},
@@ -10665,7 +10767,7 @@ export function createInterface(_opts) {
 
 export const promises = {
   createInterface: (_opts) => ({
-    question: async (_query) => '',
+    question: async (query) => __pi_readline_prompt(query),
     close: () => {},
     [Symbol.asyncIterator]: async function* () {},
   }),
@@ -10673,6 +10775,18 @@ export const promises = {
 
 export default { createInterface, promises };
 "
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
+        "node:readline/promises".to_string(),
+        r#"
+import { promises as readlinePromises } from "node:readline";
+
+export const createInterface = readlinePromises.createInterface;
+export default { createInterface };
+"#
         .trim()
         .to_string(),
     );
@@ -11007,6 +11121,9 @@ assert.notStrictEqual = (a, b, msg) => { if (a === b) throw new Error(msg || `${
 assert.deepEqual = assert.deepStrictEqual = (a, b, msg) => {
   if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(msg || 'Deep equality failed');
 };
+assert.notDeepEqual = assert.notDeepStrictEqual = (a, b, msg) => {
+  if (JSON.stringify(a) === JSON.stringify(b)) throw new Error(msg || 'Expected values to differ');
+};
 assert.throws = (fn, _expected, msg) => {
   let threw = false;
   try { fn(); } catch (_) { threw = true; }
@@ -11019,6 +11136,197 @@ assert.fail = (msg) => { throw new Error(msg || 'assert.fail()'); };
 
 export default assert;
 export { assert };
+"
+        .trim()
+        .to_string(),
+    );
+
+    // ── node:assert/strict ───────────────────────────────────────────
+    modules.insert(
+        "node:assert/strict".to_string(),
+        r#"
+import assert from "node:assert";
+
+export default assert;
+export const strict = assert;
+export const ok = assert.ok;
+export const equal = assert.equal;
+export const strictEqual = assert.strictEqual;
+export const deepStrictEqual = assert.deepStrictEqual;
+export const notEqual = assert.notEqual;
+export const notStrictEqual = assert.notStrictEqual;
+export const deepEqual = assert.deepEqual;
+export const notDeepEqual = assert.notDeepEqual;
+export const throws = assert.throws;
+export const doesNotThrow = assert.doesNotThrow;
+export const fail = assert.fail;
+export { assert };
+"#
+        .trim()
+        .to_string(),
+    );
+
+    // ── node:test ────────────────────────────────────────────────────
+    modules.insert(
+        "node:test".to_string(),
+        r"
+function __noop() {}
+
+const __state = {
+  tests: [],
+  beforeAll: [],
+  afterAll: [],
+  beforeEach: [],
+  afterEach: [],
+  suiteStack: [],
+};
+
+function __isFn(value) {
+  return typeof value === 'function';
+}
+
+function __suiteMode() {
+  let mode = 'run';
+  for (const entry of __state.suiteStack) {
+    if (entry.mode === 'skip' || entry.mode === 'todo') return 'skip';
+    if (entry.mode === 'only') mode = 'only';
+  }
+  return mode;
+}
+
+function __registerTest(name, fn, options, modeOverride) {
+  const suiteMode = __suiteMode();
+  let mode = modeOverride || 'run';
+  if (suiteMode === 'skip') {
+    mode = 'skip';
+  } else if (suiteMode === 'only' && mode === 'run') {
+    mode = 'only';
+  }
+  const entry = {
+    name: name === undefined ? '' : String(name),
+    fn: __isFn(fn) ? fn : null,
+    options: options || {},
+    mode,
+  };
+  __state.tests.push(entry);
+  return entry;
+}
+
+function __enterSuite(name, fn, mode) {
+  const suite = { name: name === undefined ? '' : String(name), mode };
+  __state.suiteStack.push(suite);
+  try {
+    if (mode !== 'skip' && mode !== 'todo' && __isFn(fn)) {
+      fn();
+    }
+  } finally {
+    __state.suiteStack.pop();
+  }
+  return suite;
+}
+
+export function test(name, fn, options) {
+  return __registerTest(name, fn, options, 'run');
+}
+test.skip = (name, fn, options) => __registerTest(name, fn, options, 'skip');
+test.todo = (name, fn, options) => __registerTest(name, fn, options, 'todo');
+test.only = (name, fn, options) => __registerTest(name, fn, options, 'only');
+
+export function describe(name, fn) {
+  return __enterSuite(name, fn, 'run');
+}
+describe.skip = (name, fn) => __enterSuite(name, fn, 'skip');
+describe.todo = (name, fn) => __enterSuite(name, fn, 'todo');
+describe.only = (name, fn) => __enterSuite(name, fn, 'only');
+
+export const it = test;
+it.skip = test.skip;
+it.todo = test.todo;
+it.only = test.only;
+
+export const before = (fn) => {
+  if (__isFn(fn)) __state.beforeAll.push(fn);
+};
+export const after = (fn) => {
+  if (__isFn(fn)) __state.afterAll.push(fn);
+};
+export const beforeEach = (fn) => {
+  if (__isFn(fn)) __state.beforeEach.push(fn);
+};
+export const afterEach = (fn) => {
+  if (__isFn(fn)) __state.afterEach.push(fn);
+};
+
+async function __runHookList(list) {
+  for (const fn of list) {
+    await fn();
+  }
+}
+
+async function __runTest(entry) {
+  if (entry.mode === 'skip' || entry.mode === 'todo') {
+    return { name: entry.name, status: entry.mode };
+  }
+  if (!entry.fn) {
+    return { name: entry.name, status: 'error', error: 'missing test function' };
+  }
+  try {
+    await __runHookList(__state.beforeEach);
+    await entry.fn();
+    await __runHookList(__state.afterEach);
+    return { name: entry.name, status: 'pass' };
+  } catch (err) {
+    try { await __runHookList(__state.afterEach); } catch (_) {}
+    const message = err && err.message ? err.message : err;
+    return { name: entry.name, status: 'fail', error: String(message) };
+  }
+}
+
+export const mock = {
+  fn: (impl) => (__isFn(impl) ? impl : __noop),
+  reset: __noop,
+  restoreAll: __noop,
+};
+
+export async function run() {
+  const hasOnly = __state.tests.some(entry => entry.mode === 'only');
+  const selected = hasOnly
+    ? __state.tests.filter(entry => entry.mode === 'only')
+    : __state.tests.slice();
+
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let todo = 0;
+  const results = [];
+
+  await __runHookList(__state.beforeAll);
+
+  for (const entry of selected) {
+    const result = await __runTest(entry);
+    results.push(result);
+    if (result.status === 'pass') passed += 1;
+    else if (result.status === 'fail' || result.status === 'error') failed += 1;
+    else if (result.status === 'skip') skipped += 1;
+    else if (result.status === 'todo') todo += 1;
+  }
+
+  await __runHookList(__state.afterAll);
+
+  return {
+    ok: failed === 0,
+    summary: {
+      total: selected.length,
+      passed,
+      failed,
+      skipped,
+      todo,
+    },
+    results,
+  };
+}
+
+export default { test, describe, it, before, after, beforeEach, afterEach, run, mock };
 "
         .trim()
         .to_string(),
@@ -12212,6 +12520,32 @@ export default p;
         .to_string(),
     );
 
+    // node:timers — expose timer helpers backed by the PiJS event loop
+    modules.insert(
+        "node:timers".to_string(),
+        r"
+export const setTimeout = globalThis.setTimeout;
+export const clearTimeout = globalThis.clearTimeout;
+export const setInterval = globalThis.setInterval;
+export const clearInterval = globalThis.clearInterval;
+export const setImmediate = globalThis.setImmediate || ((fn, ...args) => globalThis.setTimeout(fn, 0, ...args));
+export const clearImmediate = globalThis.clearImmediate || ((id) => globalThis.clearTimeout(id));
+export const queueMicrotask = globalThis.queueMicrotask || ((fn) => Promise.resolve().then(fn));
+
+export default {
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  setImmediate,
+  clearImmediate,
+  queueMicrotask,
+};
+"
+        .trim()
+        .to_string(),
+    );
+
     // ── npm package stubs ──────────────────────────────────────────────
     // Minimal virtual modules for npm packages that cannot run in the
     // QuickJS sandbox (native bindings, large dependency trees, or
@@ -12383,10 +12717,79 @@ export function setNestedValue(obj, path, value) {
     modules.insert(
         "@aliou/sh".to_string(),
         r#"
-export function parse(cmd) { return [{ type: 'command', value: cmd }]; }
-export function tokenize(cmd) { return (cmd || '').split(/\s+/); }
-export function quote(s) { return "'" + (s || '').replace(/'/g, "'\\''") + "'"; }
 export class ParseError extends Error { constructor(msg) { super(msg); this.name = 'ParseError'; } }
+export function tokenize(cmd) {
+    const source = String(cmd ?? '');
+    const tokens = [];
+    let buf = '';
+    let inSingle = false;
+    let inDouble = false;
+    for (let i = 0; i < source.length; i++) {
+        const ch = source[i];
+        if (inSingle) {
+            if (ch === "'") { inSingle = false; } else { buf += ch; }
+            continue;
+        }
+        if (inDouble) {
+            if (ch === '"') { inDouble = false; } else { buf += ch; }
+            continue;
+        }
+        if (ch === "'") { inSingle = true; continue; }
+        if (ch === '"') { inDouble = true; continue; }
+        if (/\s/.test(ch)) {
+            if (buf.length) { tokens.push(buf); buf = ''; }
+            continue;
+        }
+        buf += ch;
+    }
+    if (inSingle || inDouble) { throw new ParseError('Unclosed quote'); }
+    if (buf.length) tokens.push(buf);
+    return tokens;
+}
+function isValidName(name) {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+function makeLiteralWord(value) {
+    return { parts: [{ type: 'Literal', value }] };
+}
+export function parse(cmd) {
+    const source = String(cmd ?? '');
+    if (!source.trim()) {
+        return { ast: { type: 'Program', body: [] } };
+    }
+    if (/[|;&()<>]/.test(source)) {
+        throw new ParseError('Unsupported shell construct');
+    }
+    const tokens = tokenize(source);
+    let idx = 0;
+    const assignments = [];
+    while (idx < tokens.length) {
+        const token = tokens[idx];
+        const eq = token.indexOf('=');
+        if (eq > 0 && isValidName(token.slice(0, eq))) {
+            assignments.push({ name: token.slice(0, eq) });
+            idx += 1;
+            continue;
+        }
+        break;
+    }
+    const words = tokens.slice(idx).map(makeLiteralWord);
+    if (words.length === 0) {
+        return { ast: { type: 'Program', body: [] } };
+    }
+    return {
+        ast: {
+            type: 'Program',
+            body: [
+                {
+                    type: 'Statement',
+                    command: { type: 'SimpleCommand', words, assignments },
+                },
+            ],
+        },
+    };
+}
+export function quote(s) { return "'" + (s || '').replace(/'/g, "'\\''") + "'"; }
 "#
         .trim()
         .to_string(),
@@ -12816,6 +13219,297 @@ export default BetterSqlite3;
     );
 
     modules.insert(
+        "ws".to_string(),
+        r#"
+function __makeEmitter(target) {
+  target._listeners = {};
+  target.on = function(event, handler) {
+    if (!this._listeners[event]) this._listeners[event] = [];
+    this._listeners[event].push(handler);
+    return this;
+  };
+  target.once = function(event, handler) {
+    const wrapper = (...args) => {
+      this.off(event, wrapper);
+      handler(...args);
+    };
+    return this.on(event, wrapper);
+  };
+  target.off = function(event, handler) {
+    const list = this._listeners[event];
+    if (!list) return this;
+    const idx = list.indexOf(handler);
+    if (idx >= 0) list.splice(idx, 1);
+    return this;
+  };
+  target.emit = function(event, ...args) {
+    const list = this._listeners[event];
+    if (!list) return false;
+    list.slice().forEach(fn => fn(...args));
+    return true;
+  };
+  target.addEventListener = target.on;
+  target.removeEventListener = target.off;
+  return target;
+}
+
+export class WebSocket {
+  constructor(url, protocols) {
+    this.url = String(url ?? "");
+    this.protocol = Array.isArray(protocols) ? (protocols[0] ?? "") : (protocols || "");
+    this.extensions = "";
+    this.readyState = WebSocket.CONNECTING;
+    this.binaryType = "nodebuffer";
+    this.bufferedAmount = 0;
+    __makeEmitter(this);
+    const schedule = (fn) => {
+      if (typeof globalThis.queueMicrotask === "function") {
+        globalThis.queueMicrotask(fn);
+        return;
+      }
+      if (typeof globalThis.setTimeout === "function") {
+        globalThis.setTimeout(fn, 0);
+        return;
+      }
+      try {
+        Promise.resolve().then(fn);
+      } catch (_err) {
+        fn();
+      }
+    };
+    schedule(() => {
+      this.readyState = WebSocket.OPEN;
+      const evt = { type: "open" };
+      if (typeof this.onopen === "function") this.onopen(evt);
+      this.emit("open", evt);
+    });
+  }
+  send(_data, cb) { if (typeof cb === "function") cb(); }
+  close(code, reason) {
+    if (this.readyState === WebSocket.CLOSED) return;
+    this.readyState = WebSocket.CLOSING;
+    this.readyState = WebSocket.CLOSED;
+    const evt = { code: code ?? 1000, reason: reason ?? "", wasClean: true };
+    if (typeof this.onclose === "function") this.onclose(evt);
+    this.emit("close", evt);
+  }
+  terminate() { this.close(); }
+}
+WebSocket.CONNECTING = 0;
+WebSocket.OPEN = 1;
+WebSocket.CLOSING = 2;
+WebSocket.CLOSED = 3;
+
+export class WebSocketServer {
+  constructor(options = {}) {
+    this.options = options;
+    this.clients = new Set();
+    __makeEmitter(this);
+  }
+  handleUpgrade(_req, _socket, _head, cb) {
+    const ws = new WebSocket("ws://stub");
+    this.clients.add(ws);
+    if (typeof cb === "function") cb(ws);
+    this.emit("connection", ws);
+  }
+  close(cb) { if (typeof cb === "function") cb(); }
+}
+
+WebSocket.Server = WebSocketServer;
+WebSocket.WebSocketServer = WebSocketServer;
+export const Server = WebSocketServer;
+export default WebSocket;
+"#
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
+        "axios".to_string(),
+        r#"
+function __makeResponse(config, data) {
+  return {
+    data: data ?? null,
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    config: config ?? {},
+    request: {},
+  };
+}
+
+async function axios(config = {}) {
+  return __makeResponse(config, config.data);
+}
+
+axios.request = (config) => axios(config);
+axios.defaults = {};
+axios.get = (url, config = {}) => axios({ ...config, url, method: "get" });
+axios.delete = (url, config = {}) => axios({ ...config, url, method: "delete" });
+axios.head = (url, config = {}) => axios({ ...config, url, method: "head" });
+axios.options = (url, config = {}) => axios({ ...config, url, method: "options" });
+axios.post = (url, data, config = {}) => axios({ ...config, url, data, method: "post" });
+axios.put = (url, data, config = {}) => axios({ ...config, url, data, method: "put" });
+axios.patch = (url, data, config = {}) => axios({ ...config, url, data, method: "patch" });
+axios.create = (defaults = {}) => {
+  const instance = (config = {}) => axios({ ...defaults, ...config });
+  instance.request = (config) => instance(config);
+  instance.get = (url, config = {}) => instance({ ...config, url, method: "get" });
+  instance.delete = (url, config = {}) => instance({ ...config, url, method: "delete" });
+  instance.head = (url, config = {}) => instance({ ...config, url, method: "head" });
+  instance.options = (url, config = {}) => instance({ ...config, url, method: "options" });
+  instance.post = (url, data, config = {}) => instance({ ...config, url, data, method: "post" });
+  instance.put = (url, data, config = {}) => instance({ ...config, url, data, method: "put" });
+  instance.patch = (url, data, config = {}) => instance({ ...config, url, data, method: "patch" });
+  instance.defaults = { ...defaults };
+  return instance;
+};
+axios.isAxiosError = (err) => !!(err && err.isAxiosError);
+axios.AxiosError = class AxiosError extends Error {
+  constructor(message) {
+    super(message || "AxiosError");
+    this.isAxiosError = true;
+  }
+};
+axios.Cancel = class Cancel extends Error {
+  constructor(message) {
+    super(message || "Cancel");
+    this.__CANCEL__ = true;
+  }
+};
+axios.CancelToken = {
+  source() { return { token: {}, cancel: () => {} }; },
+};
+axios.all = (promises) => Promise.all(promises);
+axios.spread = (cb) => (arr) => cb(...arr);
+
+export default axios;
+"#
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
+        "open".to_string(),
+        r"
+async function open(_target, _options = {}) {
+  return {
+    pid: 0,
+    stdout: null,
+    stderr: null,
+    stdin: null,
+    unref() {},
+    kill() {},
+    on() {},
+    once() {},
+  };
+}
+
+open.apps = {};
+open.openApp = open;
+
+export const apps = open.apps;
+export const openApp = open.openApp;
+export default open;
+"
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
+        "commander".to_string(),
+        r#"
+export class Option {
+  constructor(flags, description) {
+    this.flags = flags;
+    this.description = description;
+    this.defaultValue = undefined;
+  }
+  default(value) { this.defaultValue = value; return this; }
+}
+
+export class Argument {
+  constructor(name, description) {
+    this.name = name;
+    this.description = description;
+    this.defaultValue = undefined;
+  }
+  default(value) { this.defaultValue = value; return this; }
+}
+
+export class Command {
+  constructor(name) {
+    this._name = name || "";
+    this._options = [];
+    this._args = [];
+    this._commands = [];
+    this._action = null;
+    this.args = [];
+  }
+  name(value) { if (value !== undefined) this._name = value; return this; }
+  description(_value) { return this; }
+  version(_value, _flags, _desc) { return this; }
+  option(_flags, _desc, _defaultValue) { return this; }
+  argument(_name, _desc, _defaultValue) { return this; }
+  addOption(_opt) { return this; }
+  addCommand(cmd) { this._commands.push(cmd); return this; }
+  command(name) { const cmd = new Command(name); this._commands.push(cmd); return cmd; }
+  action(fn) { this._action = fn; return this; }
+  parse(_argv, _opts) { if (typeof this._action === "function") this._action(); return this; }
+  parseAsync(argv, opts) { this.parse(argv, opts); return Promise.resolve(this); }
+  opts() { return {}; }
+  optsWithGlobals() { return {}; }
+  requiredOption() { return this; }
+  allowUnknownOption() { return this; }
+  allowExcessArguments() { return this; }
+  help() { return this; }
+  outputHelp() { return this; }
+}
+
+export function createCommand(name) { return new Command(name); }
+export const program = new Command();
+export default { Command, Option, Argument, program, createCommand };
+"#
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
+        "chalk".to_string(),
+        r#"
+function chalk(...args) {
+  return args.join("");
+}
+
+const styles = [
+  "reset", "bold", "dim", "italic", "underline", "inverse", "hidden", "strikethrough",
+  "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "gray",
+  "bgBlack", "bgRed", "bgGreen", "bgYellow", "bgBlue", "bgMagenta", "bgCyan", "bgWhite",
+];
+
+for (const style of styles) {
+  chalk[style] = chalk;
+}
+
+chalk.hex = () => chalk;
+chalk.rgb = () => chalk;
+chalk.ansi256 = () => chalk;
+chalk.level = 0;
+chalk.supportsColor = false;
+chalk.enabled = true;
+
+export class Chalk {
+  constructor() { return chalk; }
+}
+
+export default chalk;
+export { chalk };
+"#
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
         "@mariozechner/pi-agent-core".to_string(),
         r#"
 export const ThinkingLevel = {
@@ -12908,6 +13602,16 @@ export default { scip };
     );
 
     modules.insert(
+        "@sourcegraph/scip-typescript/dist/src/scip.js".to_string(),
+        r"
+export const scip = { Index: class {} };
+export default { scip };
+"
+        .trim()
+        .to_string(),
+    );
+
+    modules.insert(
         "p-limit".to_string(),
         r"
 export default function pLimit(concurrency) {
@@ -12941,12 +13645,13 @@ export default function pLimit(concurrency) {
         .to_string(),
     );
 
-    // Also register the deep import path used by qualisero-pi-agent-scip
+    // Also register the CLI entrypoint used by qualisero-pi-agent-scip
     modules.insert(
-        "@sourcegraph/scip-typescript/dist/src/scip.js".to_string(),
+        "@sourcegraph/scip-typescript/dist/src/main.js".to_string(),
         r"
-export const scip = { Index: class {} };
-export default { scip };
+export function main() { return 0; }
+export function run() { return 0; }
+export default main;
 "
         .trim()
         .to_string(),
@@ -13641,6 +14346,11 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
         self.hostcall_tracker.borrow().is_pending(call_id)
     }
 
+    /// Check whether a given hostcall is pending and not cancelled.
+    pub fn is_hostcall_active(&self, call_id: &str) -> bool {
+        self.hostcall_tracker.borrow().is_active(call_id)
+    }
+
     /// Get all tools registered by loaded JS extensions.
     pub async fn get_registered_tools(&self) -> Result<Vec<ExtensionToolDef>> {
         self.interrupt_budget.reset();
@@ -13683,9 +14393,15 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
 
     /// Enqueue a hostcall completion to be delivered on next tick.
     pub fn complete_hostcall(&self, call_id: impl Into<String>, outcome: HostcallOutcome) {
+        let call_id = call_id.into();
+        if let HostcallOutcome::StreamChunk { sequence, .. } = &outcome {
+            self.hostcall_tracker
+                .borrow_mut()
+                .record_stream_seq(&call_id, *sequence);
+        }
         self.scheduler
             .borrow_mut()
-            .enqueue_hostcall_complete(call_id.into(), outcome);
+            .enqueue_hostcall_complete(call_id, outcome);
     }
 
     /// Enqueue multiple hostcall completions in one scheduler borrow.
@@ -13693,9 +14409,40 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
     where
         I: IntoIterator<Item = (String, HostcallOutcome)>,
     {
-        self.scheduler
-            .borrow_mut()
-            .enqueue_hostcall_completions(completions);
+        let mut scheduler = self.scheduler.borrow_mut();
+        let mut tracker = self.hostcall_tracker.borrow_mut();
+        for (call_id, outcome) in completions {
+            if let HostcallOutcome::StreamChunk { sequence, .. } = &outcome {
+                tracker.record_stream_seq(&call_id, *sequence);
+            }
+            scheduler.enqueue_hostcall_complete(call_id, outcome);
+        }
+    }
+
+    /// Cancel a pending hostcall and enqueue a final sentinel stream chunk if applicable.
+    pub fn cancel_hostcall(&self, call_id: &str) -> bool {
+        let (timer_id, next_seq) = {
+            let mut tracker = self.hostcall_tracker.borrow_mut();
+            let Some(timer_id) = tracker.cancel(call_id) else {
+                return false;
+            };
+            let next_seq = tracker.stream_next_seq(call_id);
+            (Some(timer_id), next_seq)
+        };
+
+        if let Some(timer_id) = timer_id {
+            let _ = self.scheduler.borrow_mut().clear_timeout(timer_id);
+        }
+
+        if let Some(sequence) = next_seq {
+            self.scheduler.borrow_mut().enqueue_stream_chunk(
+                call_id.to_string(),
+                sequence,
+                serde_json::Value::Null,
+                true,
+            );
+        }
+        true
     }
 
     /// Enqueue an inbound event to be delivered on next tick.
@@ -13855,7 +14602,7 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
 
                 if is_nonfinal_stream {
                     // Non-final stream chunk: keep the call pending, just deliver the chunk.
-                    if !self.hostcall_tracker.borrow().is_pending(call_id) {
+                    if !self.hostcall_tracker.borrow().is_active(call_id) {
                         tracing::debug!(
                             event = "pijs.macrotask.stream_chunk.ignored",
                             call_id = %call_id,
@@ -14455,6 +15202,37 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                         let scheduler = Rc::clone(&scheduler);
                         move |_ctx: Ctx<'_>, timer_id: u64| -> rquickjs::Result<bool> {
                             Ok(scheduler.borrow_mut().clear_timeout(timer_id))
+                        }
+                    }),
+                )?;
+
+                // __pi_cancel_hostcall_native(call_id) -> bool
+                global.set(
+                    "__pi_cancel_hostcall_native",
+                    Func::from({
+                        let tracker = hostcall_tracker.clone();
+                        let scheduler = Rc::clone(&scheduler);
+                        move |_ctx: Ctx<'_>, call_id: String| -> rquickjs::Result<bool> {
+                            let (timer_id, next_seq) = {
+                                let mut tracker = tracker.borrow_mut();
+                                let Some(timer_id) = tracker.cancel(&call_id) else {
+                                    return Ok(false);
+                                };
+                                let next_seq = tracker.stream_next_seq(&call_id);
+                                (Some(timer_id), next_seq)
+                            };
+
+                            if let Some(timer_id) = timer_id {
+                                let _ = scheduler.borrow_mut().clear_timeout(timer_id);
+                            }
+
+                            if let Some(sequence) = next_seq {
+                                scheduler
+                                    .borrow_mut()
+                                    .enqueue_stream_chunk(call_id, sequence, serde_json::Value::Null, true);
+                            }
+
+                            Ok(true)
                         }
                     }),
                 )?;
@@ -15513,7 +16291,7 @@ const __pi_event_listeners = new Map();
 
 var __pi_current_extension_id = null;
 
-// extension_id -> { id, name, version, apiVersion, tools: Map, commands: Map, hooks: Map }
+// extension_id -> { id, name, version, apiVersion, tools: Map, commands: Map, hooks: Map, mcpServers: Map }
 const __pi_extensions = new Map();
 
 // Fast indexes
@@ -15524,6 +16302,7 @@ const __pi_event_bus_index = new Map(); // event_name -> [{ extensionId, handler
 const __pi_provider_index = new Map();  // provider_id -> { extensionId, spec }
 const __pi_shortcut_index = new Map();  // key_id -> { extensionId, key, description, handler }
 const __pi_message_renderer_index = new Map(); // customType -> { extensionId, customType, renderer }
+const __pi_mcp_server_index = new Map(); // server_name -> { extensionId, spec }
 
 // Async task tracking for Rust-driven calls (tool exec, command exec, event dispatch).
 // task_id -> { status: 'pending'|'resolved'|'rejected', value?, error? }
@@ -15583,6 +16362,7 @@ function __pi_runtime_registry_snapshot() {
         providers: __pi_provider_index.size,
         shortcuts: __pi_shortcut_index.size,
         messageRenderers: __pi_message_renderer_index.size,
+        mcpServers: __pi_mcp_server_index.size,
         pendingTasks: __pi_tasks.size,
         pendingHostcalls: __pi_pending_hostcalls.size,
         pendingTimers: __pi_timer_callbacks.size,
@@ -15637,6 +16417,7 @@ function __pi_reset_extension_runtime_state() {
     __pi_provider_index.clear();
     __pi_shortcut_index.clear();
     __pi_message_renderer_index.clear();
+    __pi_mcp_server_index.clear();
     __pi_tasks.clear();
     __pi_pending_hostcalls.clear();
     __pi_timer_callbacks.clear();
@@ -15652,6 +16433,7 @@ function __pi_reset_extension_runtime_state() {
         after.providers === 0 &&
         after.shortcuts === 0 &&
         after.messageRenderers === 0 &&
+        after.mcpServers === 0 &&
         after.pendingTasks === 0 &&
         after.pendingHostcalls === 0 &&
         after.pendingTimers === 0 &&
@@ -15678,6 +16460,7 @@ function __pi_get_or_create_extension(extension_id, meta) {
             hooks: new Map(),
             eventBusHooks: new Map(),
             providers: new Map(),
+            mcpServers: new Map(),
             shortcuts: new Map(),
             flags: new Map(),
             flagValues: new Map(),
@@ -15958,6 +16741,87 @@ function __pi_register_provider(provider_id, spec) {
     };
     ext.providers.set(id, record);
     __pi_provider_index.set(id, record);
+}
+
+function __pi_register_mcp_server(name, spec) {
+    const ext = __pi_current_extension_or_throw();
+    const serverName = String(name || '').trim();
+    if (!serverName) {
+        throw new Error('registerMcpServer: name is required');
+    }
+    if (!spec || typeof spec !== 'object') {
+        throw new Error('registerMcpServer: spec must be an object');
+    }
+
+    const command = spec.command !== undefined && spec.command !== null
+        ? String(spec.command).trim()
+        : '';
+    const url = spec.url !== undefined && spec.url !== null
+        ? String(spec.url).trim()
+        : '';
+    if (!command && !url) {
+        throw new Error('registerMcpServer: spec.command or spec.url is required');
+    }
+
+    let args = undefined;
+    if (spec.args !== undefined && spec.args !== null) {
+        if (!Array.isArray(spec.args)) {
+            throw new Error('registerMcpServer: spec.args must be an array');
+        }
+        args = spec.args.map((value) => String(value));
+    }
+
+    let env = undefined;
+    if (spec.env !== undefined && spec.env !== null) {
+        if (typeof spec.env !== 'object' || Array.isArray(spec.env)) {
+            throw new Error('registerMcpServer: spec.env must be an object');
+        }
+        env = {};
+        for (const [key, value] of Object.entries(spec.env)) {
+            env[String(key)] = String(value);
+        }
+    }
+
+    const mcpSpec = {
+        name: serverName,
+        transport: spec.transport ? String(spec.transport) : undefined,
+        command: command || undefined,
+        url: url || undefined,
+        args: args,
+        env: env,
+    };
+    if (spec.description !== undefined) {
+        mcpSpec.description = String(spec.description);
+    }
+    if (spec.cwd !== undefined) {
+        mcpSpec.cwd = String(spec.cwd);
+    }
+
+    if (__pi_mcp_server_index.has(serverName)) {
+        const existing = __pi_mcp_server_index.get(serverName);
+        if (existing && existing.extensionId !== ext.id) {
+            throw new Error(`registerMcpServer: server name collision: ${serverName}`);
+        }
+    }
+
+    const record = { extensionId: ext.id, spec: mcpSpec };
+    ext.mcpServers.set(serverName, record);
+    __pi_mcp_server_index.set(serverName, record);
+    return mcpSpec;
+}
+
+function __pi_register_mcp_server_for_extension(extension_id, name, spec) {
+    const extId = String(extension_id || '').trim();
+    if (!extId) {
+        throw new Error('registerMcpServer: extension_id is required');
+    }
+    const prev = __pi_current_extension_id;
+    __pi_current_extension_id = extId;
+    try {
+        return __pi_register_mcp_server(name, spec);
+    } finally {
+        __pi_current_extension_id = prev;
+    }
 }
 
 // ============================================================================
@@ -16362,6 +17226,15 @@ function __pi_snapshot_extensions() {
             providers.push(provider.spec);
         }
 
+        const mcp_servers = [];
+        if (ext.mcpServers && typeof ext.mcpServers.values === 'function') {
+            for (const server of ext.mcpServers.values()) {
+                if (server && server.spec) {
+                    mcp_servers.push(server.spec);
+                }
+            }
+        }
+
         const event_hooks = [];
         for (const key of ext.hooks.keys()) {
             event_hooks.push(String(key));
@@ -16395,6 +17268,7 @@ function __pi_snapshot_extensions() {
             tools: tools,
             slash_commands: commands,
             providers: providers,
+            mcp_servers: mcp_servers,
             shortcuts: shortcuts,
             message_renderers: message_renderers,
             flags: flags,
@@ -16417,6 +17291,14 @@ const __pi_extension_theme_template = {
 };
 
 function __pi_build_extension_ui_template(hasUI) {
+    const toUiText = (value) => {
+        if (value && typeof value === 'object') {
+            if (value.text !== undefined && value.text !== null) return String(value.text);
+            if (value.message !== undefined && value.message !== null) return String(value.message);
+            if (value.title !== undefined && value.title !== null) return String(value.title);
+        }
+        return String(value === undefined || value === null ? '' : value);
+    };
     return {
         select: (title, options) => {
             if (!hasUI) return Promise.resolve(undefined);
@@ -16475,6 +17357,29 @@ function __pi_build_extension_ui_template(hasUI) {
                 text: text, // compat: some UI surfaces only consume `text`
             }).catch(() => {});
         },
+        setFooter: (text) => {
+            const value = toUiText(text);
+            void pi.ui('setStatus', {
+                statusKey: 'footer',
+                statusText: value,
+                text: value,
+            }).catch(() => {});
+        },
+        setHeader: (text) => {
+            const value = toUiText(text);
+            void pi.ui('setTitle', {
+                title: value,
+                text: value,
+            }).catch(() => {});
+        },
+        setWorkingMessage: (text) => {
+            const value = toUiText(text);
+            void pi.ui('setStatus', {
+                statusKey: 'working',
+                statusText: value,
+                text: value,
+            }).catch(() => {});
+        },
         setWidget: (widgetKey, lines) => {
             if (!hasUI) return;
             const payload = { widgetKey: String(widgetKey === undefined || widgetKey === null ? '' : widgetKey) };
@@ -16494,6 +17399,10 @@ function __pi_build_extension_ui_template(hasUI) {
             void pi.ui('set_editor_text', {
                 text: String(text === undefined || text === null ? '' : text),
             }).catch(() => {});
+        },
+        getEditorText: () => {
+            if (!hasUI) return Promise.resolve('');
+            return pi.ui('getEditorText', {});
         },
         custom: async (componentFactory, options) => {
             if (!hasUI) return undefined;
@@ -16687,6 +17596,28 @@ function __pi_build_extension_ui_template(hasUI) {
 
             return doneValue;
         },
+        getAllThemes: () => {
+            if (!hasUI) return Promise.resolve([]);
+            return pi.ui('getAllThemes', {});
+        },
+        getTheme: (name) => {
+            if (!hasUI) return Promise.resolve(undefined);
+            return pi.ui('getTheme', {
+                name: String(name === undefined || name === null ? '' : name),
+            });
+        },
+        setTheme: (themeOrName) => {
+            if (!hasUI) return Promise.resolve({ success: false, error: 'UI not available' });
+            if (themeOrName && typeof themeOrName === 'object') {
+                const name = themeOrName.name;
+                return pi.ui('setTheme', {
+                    name: String(name === undefined || name === null ? '' : name),
+                });
+            }
+            return pi.ui('setTheme', {
+                name: String(themeOrName === undefined || themeOrName === null ? '' : themeOrName),
+            });
+        },
     };
 }
 
@@ -16758,10 +17689,25 @@ function __pi_make_extension_ctx(ctx_payload) {
 	        return undefined;
 	    }
 
+	    const needsSignal = eventName === 'session_before_compact' || eventName === 'session_before_tree';
+	    if (needsSignal) {
+	        const base = event_payload && typeof event_payload === 'object' ? event_payload : {};
+	        if (base !== event_payload) {
+	            event_payload = base;
+	        }
+	        if (!('signal' in base)) {
+	            base.signal = new AbortController().signal;
+	        }
+	    }
+
 	    if (eventName === 'input') {
 	        const base = event_payload && typeof event_payload === 'object' ? event_payload : {};
-	        const originalText = typeof base.text === 'string' ? base.text : String(base.text ?? '');
-	        const originalImages = Array.isArray(base.images) ? base.images : undefined;
+	        const originalText = typeof base.text === 'string'
+	            ? base.text
+	            : (typeof base.content === 'string' ? base.content : String(base.text ?? base.content ?? ''));
+	        const originalImages = Array.isArray(base.images)
+	            ? base.images
+	            : (Array.isArray(base.attachments) ? base.attachments : undefined);
 	        const source = base.source !== undefined ? base.source : 'extension';
 
         let currentText = originalText;
@@ -16826,6 +17772,52 @@ function __pi_make_extension_ctx(ctx_payload) {
         }
         return undefined;
     }
+
+	    if (eventName === 'resources_discover') {
+	        const skillPaths = [];
+	        const promptPaths = [];
+	        const themePaths = [];
+
+	        const pushPaths = (target, value) => {
+	            if (!value) return;
+	            if (Array.isArray(value)) {
+	                for (const entry of value) {
+	                    if (typeof entry === 'string' && entry.trim()) {
+	                        target.push(entry.trim());
+	                    }
+	                }
+	                return;
+	            }
+	            if (typeof value === 'string' && value.trim()) {
+	                target.push(value.trim());
+	            }
+	        };
+
+	        for (const entry of handlers) {
+	            const handler = entry && entry.handler;
+	            if (typeof handler !== 'function') continue;
+	            let result = undefined;
+	            try {
+	                result = await __pi_with_extension_async(entry.extensionId, () => handler(event_payload, ctx));
+	            } catch (e) {
+	                try { globalThis.console && globalThis.console.error && globalThis.console.error('Event handler error:', eventName, entry.extensionId, e); } catch (_e) {}
+	                continue;
+	            }
+	            if (!result || typeof result !== 'object') continue;
+	            pushPaths(skillPaths, result.skillPaths || result.skill_paths);
+	            pushPaths(promptPaths, result.promptPaths || result.prompt_paths);
+	            pushPaths(themePaths, result.themePaths || result.theme_paths);
+	        }
+
+	        const response = {};
+	        if (skillPaths.length > 0) response.skillPaths = skillPaths;
+	        if (promptPaths.length > 0) response.promptPaths = promptPaths;
+	        if (themePaths.length > 0) response.themePaths = themePaths;
+	        if (Object.keys(response).length > 0) {
+	            return response;
+	        }
+	        return undefined;
+	    }
 
 	    let last = undefined;
 	    for (const entry of handlers) {
@@ -16920,17 +17912,63 @@ async function __pi_execute_shortcut(key_id, ctx_payload) {
 
 // Hostcall stream class (async iterator for streaming hostcall results)
 class __pi_HostcallStream {
-    constructor(callId) {
+    constructor(callId, options = undefined) {
         this.callId = callId;
         this.buffer = [];
         this.waitResolve = null;
         this.done = false;
+        this.bufferLimit = 16;
+        this.stallTimeoutMs = 30000;
+        this.stallTimer = null;
+
+        if (options && typeof options === 'object') {
+            const bufferSize = options.buffer_size ?? options.bufferSize;
+            if (Number.isFinite(bufferSize) && bufferSize > 0) {
+                this.bufferLimit = Math.max(1, Math.floor(bufferSize));
+            }
+            const stallTimeout = options.stall_timeout_ms ?? options.stallTimeoutMs;
+            if (Number.isFinite(stallTimeout) && stallTimeout >= 0) {
+                this.stallTimeoutMs = Math.floor(stallTimeout);
+            }
+        }
+    }
+    _clearStallTimer() {
+        if (this.stallTimer !== null) {
+            clearTimeout(this.stallTimer);
+            this.stallTimer = null;
+        }
+    }
+    _armStallTimer() {
+        if (this.stallTimeoutMs <= 0) return;
+        if (this.stallTimer !== null) {
+            clearTimeout(this.stallTimer);
+        }
+        const timeoutMs = this.stallTimeoutMs;
+        this.stallTimer = setTimeout(() => {
+            this.stallTimer = null;
+            if (this.done) return;
+            if (this.waitResolve) return;
+            if (this.buffer.length < this.bufferLimit) return;
+            const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+            console.warn(`Stream stalled: JS consumer did not pull for ${seconds}s`);
+            if (typeof __pi_cancel_hostcall_native === 'function') {
+                try {
+                    __pi_cancel_hostcall_native(this.callId);
+                } catch (e) {
+                    console.error('Hostcall cancel error:', e);
+                }
+            }
+        }, timeoutMs);
     }
     pushChunk(chunk, isFinal) {
-        if (isFinal) this.done = true;
+        if (isFinal) {
+            this.done = true;
+            this._clearStallTimer();
+        }
         if (this.waitResolve) {
             const resolve = this.waitResolve;
             this.waitResolve = null;
+            this._clearStallTimer();
             if (isFinal && chunk === null) {
                 resolve({ value: undefined, done: true });
             } else {
@@ -16938,10 +17976,14 @@ class __pi_HostcallStream {
             }
         } else {
             this.buffer.push({ chunk, isFinal });
+            if (!this.done && this.buffer.length >= this.bufferLimit) {
+                this._armStallTimer();
+            }
         }
     }
     pushError(error) {
         this.done = true;
+        this._clearStallTimer();
         if (this.waitResolve) {
             const rej = this.waitResolve;
             this.waitResolve = null;
@@ -16953,11 +17995,22 @@ class __pi_HostcallStream {
     next() {
         if (this.buffer.length > 0) {
             const entry = this.buffer.shift();
+            if (!this.done) {
+                if (this.buffer.length < this.bufferLimit) {
+                    this._clearStallTimer();
+                } else {
+                    this._armStallTimer();
+                }
+            }
             if (entry.__error) return Promise.reject(entry.__error);
             if (entry.isFinal && entry.chunk === null) return Promise.resolve({ value: undefined, done: true });
             return Promise.resolve({ value: entry.chunk, done: false });
         }
-        if (this.done) return Promise.resolve({ value: undefined, done: true });
+        if (this.done) {
+            this._clearStallTimer();
+            return Promise.resolve({ value: undefined, done: true });
+        }
+        this._clearStallTimer();
         return new Promise((resolve, reject) => {
             this.waitResolve = (result) => {
                 if (result && result.__error) reject(result.__error);
@@ -16969,6 +18022,7 @@ class __pi_HostcallStream {
         this.done = true;
         this.buffer = [];
         this.waitResolve = null;
+        this._clearStallTimer();
         return Promise.resolve({ value: undefined, done: true });
     }
     [Symbol.asyncIterator]() { return this; }
@@ -17132,7 +18186,14 @@ function __pi_make_hostcall(nativeFn) {
 
 function __pi_make_streaming_hostcall(nativeFn, ...args) {
     const call_id = nativeFn(...args);
-    const stream = new __pi_HostcallStream(call_id);
+    let options = undefined;
+    if (args.length > 0) {
+        const last = args[args.length - 1];
+        if (last && typeof last === 'object' && !Array.isArray(last)) {
+            options = last;
+        }
+    }
+    const stream = new __pi_HostcallStream(call_id, options);
     __pi_pending_hostcalls.set(call_id, {
         stream,
         resolve: () => {},
@@ -17262,6 +18323,7 @@ const __pi_exec_hostcall = __pi_make_hostcall(__pi_exec_native);
     registerTool: __pi_register_tool,
     registerCommand: __pi_register_command,
     registerProvider: __pi_register_provider,
+    registerMcpServer: __pi_register_mcp_server,
     registerShortcut: __pi_register_shortcut,
     registerMessageRenderer: __pi_register_message_renderer,
     on: __pi_register_hook,
@@ -24025,6 +25087,97 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             let r = get_global_json(&runtime, "rlResult").await;
             assert_eq!(r["done"], serde_json::json!(true));
             assert_eq!(r["hasCreateInterface"], serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn pijs_node_test_stub_describe_it_flags() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.nodeTest = {};
+                    import('node:test').then((mod) => {
+                        const { test, describe, it } = mod;
+                        globalThis.nodeTest.hasTestSkip = typeof test.skip === 'function';
+                        globalThis.nodeTest.hasDescribeSkip = typeof describe.skip === 'function';
+                        globalThis.nodeTest.hasItSkip = typeof it.skip === 'function';
+                        globalThis.nodeTest.hasDescribeOnly = typeof describe.only === 'function';
+                        globalThis.nodeTest.hasItOnly = typeof it.only === 'function';
+                        globalThis.nodeTest.hasDescribeTodo = typeof describe.todo === 'function';
+                        globalThis.nodeTest.hasItTodo = typeof it.todo === 'function';
+                        globalThis.nodeTest.done = true;
+                    });
+                    ",
+                )
+                .await
+                .expect("eval node:test");
+
+            let r = get_global_json(&runtime, "nodeTest").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+            assert_eq!(r["hasTestSkip"], serde_json::json!(true));
+            assert_eq!(r["hasDescribeSkip"], serde_json::json!(true));
+            assert_eq!(r["hasItSkip"], serde_json::json!(true));
+            assert_eq!(r["hasDescribeOnly"], serde_json::json!(true));
+            assert_eq!(r["hasItOnly"], serde_json::json!(true));
+            assert_eq!(r["hasDescribeTodo"], serde_json::json!(true));
+            assert_eq!(r["hasItTodo"], serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn pijs_node_test_runs_basic_cases() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                    globalThis.nodeTestRun = { done: false };
+                    (async () => {
+                        const { test, describe, it, beforeEach, afterEach, run } = await import("node:test");
+                        const order = [];
+                        beforeEach(() => order.push("beforeEach"));
+                        afterEach(() => order.push("afterEach"));
+                        test("passes", () => { order.push("pass"); });
+                        test.skip("skipped", () => { order.push("skip"); });
+                        describe("suite", () => {
+                            it("nested", () => { order.push("nested"); });
+                        });
+                        const result = await run();
+                        globalThis.nodeTestRun.result = result;
+                        globalThis.nodeTestRun.order = order;
+                        globalThis.nodeTestRun.done = true;
+                    })().catch((e) => {
+                        globalThis.nodeTestRun.error = String(e && e.message ? e.message : e);
+                        globalThis.nodeTestRun.done = false;
+                    });
+                    "#,
+                )
+                .await
+                .expect("eval node:test run");
+
+            drain_until_idle(&runtime, &clock).await;
+
+            let r = get_global_json(&runtime, "nodeTestRun").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+            assert_eq!(r["result"]["ok"], serde_json::json!(true));
+            assert_eq!(r["result"]["summary"]["total"], serde_json::json!(3));
+            assert_eq!(r["result"]["summary"]["passed"], serde_json::json!(2));
+            assert_eq!(r["result"]["summary"]["failed"], serde_json::json!(0));
+            assert_eq!(r["result"]["summary"]["skipped"], serde_json::json!(1));
+            assert_eq!(
+                r["order"],
+                serde_json::json!(["beforeEach", "pass", "afterEach", "beforeEach", "nested", "afterEach"])
+            );
         });
     }
 

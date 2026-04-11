@@ -599,8 +599,8 @@ pub fn select_model_and_thinking(
             .and_then(parse_thinking_level_opt);
     }
 
-    let thinking_level =
-        model_entry.clamp_thinking_level(thinking_level.unwrap_or(model::ThinkingLevel::XHigh));
+    let thinking_level = model_entry
+        .clamp_thinking_level(thinking_level.unwrap_or(model::ThinkingLevel::XHigh));
 
     Ok(ModelSelection {
         model_entry,

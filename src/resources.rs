@@ -209,6 +209,19 @@ pub struct PackageResources {
     pub themes: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ExtensionResourcePaths {
+    pub skill_paths: Vec<PathBuf>,
+    pub prompt_paths: Vec<PathBuf>,
+    pub theme_paths: Vec<PathBuf>,
+}
+
+impl ExtensionResourcePaths {
+    pub fn is_empty(&self) -> bool {
+        self.skill_paths.is_empty() && self.prompt_paths.is_empty() && self.theme_paths.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResourceLoader {
     skills: Vec<Skill>,
@@ -433,6 +446,105 @@ impl ResourceLoader {
             extensions: extension_entries,
             enable_skill_commands,
         })
+    }
+
+    pub fn extend_with_paths(
+        &mut self,
+        cwd: &Path,
+        paths: &ExtensionResourcePaths,
+    ) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let agent_dir = Config::global_dir();
+        let cwd_buf = cwd.to_path_buf();
+
+        if !paths.skill_paths.is_empty() {
+            let skill_paths = dedupe_paths(paths.skill_paths.clone());
+            if !skill_paths.is_empty() {
+                let result = load_skills(LoadSkillsOptions {
+                    cwd: cwd_buf.clone(),
+                    agent_dir: agent_dir.clone(),
+                    skill_paths,
+                    include_defaults: false,
+                });
+
+                let mut existing_names: HashMap<String, PathBuf> = HashMap::new();
+                let mut existing_paths: HashSet<PathBuf> = HashSet::new();
+                for skill in &self.skills {
+                    existing_names.insert(skill.name.clone(), skill.file_path.clone());
+                    existing_paths.insert(canonical_identity_path(&skill.file_path));
+                }
+
+                let mut collisions = Vec::new();
+                for skill in result.skills {
+                    let real_path = canonical_identity_path(&skill.file_path);
+                    if existing_paths.contains(&real_path) {
+                        continue;
+                    }
+                    if let Some(winner_path) = existing_names.get(&skill.name) {
+                        collisions.push(ResourceDiagnostic {
+                            kind: DiagnosticKind::Collision,
+                            message: format!("name \"{}\" collision", skill.name),
+                            path: skill.file_path.clone(),
+                            collision: Some(CollisionInfo {
+                                resource_type: "skill".to_string(),
+                                name: skill.name.clone(),
+                                winner_path: winner_path.clone(),
+                                loser_path: skill.file_path.clone(),
+                            }),
+                        });
+                    } else {
+                        existing_names.insert(skill.name.clone(), skill.file_path.clone());
+                        existing_paths.insert(real_path);
+                        self.skills.push(skill);
+                    }
+                }
+
+                self.skill_diagnostics.extend(result.diagnostics);
+                self.skill_diagnostics.extend(collisions);
+            }
+        }
+
+        if !paths.prompt_paths.is_empty() {
+            let prompt_paths = dedupe_paths(paths.prompt_paths.clone());
+            if !prompt_paths.is_empty() {
+                let new_prompts = load_prompt_templates(LoadPromptTemplatesOptions {
+                    cwd: cwd_buf.clone(),
+                    agent_dir: agent_dir.clone(),
+                    prompt_paths,
+                    include_defaults: false,
+                });
+                if !new_prompts.is_empty() {
+                    let mut merged = self.prompts.clone();
+                    merged.extend(new_prompts);
+                    let (deduped, diagnostics) = dedupe_prompts(merged);
+                    self.prompts = deduped;
+                    self.prompt_diagnostics.extend(diagnostics);
+                }
+            }
+        }
+
+        if !paths.theme_paths.is_empty() {
+            let theme_paths = dedupe_paths(paths.theme_paths.clone());
+            if !theme_paths.is_empty() {
+                let themes_result = load_themes(LoadThemesOptions {
+                    cwd: cwd_buf,
+                    agent_dir,
+                    theme_paths,
+                    include_defaults: false,
+                });
+                let mut merged = self.themes.clone();
+                merged.extend(themes_result.themes);
+                let (deduped, diagnostics) = dedupe_themes(merged);
+                self.themes = deduped;
+                self.theme_diagnostics.extend(themes_result.diagnostics);
+                self.theme_diagnostics.extend(diagnostics);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn extensions(&self) -> &[PathBuf] {

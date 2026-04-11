@@ -3889,6 +3889,8 @@ pub(crate) fn bash_execution_to_text(
     if truncated {
         if let Some(path) = full_output_path {
             let _ = write!(text, "\n\n[Output truncated. Full output: {path}]");
+        } else {
+            text.push_str("\n\n[Output truncated]");
         }
     }
 

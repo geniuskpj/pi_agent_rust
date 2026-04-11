@@ -11,7 +11,7 @@
 #![allow(clippy::ignored_unit_patterns)]
 #![allow(clippy::needless_pass_by_value)]
 
-use crate::agent::{AbortHandle, AgentEvent, AgentSession, QueueMode};
+use crate::agent::{AbortHandle, AgentEvent, AgentSession, InputSource, QueueMode};
 use crate::agent_cx::AgentCx;
 use crate::auth::AuthStorage;
 use crate::compaction::{
@@ -113,6 +113,18 @@ fn parse_streaming_behavior(value: Option<&Value>) -> Result<Option<StreamingBeh
         "follow-up" | "followUp" => Ok(Some(StreamingBehavior::FollowUp)),
         _ => Err(Error::validation(format!("Invalid streamingBehavior: {s}"))),
     }
+}
+
+fn parse_optional_u32_field(parsed: &Value, field: &str) -> Result<Option<u32>> {
+    let Some(value) = parsed.get(field) else {
+        return Ok(None);
+    };
+    let number = value.as_u64().ok_or_else(|| {
+        Error::Validation(format!("{field} must be a non-negative integer"))
+    })?;
+    u32::try_from(number)
+        .map(Some)
+        .map_err(|_| Error::Validation(format!("{field} exceeds the maximum supported value")))
 }
 
 fn future_with_current_cx<F>(
@@ -352,7 +364,8 @@ struct RpcUiBridgeState {
     queue: VecDeque<ExtensionUiRequest>,
 }
 
-pub async fn run_stdio(session: AgentSession, options: RpcOptions) -> Result<()> {
+pub async fn run_stdio(mut session: AgentSession, options: RpcOptions) -> Result<()> {
+    session.set_input_source(InputSource::Rpc);
     let (in_tx, in_rx) = mpsc::channel::<String>(1024);
     let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
 
@@ -1454,6 +1467,30 @@ pub async fn run(
                     .get("customInstructions")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                let reserve_tokens_override =
+                    match parse_optional_u32_field(&parsed, "reserveTokens") {
+                        Ok(value) => value,
+                        Err(err) => {
+                            let _ = out_tx.send(response_error_with_hints(
+                                id.clone(),
+                                "compact",
+                                &err,
+                            ));
+                            continue;
+                        }
+                    };
+                let keep_recent_tokens_override =
+                    match parse_optional_u32_field(&parsed, "keepRecentTokens") {
+                        Ok(value) => value,
+                        Err(err) => {
+                            let _ = out_tx.send(response_error_with_hints(
+                                id.clone(),
+                                "compact",
+                                &err,
+                            ));
+                            continue;
+                        }
+                    };
 
                 let result: Result<Value> = async {
                     let mut guard = session
@@ -1483,8 +1520,10 @@ pub async fn run(
 
                     let settings = ResolvedCompactionSettings {
                         enabled: options.config.compaction_enabled(),
-                        reserve_tokens: options.config.compaction_reserve_tokens(),
-                        keep_recent_tokens: options.config.compaction_keep_recent_tokens(),
+                        reserve_tokens: reserve_tokens_override
+                            .unwrap_or_else(|| options.config.compaction_reserve_tokens()),
+                        keep_recent_tokens: keep_recent_tokens_override
+                            .unwrap_or_else(|| options.config.compaction_keep_recent_tokens()),
                         ..Default::default()
                     };
 
@@ -5469,6 +5508,36 @@ export default function init(pi) {
     fn parse_streaming_behavior_non_string_errors() {
         let val = json!(42);
         assert!(parse_streaming_behavior(Some(&val)).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_optional_u32_field
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_optional_u32_field_none() {
+        let payload = json!({ "type": "compact" });
+        let parsed = parse_optional_u32_field(&payload, "reserveTokens").unwrap();
+        assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn parse_optional_u32_field_valid() {
+        let payload = json!({ "reserveTokens": 8192 });
+        let parsed = parse_optional_u32_field(&payload, "reserveTokens").unwrap();
+        assert_eq!(parsed, Some(8192));
+    }
+
+    #[test]
+    fn parse_optional_u32_field_invalid_type() {
+        let payload = json!({ "reserveTokens": "8192" });
+        assert!(parse_optional_u32_field(&payload, "reserveTokens").is_err());
+    }
+
+    #[test]
+    fn parse_optional_u32_field_too_large() {
+        let payload = json!({ "reserveTokens": u64::from(u32::MAX) + 1 });
+        assert!(parse_optional_u32_field(&payload, "reserveTokens").is_err());
     }
 
     // -----------------------------------------------------------------------

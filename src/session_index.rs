@@ -760,8 +760,14 @@ fn load_last_sync_epoch_ms(conn: &SqliteConnection) -> Result<Option<i64>> {
 fn lock_file_guard(file: &File, timeout: Duration) -> Result<LockGuard<'_>> {
     let start = Instant::now();
     loop {
-        if matches!(FileExt::try_lock_exclusive(file), Ok(true)) {
-            return Ok(LockGuard { file });
+        match FileExt::try_lock_exclusive(file) {
+            Ok(true) => return Ok(LockGuard { file }),
+            Ok(false) => {}
+            Err(err) => {
+                return Err(Error::session(format!(
+                    "Failed to acquire session index lock: {err}"
+                )));
+            }
         }
 
         if start.elapsed() >= timeout {

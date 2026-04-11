@@ -1451,7 +1451,7 @@ pub enum AwsResolvedCredentials {
 /// Precedence (first match wins):
 /// 1. `AWS_BEARER_TOKEN_BEDROCK` env var → bearer token auth
 /// 2. `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` env vars → Sigv4
-/// 3. `AWS_PROFILE` env var → profile-based (returns the profile name for external resolution)
+/// 3. `AWS_PROFILE` env var → profile-based credentials from AWS config files
 /// 4. Stored `AwsCredentials` in auth.json
 /// 5. Stored `BearerToken` in auth.json (for bedrock)
 ///
@@ -1467,8 +1467,12 @@ fn resolve_aws_credentials_with_env<F>(
 where
     F: FnMut(&str) -> Option<String>,
 {
-    let region = env("AWS_REGION")
+    let env_region = env("AWS_REGION")
         .or_else(|| env("AWS_DEFAULT_REGION"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let region = env_region
+        .clone()
         .unwrap_or_else(|| "us-east-1".to_string());
 
     // 1. Bearer token from env (AWS Bedrock specific)
@@ -1500,7 +1504,27 @@ where
         }
     }
 
-    // 3. Stored credentials in auth.json
+    // 3. Profile-based credentials (AWS_PROFILE / AWS_DEFAULT_PROFILE)
+    if let Some(profile) = env("AWS_PROFILE").or_else(|| env("AWS_DEFAULT_PROFILE")) {
+        let profile = profile.trim().to_string();
+        if !profile.is_empty() {
+            if let Some(resolved) = resolve_aws_profile_credentials_with_env(
+                &profile,
+                env_region.as_deref(),
+                &region,
+                &mut env,
+            ) {
+                return Some(resolved);
+            }
+            tracing::warn!(
+                event = "pi.auth.aws_profile_missing",
+                profile = %profile,
+                "AWS_PROFILE set but no credentials found in ~/.aws/credentials"
+            );
+        }
+    }
+
+    // 4. Stored credentials in auth.json
     let provider = "amazon-bedrock";
     match auth.credential_for_provider(provider) {
         Some(AuthCredential::AwsCredentials {
@@ -1539,6 +1563,176 @@ where
         }
         _ => None,
     }
+}
+
+fn aws_home_dir_from_env<F>(env: &mut F) -> Option<PathBuf>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    env("HOME")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env("USERPROFILE")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            let drive = env("HOMEDRIVE")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())?;
+            let path = env("HOMEPATH")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())?;
+            if path.starts_with('\\') || path.starts_with('/') {
+                Some(PathBuf::from(format!("{drive}{path}")))
+            } else {
+                let mut combined = PathBuf::from(drive);
+                combined.push(path);
+                Some(combined)
+            }
+        })
+}
+
+fn aws_credentials_paths_from_env<F>(env: &mut F) -> Option<(PathBuf, PathBuf)>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let credentials_path = env("AWS_SHARED_CREDENTIALS_FILE")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let config_path = env("AWS_CONFIG_FILE")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+
+    if let (Some(credentials_path), Some(config_path)) =
+        (credentials_path.clone(), config_path.clone())
+    {
+        return Some((credentials_path, config_path));
+    }
+
+    let home = aws_home_dir_from_env(env);
+    let credentials_path = if let Some(path) = credentials_path {
+        path
+    } else {
+        let home = home.as_ref()?;
+        home.join(".aws").join("credentials")
+    };
+    let config_path = config_path.unwrap_or_else(|| {
+        home.map_or_else(
+            || credentials_path.clone(),
+            |home| home.join(".aws").join("config"),
+        )
+    });
+    Some((credentials_path, config_path))
+}
+
+fn parse_aws_ini(contents: &str) -> HashMap<String, HashMap<String, String>> {
+    let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut current: Option<String> = None;
+
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            let name = line[1..line.len() - 1].trim().to_ascii_lowercase();
+            if !name.is_empty() {
+                current = Some(name);
+            }
+            continue;
+        }
+        let Some(section) = current.clone() else {
+            continue;
+        };
+        let mut splitter = line.splitn(2, ['=', ':']);
+        let key = splitter.next().unwrap_or("").trim().to_ascii_lowercase();
+        let value = splitter.next().unwrap_or("").trim().to_string();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        sections.entry(section).or_default().insert(key, value);
+    }
+
+    sections
+}
+
+fn resolve_aws_profile_credentials_with_env<F>(
+    profile: &str,
+    region_override: Option<&str>,
+    region_default: &str,
+    env: &mut F,
+) -> Option<AwsResolvedCredentials>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let (credentials_path, config_path) = aws_credentials_paths_from_env(env)?;
+    let credentials_text = std::fs::read_to_string(&credentials_path).ok()?;
+    let credentials = parse_aws_ini(&credentials_text);
+    let profile_key = profile.trim().to_ascii_lowercase();
+    let section = credentials.get(&profile_key)?;
+
+    let access_key_id = section.get("aws_access_key_id")?.trim().to_string();
+    let secret_access_key = section.get("aws_secret_access_key")?.trim().to_string();
+    if access_key_id.is_empty() || secret_access_key.is_empty() {
+        return None;
+    }
+
+    let session_token = section
+        .get("aws_session_token")
+        .or_else(|| section.get("aws_security_token"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let mut region =
+        region_override.map_or_else(|| region_default.to_string(), str::to_string);
+
+    let allow_config_region = region_override.is_none();
+    if allow_config_region {
+        if let Some(value) = section.get("region") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                region = trimmed.to_string();
+            }
+        }
+    }
+
+    if allow_config_region {
+        if let Ok(config_text) = std::fs::read_to_string(&config_path) {
+        let config = parse_aws_ini(&config_text);
+        let mut candidates = Vec::new();
+        if profile_key == "default" {
+            candidates.push("default".to_string());
+            candidates.push("profile default".to_string());
+        } else {
+            candidates.push(format!("profile {profile_key}"));
+            candidates.push(profile_key.clone());
+        }
+        for name in candidates {
+            if let Some(section) = config.get(&name) {
+                if let Some(value) = section.get("region") {
+                    let trimmed = value.trim();
+                    if !trimmed.is_empty() {
+                        region = trimmed.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    Some(AwsResolvedCredentials::Sigv4 {
+        access_key_id,
+        secret_access_key,
+        session_token,
+        region,
+    })
 }
 
 // ── SAP AI Core Service Key Resolution ──────────────────────────
@@ -7325,6 +7519,121 @@ mod tests {
                 secret_access_key: "secret".to_string(),
                 session_token: None,
                 region: "us-east-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_aws_profile_credentials_from_files() {
+        let auth = empty_auth();
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cred_path = dir.path().join("credentials");
+        let config_path = dir.path().join("config");
+        std::fs::write(
+            &cred_path,
+            "[default]\naws_access_key_id = AKIA_DEFAULT\naws_secret_access_key = default_secret\n\n[dev]\naws_access_key_id = AKIA_DEV\naws_secret_access_key = dev_secret\naws_session_token = dev_session\n",
+        )
+        .expect("write credentials");
+        std::fs::write(
+            &config_path,
+            "[default]\nregion = us-east-2\n\n[profile dev]\nregion = us-west-2\n",
+        )
+        .expect("write config");
+
+        let result = resolve_aws_credentials_with_env(&auth, |var| match var {
+            "AWS_PROFILE" => Some("dev".to_string()),
+            "AWS_SHARED_CREDENTIALS_FILE" => Some(cred_path.to_string_lossy().to_string()),
+            "AWS_CONFIG_FILE" => Some(config_path.to_string_lossy().to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            result,
+            Some(AwsResolvedCredentials::Sigv4 {
+                access_key_id: "AKIA_DEV".to_string(),
+                secret_access_key: "dev_secret".to_string(),
+                session_token: Some("dev_session".to_string()),
+                region: "us-west-2".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_aws_profile_env_region_overrides_config() {
+        let auth = empty_auth();
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cred_path = dir.path().join("credentials");
+        let config_path = dir.path().join("config");
+        std::fs::write(
+            &cred_path,
+            "[dev]\naws_access_key_id = AKIA_DEV\naws_secret_access_key = dev_secret\n",
+        )
+        .expect("write credentials");
+        std::fs::write(
+            &config_path,
+            "[profile dev]\nregion = us-west-2\n",
+        )
+        .expect("write config");
+
+        let result = resolve_aws_credentials_with_env(&auth, |var| match var {
+            "AWS_PROFILE" => Some("dev".to_string()),
+            "AWS_SHARED_CREDENTIALS_FILE" => Some(cred_path.to_string_lossy().to_string()),
+            "AWS_CONFIG_FILE" => Some(config_path.to_string_lossy().to_string()),
+            "AWS_REGION" => Some("eu-north-1".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            result,
+            Some(AwsResolvedCredentials::Sigv4 {
+                access_key_id: "AKIA_DEV".to_string(),
+                secret_access_key: "dev_secret".to_string(),
+                session_token: None,
+                region: "eu-north-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_aws_profile_missing_falls_back_to_auth() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let mut auth = AuthStorage {
+            path: dir.path().join("auth.json"),
+            entries: HashMap::new(),
+        };
+        auth.set(
+            "amazon-bedrock",
+            AuthCredential::AwsCredentials {
+                access_key_id: "AKIA_STORED".to_string(),
+                secret_access_key: "secret_stored".to_string(),
+                session_token: None,
+                region: Some("us-west-1".to_string()),
+            },
+        );
+        let cred_path = dir.path().join("credentials");
+        std::fs::write(
+            &cred_path,
+            "[default]\naws_access_key_id = AKIA_DEFAULT\naws_secret_access_key = default_secret\n",
+        )
+        .expect("write credentials");
+        let config_path = dir.path().join("config");
+        std::fs::write(&config_path, "[default]\nregion = us-east-1\n")
+            .expect("write config");
+
+        let result = resolve_aws_credentials_with_env(&auth, |var| match var {
+            "AWS_PROFILE" => Some("missing".to_string()),
+            "AWS_SHARED_CREDENTIALS_FILE" => Some(cred_path.to_string_lossy().to_string()),
+            "AWS_CONFIG_FILE" => Some(config_path.to_string_lossy().to_string()),
+            _ => None,
+        });
+
+        assert_eq!(
+            result,
+            Some(AwsResolvedCredentials::Sigv4 {
+                access_key_id: "AKIA_STORED".to_string(),
+                secret_access_key: "secret_stored".to_string(),
+                session_token: None,
+                region: "us-west-1".to_string(),
             })
         );
     }

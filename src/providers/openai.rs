@@ -1864,6 +1864,16 @@ mod tests {
         })
     }
 
+    fn collect_thinking_text(events: &[StreamEvent]) -> String {
+        let mut out = String::new();
+        for event in events {
+            if let StreamEvent::ThinkingDelta { delta, .. } = event {
+                out.push_str(delta);
+            }
+        }
+        out
+    }
+
     fn summarize_event(event: &StreamEvent) -> EventSummary {
         match event {
             StreamEvent::Start { .. } => EventSummary {
@@ -2193,6 +2203,93 @@ mod tests {
         assert_eq!(
             captured.headers.get("authorization").map(String::as_str),
             Some("Bearer test-openai-key")
+        );
+    }
+
+    #[test]
+    fn reasoning_only_delta_emits_thinking_events() {
+        let events = vec![
+            json!({
+                "choices": [{
+                    "delta": {"reasoning_content": "plan"},
+                    "finish_reason": null
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }),
+            Value::String("[DONE]".to_string()),
+        ];
+
+        let out = collect_events(&events);
+        assert!(
+            out.iter()
+                .any(|event| matches!(event, StreamEvent::ThinkingStart { .. })),
+            "expected ThinkingStart for reasoning-only delta"
+        );
+        assert!(
+            out.iter()
+                .any(|event| matches!(event, StreamEvent::ThinkingDelta { .. })),
+            "expected ThinkingDelta for reasoning-only delta"
+        );
+        assert!(
+            out.iter()
+                .any(|event| matches!(event, StreamEvent::ThinkingEnd { .. })),
+            "expected ThinkingEnd after finish_reason"
+        );
+        assert_eq!(collect_thinking_text(&out), "plan");
+    }
+
+    #[test]
+    fn reasoning_delta_segmentation_is_lossless() {
+        let single = vec![
+            json!({
+                "choices": [{
+                    "delta": {"reasoning_content": "abc"},
+                    "finish_reason": null
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }),
+            Value::String("[DONE]".to_string()),
+        ];
+
+        let split = vec![
+            json!({
+                "choices": [{
+                    "delta": {"reasoning_content": "a"},
+                    "finish_reason": null
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "delta": {"reasoning_content": "bc"},
+                    "finish_reason": null
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }),
+            Value::String("[DONE]".to_string()),
+        ];
+
+        let single_out = collect_events(&single);
+        let split_out = collect_events(&split);
+
+        assert_eq!(
+            collect_thinking_text(&single_out),
+            collect_thinking_text(&split_out),
+            "segmenting reasoning deltas should not change final thinking text"
         );
     }
 

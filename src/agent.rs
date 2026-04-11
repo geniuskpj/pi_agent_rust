@@ -16,7 +16,11 @@ use crate::auth::AuthStorage;
 use crate::compaction::{self, ResolvedCompactionSettings};
 use crate::compaction_worker::{CompactionQuota, CompactionWorkerState};
 use crate::error::{Error, Result};
-use crate::extension_events::{InputEventOutcome, apply_input_event_response};
+use crate::extension_events::{
+    BeforeAgentStartOutcome, InputEventOutcome, SessionBeforeCompactOutcome,
+    apply_before_agent_start_response, apply_input_event_response,
+    apply_session_before_compact_response,
+};
 use crate::extension_tools::collect_extension_tool_wrappers;
 use crate::extensions::{
     EXTENSION_EVENT_TIMEOUT_MS, ExtensionDeliverAs, ExtensionEventName, ExtensionHostActions,
@@ -73,6 +77,9 @@ pub struct AgentConfig {
 
     /// Strip image blocks before sending context to providers.
     pub block_images: bool,
+
+    /// Fail closed when extension tool hooks error or time out.
+    pub fail_closed_hooks: bool,
 }
 
 impl Default for AgentConfig {
@@ -82,6 +89,7 @@ impl Default for AgentConfig {
             max_tool_iterations: 50,
             stream_options: StreamOptions::default(),
             block_images: false,
+            fail_closed_hooks: false,
         }
     }
 }
@@ -102,6 +110,23 @@ impl QueueMode {
         match self {
             Self::All => "all",
             Self::OneAtATime => "one-at-a-time",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputSource {
+    Interactive,
+    Rpc,
+    Extension,
+}
+
+impl InputSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::Rpc => "rpc",
+            Self::Extension => "extension",
         }
     }
 }
@@ -516,6 +541,14 @@ impl Agent {
         &mut self.config.stream_options
     }
 
+    pub fn system_prompt(&self) -> Option<&str> {
+        self.config.system_prompt.as_deref()
+    }
+
+    pub fn set_system_prompt(&mut self, system_prompt: Option<String>) {
+        self.config.system_prompt = system_prompt;
+    }
+
     /// Build context for a completion request.
     fn build_context(&mut self) -> Context<'_> {
         let messages: Cow<'_, [Message]> = if self.config.block_images {
@@ -642,6 +675,16 @@ impl Agent {
     ) -> Result<AssistantMessage> {
         self.run_loop(vec![message], Arc::new(on_event), abort)
             .await
+    }
+
+    /// Run the agent with a pre-constructed prompt list and abort support.
+    pub async fn run_with_messages_with_abort(
+        &mut self,
+        messages: Vec<Message>,
+        abort: Option<AbortSignal>,
+        on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+    ) -> Result<AssistantMessage> {
+        self.run_loop(messages, Arc::new(on_event), abort).await
     }
 
     /// Continue the agent loop without adding a new prompt message (used for retries).
@@ -1095,6 +1138,48 @@ impl Agent {
         }
     }
 
+    async fn dispatch_context_event(&self, messages: &[Message]) -> Option<Vec<Message>> {
+        let Some(extensions) = &self.extensions else {
+            return None;
+        };
+
+        let payload = json!({ "messages": messages });
+        let response = extensions
+            .dispatch_event_with_response(
+                ExtensionEventName::Context,
+                Some(payload),
+                EXTENSION_EVENT_TIMEOUT_MS,
+            )
+            .await
+            .ok()?;
+
+        let value = response?;
+
+        if value.is_null() {
+            return None;
+        }
+
+        let messages_value = if let Some(obj) = value.as_object() {
+            obj.get("messages").cloned()?
+        } else if value.is_array() {
+            value
+        } else {
+            return None;
+        };
+
+        if messages_value.is_null() {
+            return Some(Vec::new());
+        }
+
+        match serde_json::from_value(messages_value) {
+            Ok(messages) => Some(messages),
+            Err(err) => {
+                tracing::warn!("context extension hook returned invalid messages: {err}");
+                None
+            }
+        }
+    }
+
     async fn drain_steering_messages(&mut self) -> Vec<Message> {
         for fetcher in &self.steering_fetchers {
             let fetched = self.fetch_messages(Some(fetcher)).await;
@@ -1126,7 +1211,19 @@ impl Agent {
         // Build context and stream completion
         let provider = Arc::clone(&self.provider);
         let stream_options = self.config.stream_options.clone();
-        let context = self.build_context();
+        let (system_prompt, tools, base_messages) = {
+            let context = self.build_context();
+            (
+                context.system_prompt.as_deref().map(str::to_string),
+                context.tools.to_vec(),
+                context.messages.to_vec(),
+            )
+        };
+        let messages = self
+            .dispatch_context_event(&base_messages)
+            .await
+            .unwrap_or(base_messages);
+        let context = Context::owned(system_prompt, messages, tools);
         let mut stream = provider.stream(&context, &stream_options).await?;
 
         let mut added_partial = false;
@@ -2076,7 +2173,13 @@ impl Agent {
         let extensions = self.extensions.clone();
 
         let (mut output, is_error) = if let Some(extensions) = &extensions {
-            match Self::dispatch_tool_call_hook(extensions, &tool_call).await {
+            match Self::dispatch_tool_call_hook(
+                extensions,
+                &tool_call,
+                self.config.fail_closed_hooks,
+            )
+            .await
+            {
                 Some(blocked_output) => (blocked_output, true),
                 None => {
                     self.execute_tool_without_hooks(&tool_call, Arc::clone(&on_event))
@@ -2167,6 +2270,7 @@ impl Agent {
     async fn dispatch_tool_call_hook(
         extensions: &ExtensionManager,
         tool_call: &ToolCall,
+        fail_closed_hooks: bool,
     ) -> Option<ToolOutput> {
         match extensions
             .dispatch_tool_call(tool_call, EXTENSION_EVENT_TIMEOUT_MS)
@@ -2177,8 +2281,18 @@ impl Agent {
             }
             Ok(_) => None,
             Err(err) => {
-                tracing::warn!("tool_call extension hook failed (fail-open): {err}");
-                None
+                if fail_closed_hooks {
+                    tracing::warn!(
+                        error = ?err,
+                        "tool_call extension hook failed (fail-closed)"
+                    );
+                    Some(Self::tool_call_blocked_output(Some(
+                        "extension hook failed",
+                    )))
+                } else {
+                    tracing::warn!("tool_call extension hook failed (fail-open): {err}");
+                    None
+                }
             }
         }
     }
@@ -2297,6 +2411,7 @@ pub struct AgentSession {
     pub agent: Agent,
     pub session: Arc<Mutex<Session>>,
     save_enabled: bool,
+    input_source: InputSource,
     /// Extension lifecycle region — ensures the JS runtime thread is shut
     /// down when the session ends.
     pub extensions: Option<ExtensionRegion>,
@@ -3753,6 +3868,70 @@ mod extensions_integration_tests {
             assert!(!is_error);
             assert!(!output.is_error);
             assert_eq!(calls.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn tool_call_hook_errors_fail_closed_when_configured() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let entry_path = temp_dir.path().join("ext.mjs");
+            std::fs::write(
+                &entry_path,
+                r#"
+                export default function init(pi) {
+                  pi.on("tool_call", async (_event) => {
+                    throw new Error("boom");
+                  });
+                }
+                "#,
+            )
+            .expect("write extension entry");
+
+            let provider = Arc::new(NoopProvider);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let tools = ToolRegistry::from_tools(vec![Box::new(CountingTool {
+                calls: Arc::clone(&calls),
+            })]);
+            let agent = Agent::new(
+                provider,
+                tools,
+                AgentConfig {
+                    fail_closed_hooks: true,
+                    ..AgentConfig::default()
+                },
+            );
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let mut agent_session =
+                AgentSession::new(agent, session, false, ResolvedCompactionSettings::default());
+
+            agent_session
+                .enable_extensions(&[], temp_dir.path(), None, &[entry_path])
+                .await
+                .expect("enable extensions");
+
+            let tool_call = ToolCall {
+                id: "call-1".to_string(),
+                name: "count_tool".to_string(),
+                arguments: json!({}),
+                thought_signature: None,
+            };
+
+            let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
+            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+
+            assert!(is_error);
+            assert!(output.is_error);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            if let [ContentBlock::Text(text)] = output.content.as_slice() {
+                assert_eq!(text.text, "Tool execution blocked: extension hook failed");
+            } else {
+                panic!("Expected text output, got {:?}", output.content);
+            }
         });
     }
 
@@ -5621,6 +5800,7 @@ impl AgentSession {
             agent,
             session,
             save_enabled,
+            input_source: InputSource::Interactive,
             extensions: None,
             extensions_is_streaming: Arc::new(AtomicBool::new(false)),
             extensions_is_compacting: Arc::new(AtomicBool::new(false)),
@@ -5635,6 +5815,10 @@ impl AgentSession {
             model_registry: None,
             auth_storage: None,
         }
+    }
+
+    pub const fn set_input_source(&mut self, source: InputSource) {
+        self.input_source = source;
     }
 
     #[must_use]
@@ -5971,6 +6155,7 @@ impl AgentSession {
     /// **Phase 1** — apply a completed background compaction result (if any).
     /// **Phase 2** — if quotas allow and the session needs compaction, start a
     /// new background compaction task.
+    #[allow(clippy::too_many_lines)]
     async fn maybe_compact(&mut self, on_event: AgentEventHandler) -> Result<()> {
         if !self.compaction_settings.enabled {
             return Ok(());
@@ -6001,25 +6186,64 @@ impl AgentSession {
             return Ok(());
         }
 
-        let preparation = {
+        let (entries, preparation) = {
             let cx = crate::agent_cx::AgentCx::for_request();
-            let session = self
+            let mut session = self
                 .session
                 .lock(cx.cx())
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
+            session.ensure_entry_ids();
             let entries = session
                 .entries_for_current_path()
                 .into_iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            compaction::prepare_compaction(&entries, self.compaction_settings.clone())
+            let prep = compaction::prepare_compaction(&entries, self.compaction_settings.clone());
+            (entries, prep)
         };
 
         if let Some(prep) = preparation {
             on_event(AgentEvent::AutoCompactionStart {
                 reason: "threshold".to_string(),
             });
+
+            let before_outcome = self
+                .dispatch_before_compact(&prep, &entries, None)
+                .await;
+            if before_outcome.cancel {
+                on_event(AgentEvent::AutoCompactionEnd {
+                    result: None,
+                    aborted: true,
+                    will_retry: false,
+                    error_message: None,
+                });
+                return Ok(());
+            }
+
+            if let Some(compaction) = before_outcome.compaction {
+                let result_value = compaction.details.clone();
+                self.extensions_is_compacting
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let apply_result = self.apply_compaction_entry(
+                    compaction.summary,
+                    compaction.first_kept_entry_id,
+                    compaction.tokens_before,
+                    compaction.details,
+                    true,
+                )
+                .await;
+                self.extensions_is_compacting
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                apply_result?;
+                on_event(AgentEvent::AutoCompactionEnd {
+                    result: result_value,
+                    aborted: false,
+                    will_retry: false,
+                    error_message: None,
+                });
+                return Ok(());
+            }
 
             let provider = self.agent.provider();
             let api_key = self // ubs:ignore
@@ -6065,11 +6289,13 @@ impl AgentSession {
         Ok(runtime_handle)
     }
 
-    /// Apply a completed compaction result to the session.
-    async fn apply_compaction_result(
+    async fn apply_compaction_entry(
         &self,
-        result: compaction::CompactionResult,
-        on_event: AgentEventHandler,
+        summary: String,
+        first_kept_entry_id: String,
+        tokens_before: u64,
+        details: Option<Value>,
+        from_extension: bool,
     ) -> Result<()> {
         let cx = crate::agent_cx::AgentCx::for_request();
         let mut session = self
@@ -6078,15 +6304,13 @@ impl AgentSession {
             .await
             .map_err(|e| Error::session(e.to_string()))?;
 
-        let details = compaction::compaction_details_to_value(&result.details).ok();
-        let result_value = details.clone();
-
-        session.append_compaction(
-            result.summary,
-            result.first_kept_entry_id,
-            result.tokens_before,
+        let from_hook = if from_extension { Some(true) } else { None };
+        let entry_id = session.append_compaction(
+            summary,
+            first_kept_entry_id,
+            tokens_before,
             details,
-            None, // from_hook
+            from_hook,
         );
 
         if self.save_enabled {
@@ -6094,6 +6318,50 @@ impl AgentSession {
                 .flush_autosave(AutosaveFlushTrigger::Periodic)
                 .await?;
         }
+
+        let compaction_entry = session.get_entry(&entry_id).and_then(|entry| {
+            if let crate::session::SessionEntry::Compaction(compaction) = entry {
+                Some(compaction.clone())
+            } else {
+                None
+            }
+        });
+        drop(session);
+
+        if let (Some(region), Some(compaction_entry)) = (&self.extensions, compaction_entry) {
+            let payload = json!({
+                "compactionEntry": compaction_entry,
+                "fromExtension": from_extension,
+            });
+            if let Err(err) = region
+                .manager()
+                .dispatch_event(ExtensionEventName::SessionCompact, Some(payload))
+                .await
+            {
+                tracing::warn!("session_compact extension hook failed (fail-open): {err}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Apply a completed compaction result to the session.
+    async fn apply_compaction_result(
+        &self,
+        result: compaction::CompactionResult,
+        on_event: AgentEventHandler,
+    ) -> Result<()> {
+        let details = compaction::compaction_details_to_value(&result.details).ok();
+        let result_value = details.clone();
+
+        self.apply_compaction_entry(
+            result.summary,
+            result.first_kept_entry_id,
+            result.tokens_before,
+            details,
+            false,
+        )
+        .await?;
 
         on_event(AgentEvent::AutoCompactionEnd {
             result: result_value,
@@ -6111,25 +6379,64 @@ impl AgentSession {
             return Ok(());
         }
 
-        let preparation = {
+        let (entries, preparation) = {
             let cx = crate::agent_cx::AgentCx::for_request();
-            let session = self
+            let mut session = self
                 .session
                 .lock(cx.cx())
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
+            session.ensure_entry_ids();
             let entries = session
                 .entries_for_current_path()
                 .into_iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            compaction::prepare_compaction(&entries, self.compaction_settings.clone())
+            let prep = compaction::prepare_compaction(&entries, self.compaction_settings.clone());
+            (entries, prep)
         };
 
         if let Some(prep) = preparation {
             on_event(AgentEvent::AutoCompactionStart {
                 reason: "threshold".to_string(),
             });
+
+            let before_outcome = self
+                .dispatch_before_compact(&prep, &entries, None)
+                .await;
+            if before_outcome.cancel {
+                on_event(AgentEvent::AutoCompactionEnd {
+                    result: None,
+                    aborted: true,
+                    will_retry: false,
+                    error_message: None,
+                });
+                return Err(Error::extension("Compaction cancelled".to_string()));
+            }
+
+            if let Some(compaction) = before_outcome.compaction {
+                let result_value = compaction.details.clone();
+                self.extensions_is_compacting
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                let apply_result = self.apply_compaction_entry(
+                    compaction.summary,
+                    compaction.first_kept_entry_id,
+                    compaction.tokens_before,
+                    compaction.details,
+                    true,
+                )
+                .await;
+                self.extensions_is_compacting
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                apply_result?;
+                on_event(AgentEvent::AutoCompactionEnd {
+                    result: result_value,
+                    aborted: false,
+                    will_retry: false,
+                    error_message: None,
+                });
+                return Ok(());
+            }
             self.extensions_is_compacting
                 .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -6478,6 +6785,13 @@ impl AgentSession {
             tracing::warn!("startup extension hook failed (fail-open): {err}");
         }
 
+        if let Err(err) = manager
+            .dispatch_event(ExtensionEventName::SessionStart, None)
+            .await
+        {
+            tracing::warn!("session_start extension hook failed (fail-open): {err}");
+        }
+
         let ctx_payload = serde_json::json!({ "cwd": cwd.display().to_string() });
         let wrappers = collect_extension_tool_wrappers(&manager, ctx_payload).await?;
         self.agent.extend_tools(wrappers);
@@ -6542,14 +6856,34 @@ impl AgentSession {
                 }
             };
 
-            self.dispatch_before_agent_start().await;
+            let base_system_prompt = self.agent.system_prompt().map(str::to_string);
+            let BeforeAgentStartOutcome {
+                messages: custom_messages,
+                system_prompt,
+            } = self
+                .dispatch_before_agent_start(
+                    &text,
+                    &images,
+                    base_system_prompt.as_deref().unwrap_or(""),
+                )
+                .await;
+            if let Some(prompt) = system_prompt {
+                self.agent.set_system_prompt(Some(prompt));
+            } else {
+                self.agent.set_system_prompt(base_system_prompt.clone());
+            }
 
-            if images.is_empty() {
-                self.run_agent_with_text(text, abort, on_event).await
+            let result = if images.is_empty() {
+                self.run_agent_with_text(text, abort, on_event, custom_messages)
+                    .await
             } else {
                 let content = Self::build_content_blocks_for_input(&text, &images);
-                self.run_agent_with_content(content, abort, on_event).await
-            }
+                self.run_agent_with_content(content, abort, on_event, custom_messages)
+                    .await
+            };
+
+            self.agent.set_system_prompt(base_system_prompt);
+            result
         }
         .await;
         self.extensions_turn_active.store(false, Ordering::SeqCst);
@@ -6583,11 +6917,30 @@ impl AgentSession {
                 }
             };
 
-            self.dispatch_before_agent_start().await;
+            let base_system_prompt = self.agent.system_prompt().map(str::to_string);
+            let BeforeAgentStartOutcome {
+                messages: custom_messages,
+                system_prompt,
+            } = self
+                .dispatch_before_agent_start(
+                    &text,
+                    &images,
+                    base_system_prompt.as_deref().unwrap_or(""),
+                )
+                .await;
+            if let Some(prompt) = system_prompt {
+                self.agent.set_system_prompt(Some(prompt));
+            } else {
+                self.agent.set_system_prompt(base_system_prompt.clone());
+            }
 
             let content_for_agent = Self::build_content_blocks_for_input(&text, &images);
-            self.run_agent_with_content(content_for_agent, abort, on_event)
-                .await
+            let result = self
+                .run_agent_with_content(content_for_agent, abort, on_event, custom_messages)
+                .await;
+
+            self.agent.set_system_prompt(base_system_prompt);
+            result
         }
         .await;
         self.extensions_turn_active.store(false, Ordering::SeqCst);
@@ -6620,10 +6973,14 @@ impl AgentSession {
         };
 
         let images_value = serde_json::to_value(&images).unwrap_or(Value::Null);
+        let attachments_value = images_value.clone();
+        let text_clone = text.clone();
         let payload = json!({
             "text": text,
+            "content": text_clone,
             "images": images_value,
-            "source": "user",
+            "attachments": attachments_value,
+            "source": self.input_source.as_str(),
         });
 
         let response = region
@@ -6638,14 +6995,86 @@ impl AgentSession {
         Ok(apply_input_event_response(response, text, images))
     }
 
-    async fn dispatch_before_agent_start(&self) {
-        if let Some(region) = &self.extensions {
-            if let Err(err) = region
-                .manager()
-                .dispatch_event(ExtensionEventName::BeforeAgentStart, None)
-                .await
-            {
+    async fn dispatch_before_agent_start(
+        &self,
+        prompt: &str,
+        images: &[ImageContent],
+        system_prompt: &str,
+    ) -> BeforeAgentStartOutcome {
+        let Some(region) = &self.extensions else {
+            return BeforeAgentStartOutcome {
+                messages: Vec::new(),
+                system_prompt: None,
+            };
+        };
+
+        let images_value = serde_json::to_value(images).unwrap_or(Value::Null);
+        let payload = json!({
+            "prompt": prompt,
+            "images": images_value,
+            "systemPrompt": system_prompt,
+        });
+
+        let response = region
+            .manager()
+            .dispatch_event_with_response(
+                ExtensionEventName::BeforeAgentStart,
+                Some(payload),
+                EXTENSION_EVENT_TIMEOUT_MS,
+            )
+            .await;
+
+        match response {
+            Ok(value) => apply_before_agent_start_response(value, Utc::now().timestamp_millis()),
+            Err(err) => {
                 tracing::warn!("before_agent_start extension hook failed (fail-open): {err}");
+                BeforeAgentStartOutcome {
+                    messages: Vec::new(),
+                    system_prompt: None,
+                }
+            }
+        }
+    }
+
+    async fn dispatch_before_compact(
+        &self,
+        preparation: &compaction::CompactionPreparation,
+        branch_entries: &[crate::session::SessionEntry],
+        custom_instructions: Option<&str>,
+    ) -> SessionBeforeCompactOutcome {
+        let Some(region) = &self.extensions else {
+            return SessionBeforeCompactOutcome::default();
+        };
+
+        let prep_value = compaction::compaction_preparation_to_value(preparation);
+        let branch_entries_value =
+            serde_json::to_value(branch_entries).unwrap_or(Value::Array(Vec::new()));
+        let mut payload = serde_json::Map::new();
+        payload.insert("preparation".to_string(), prep_value);
+        payload.insert("branchEntries".to_string(), branch_entries_value);
+        if let Some(custom_instructions) = custom_instructions {
+            payload.insert(
+                "customInstructions".to_string(),
+                Value::String(custom_instructions.to_string()),
+            );
+        }
+
+        let response = region
+            .manager()
+            .dispatch_event_with_response(
+                ExtensionEventName::SessionBeforeCompact,
+                Some(Value::Object(payload)),
+                EXTENSION_EVENT_TIMEOUT_MS,
+            )
+            .await;
+
+        match response {
+            Ok(value) => {
+                apply_session_before_compact_response(value, preparation.tokens_before)
+            }
+            Err(err) => {
+                tracing::warn!("session_before_compact extension hook failed (fail-open): {err}");
+                SessionBeforeCompactOutcome::default()
             }
         }
     }
@@ -6691,25 +7120,37 @@ impl AgentSession {
         abort: Option<AbortSignal>,
         on_event: AgentEventHandler,
     ) -> Result<()> {
-        for action in self.take_pending_idle_actions() {
-            match action {
-                PendingIdleAction::CustomMessage(message) => {
-                    let handler = Arc::clone(&on_event);
-                    self.run_custom_message_with_abort(message, abort.clone(), move |event| {
-                        handler(event);
-                    })
-                    .await?;
-                }
-                PendingIdleAction::UserText(text) => {
-                    let handler = Arc::clone(&on_event);
-                    self.run_text_with_abort(text, abort.clone(), move |event| {
-                        handler(event);
-                    })
-                    .await?;
+        let actions = self.take_pending_idle_actions();
+        if actions.is_empty() {
+            return Ok(());
+        }
+
+        let previous_source = self.input_source;
+        self.input_source = InputSource::Extension;
+        let result = async {
+            for action in actions {
+                match action {
+                    PendingIdleAction::CustomMessage(message) => {
+                        let handler = Arc::clone(&on_event);
+                        self.run_custom_message_with_abort(message, abort.clone(), move |event| {
+                            handler(event);
+                        })
+                        .await?;
+                    }
+                    PendingIdleAction::UserText(text) => {
+                        let handler = Arc::clone(&on_event);
+                        self.run_text_with_abort(text, abort.clone(), move |event| {
+                            handler(event);
+                        })
+                        .await?;
+                    }
                 }
             }
+            Ok(())
         }
-        Ok(())
+        .await;
+        self.input_source = previous_source;
+        result
     }
 
     async fn run_custom_message_with_abort(
@@ -6720,9 +7161,29 @@ impl AgentSession {
     ) -> Result<AssistantMessage> {
         self.extensions_turn_active.store(true, Ordering::SeqCst);
         let result = async {
-            self.dispatch_before_agent_start().await;
-            self.run_agent_with_prompt_message(message, abort, on_event)
-                .await
+            let base_system_prompt = self.agent.system_prompt().map(str::to_string);
+            let BeforeAgentStartOutcome {
+                messages: custom_messages,
+                system_prompt,
+            } = self
+                .dispatch_before_agent_start(
+                    "",
+                    &[],
+                    base_system_prompt.as_deref().unwrap_or(""),
+                )
+                .await;
+            if let Some(prompt) = system_prompt {
+                self.agent.set_system_prompt(Some(prompt));
+            } else {
+                self.agent.set_system_prompt(base_system_prompt.clone());
+            }
+
+            let result = self
+                .run_agent_with_prompt_message(message, abort, on_event, custom_messages)
+                .await;
+
+            self.agent.set_system_prompt(base_system_prompt);
+            result
         }
         .await;
         self.extensions_turn_active.store(false, Ordering::SeqCst);
@@ -6734,6 +7195,7 @@ impl AgentSession {
         prompt_message: Message,
         abort: Option<AbortSignal>,
         on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+        custom_messages: Vec<CustomMessage>,
     ) -> Result<AssistantMessage> {
         let on_event: AgentEventHandler = Arc::new(on_event);
         self.sync_runtime_selection_from_session_header().await?;
@@ -6751,6 +7213,9 @@ impl AgentSession {
         self.agent.replace_messages(history);
 
         let start_len = self.agent.messages().len();
+        let mut prompts = Vec::with_capacity(1 + custom_messages.len());
+        prompts.push(prompt_message.clone());
+        prompts.extend(custom_messages.into_iter().map(Message::Custom));
 
         {
             let cx = crate::agent_cx::AgentCx::for_request();
@@ -6769,7 +7234,7 @@ impl AgentSession {
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
-            .run_with_message_with_abort(prompt_message, abort, move |event| {
+            .run_with_messages_with_abort(prompts, abort, move |event| {
                 on_event_for_run(event);
             })
             .await;
@@ -6787,6 +7252,7 @@ impl AgentSession {
         input: String,
         abort: Option<AbortSignal>,
         on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+        custom_messages: Vec<CustomMessage>,
     ) -> Result<AssistantMessage> {
         let on_event: AgentEventHandler = Arc::new(on_event);
         self.sync_runtime_selection_from_session_header().await?;
@@ -6810,6 +7276,9 @@ impl AgentSession {
             content: UserContent::Text(input),
             timestamp: Utc::now().timestamp_millis(),
         });
+        let mut prompts = Vec::with_capacity(1 + custom_messages.len());
+        prompts.push(user_message.clone());
+        prompts.extend(custom_messages.into_iter().map(Message::Custom));
 
         {
             let cx = crate::agent_cx::AgentCx::for_request();
@@ -6828,7 +7297,7 @@ impl AgentSession {
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
-            .run_with_message_with_abort(user_message, abort, move |event| {
+            .run_with_messages_with_abort(prompts, abort, move |event| {
                 on_event_for_run(event);
             })
             .await;
@@ -6848,6 +7317,7 @@ impl AgentSession {
         content: Vec<ContentBlock>,
         abort: Option<AbortSignal>,
         on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
+        custom_messages: Vec<CustomMessage>,
     ) -> Result<AssistantMessage> {
         let on_event: AgentEventHandler = Arc::new(on_event);
         self.sync_runtime_selection_from_session_header().await?;
@@ -6871,6 +7341,9 @@ impl AgentSession {
             content: UserContent::Blocks(content),
             timestamp: Utc::now().timestamp_millis(),
         });
+        let mut prompts = Vec::with_capacity(1 + custom_messages.len());
+        prompts.push(user_message.clone());
+        prompts.extend(custom_messages.into_iter().map(Message::Custom));
 
         {
             let cx = crate::agent_cx::AgentCx::for_request();
@@ -6889,7 +7362,7 @@ impl AgentSession {
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
-            .run_with_message_with_abort(user_message, abort, move |event| {
+            .run_with_messages_with_abort(prompts, abort, move |event| {
                 on_event_for_run(event);
             })
             .await;
@@ -7422,6 +7895,7 @@ mod tests {
                 max_tool_iterations: 50,
                 stream_options: StreamOptions::default(),
                 block_images: true,
+                fail_closed_hooks: false,
             },
         );
         agent.add_message(Message::User(UserMessage {
@@ -7453,6 +7927,7 @@ mod tests {
                 max_tool_iterations: 50,
                 stream_options: StreamOptions::default(),
                 block_images: false,
+                fail_closed_hooks: false,
             },
         );
         agent.add_message(Message::User(UserMessage {
@@ -7645,6 +8120,7 @@ mod tests {
                 max_tool_iterations: 50,
                 stream_options,
                 block_images: false,
+                fail_closed_hooks: false,
             },
         );
 

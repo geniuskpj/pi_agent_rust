@@ -967,6 +967,7 @@ async fn handle_session_new(
         max_tool_iterations: 50,
         stream_options,
         block_images: options.config.image_block_images(),
+        fail_closed_hooks: options.config.fail_closed_hooks(),
     };
 
     let agent = crate::agent::Agent::new(provider, tools, agent_config);

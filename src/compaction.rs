@@ -16,7 +16,7 @@ use crate::provider::{Context, Provider, StreamOptions};
 use crate::session::{SessionEntry, SessionMessage, session_message_to_model};
 use futures::StreamExt;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -115,6 +115,70 @@ pub struct CompactionPreparation {
     pub previous_summary: Option<String>,
     pub file_ops: FileOperations,
     pub settings: ResolvedCompactionSettings,
+}
+
+pub fn compaction_preparation_to_value(prep: &CompactionPreparation) -> Value {
+    let messages_to_summarize =
+        serde_json::to_value(&prep.messages_to_summarize).unwrap_or(Value::Array(Vec::new()));
+    let turn_prefix_messages =
+        serde_json::to_value(&prep.turn_prefix_messages).unwrap_or(Value::Array(Vec::new()));
+
+    let mut obj = Map::new();
+    obj.insert(
+        "firstKeptEntryId".to_string(),
+        Value::String(prep.first_kept_entry_id.clone()),
+    );
+    obj.insert("messagesToSummarize".to_string(), messages_to_summarize);
+    obj.insert("turnPrefixMessages".to_string(), turn_prefix_messages);
+    obj.insert("isSplitTurn".to_string(), Value::Bool(prep.is_split_turn));
+    obj.insert("tokensBefore".to_string(), Value::from(prep.tokens_before));
+    if let Some(previous_summary) = &prep.previous_summary {
+        obj.insert(
+            "previousSummary".to_string(),
+            Value::String(previous_summary.clone()),
+        );
+    }
+    obj.insert("fileOps".to_string(), file_ops_to_value(&prep.file_ops));
+    obj.insert(
+        "settings".to_string(),
+        compaction_settings_to_value(&prep.settings),
+    );
+    Value::Object(obj)
+}
+
+fn file_ops_to_value(file_ops: &FileOperations) -> Value {
+    let read = sorted_file_ops(&file_ops.read);
+    let written = sorted_file_ops(&file_ops.written);
+    let edited = sorted_file_ops(&file_ops.edited);
+    let mut obj = Map::new();
+    obj.insert("read".to_string(), Value::Array(read));
+    obj.insert("written".to_string(), Value::Array(written));
+    obj.insert("edited".to_string(), Value::Array(edited));
+    Value::Object(obj)
+}
+
+fn sorted_file_ops(values: &HashSet<String>) -> Vec<Value> {
+    let mut entries = values.iter().cloned().collect::<Vec<_>>();
+    entries.sort();
+    entries.into_iter().map(Value::String).collect()
+}
+
+fn compaction_settings_to_value(settings: &ResolvedCompactionSettings) -> Value {
+    let mut obj = Map::new();
+    obj.insert("enabled".to_string(), Value::Bool(settings.enabled));
+    obj.insert(
+        "contextWindowTokens".to_string(),
+        Value::from(settings.context_window_tokens),
+    );
+    obj.insert(
+        "reserveTokens".to_string(),
+        Value::from(settings.reserve_tokens),
+    );
+    obj.insert(
+        "keepRecentTokens".to_string(),
+        Value::from(settings.keep_recent_tokens),
+    );
+    Value::Object(obj)
 }
 
 // =============================================================================

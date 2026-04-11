@@ -448,6 +448,9 @@ impl PiApp {
                 None
             };
 
+            let mut summary_entry_payload: Option<Value> = None;
+            let mut summary_entry_id: Option<String> = None;
+
             let messages_for_agent = {
                 let mut guard = match session.lock(&cx).await {
                     Ok(guard) => guard,
@@ -477,12 +480,29 @@ impl PiApp {
                 }
 
                 if let Some(summary_text) = summary_text {
+                    let summary_clone = summary_text.clone();
                     guard.append_branch_summary(
                         pending.summary_from_id.clone(),
                         summary_text,
                         None,
                         None,
                     );
+                    summary_entry_id = guard.leaf_id.clone();
+                    let mut summary_entry = serde_json::Map::new();
+                    summary_entry.insert(
+                        "type".to_string(),
+                        Value::String("branch_summary".to_string()),
+                    );
+                    summary_entry.insert(
+                        "fromId".to_string(),
+                        Value::String(pending.summary_from_id.clone()),
+                    );
+                    summary_entry.insert(
+                        "summary".to_string(),
+                        Value::String(summary_clone),
+                    );
+                    summary_entry.insert("fromHook".to_string(), Value::Bool(false));
+                    summary_entry_payload = Some(Value::Object(summary_entry));
                 }
 
                 let _ = guard.save().await;
@@ -550,6 +570,23 @@ impl PiApp {
             }
 
             if let Some(manager) = extensions {
+                let new_leaf_id = summary_entry_id
+                    .clone()
+                    .or_else(|| pending.new_leaf_id.clone());
+                let old_leaf_value = pending
+                    .old_leaf_id
+                    .clone()
+                    .map_or(Value::Null, Value::String);
+                let new_leaf_value = new_leaf_id
+                    .clone()
+                    .map_or(Value::Null, Value::String);
+                let mut tree_payload = serde_json::Map::new();
+                tree_payload.insert("newLeafId".to_string(), new_leaf_value);
+                tree_payload.insert("oldLeafId".to_string(), old_leaf_value);
+                if let Some(summary_entry) = summary_entry_payload {
+                    tree_payload.insert("summaryEntry".to_string(), summary_entry);
+                }
+
                 let _ = manager
                     .dispatch_event(
                         ExtensionEventName::SessionSwitch,
@@ -558,6 +595,12 @@ impl PiApp {
                             "toId": to_id_for_event,
                             "sessionId": pending.session_id,
                         })),
+                    )
+                    .await;
+                let _ = manager
+                    .dispatch_event(
+                        ExtensionEventName::SessionTree,
+                        Some(Value::Object(tree_payload)),
                     )
                     .await;
             }

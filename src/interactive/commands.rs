@@ -35,6 +35,7 @@ pub enum SlashCommand {
     Fork,
     Compact,
     Reload,
+    Template,
     Share,
 }
 
@@ -72,6 +73,7 @@ impl SlashCommand {
             "/fork" => Self::Fork,
             "/compact" => Self::Compact,
             "/reload" => Self::Reload,
+            "/template" => Self::Template,
             "/share" => Self::Share,
             _ => return None,
         };
@@ -104,6 +106,7 @@ impl SlashCommand {
   /fork [id|index]   - Fork from a user message (default: last on current path)
   /compact [notes]   - Compact older context with optional instructions
   /reload            - Reload skills/prompts from disk
+  /template <name> [args] - Expand a prompt template by name
   /share             - Upload session HTML to a secret GitHub gist and show URL
   /exit, /quit, /q   - Exit Pi
 
@@ -535,6 +538,19 @@ fn session_thinking_level(
         .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
 }
 
+fn model_entry_event_payload(entry: &ModelEntry) -> Value {
+    json!({
+        "id": entry.model.id.clone(),
+        "name": entry.model.name.clone(),
+        "provider": entry.model.provider.clone(),
+        "api": entry.model.api.clone(),
+        "baseUrl": entry.model.base_url.clone(),
+        "contextWindow": entry.model.context_window,
+        "maxTokens": entry.model.max_tokens,
+        "input": &entry.model.input,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SessionThinkingSyncPlan {
     effective: crate::model::ThinkingLevel,
@@ -570,6 +586,46 @@ fn plan_session_thinking_sync(
         thinking_changed,
         persist_needed,
     }
+}
+
+fn parse_user_bash_event_result(value: &Value) -> Option<crate::tools::BashRunResult> {
+    let result = value
+        .as_object()
+        .map_or(value, |obj| obj.get("result").unwrap_or(value));
+    let obj = result.as_object()?;
+
+    let output = obj
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let exit_code = obj
+        .get("exitCode")
+        .and_then(Value::as_i64)
+        .or_else(|| obj.get("exit_code").and_then(Value::as_i64))
+        .unwrap_or(0);
+    let cancelled = obj
+        .get("cancelled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let truncated = obj
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let full_output_path = obj
+        .get("fullOutputPath")
+        .or_else(|| obj.get("full_output_path"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+
+    Some(crate::tools::BashRunResult {
+        output,
+        exit_code: i32::try_from(exit_code).unwrap_or(0),
+        cancelled,
+        truncated,
+        full_output_path,
+        truncation: None,
+    })
 }
 
 pub fn resolve_scoped_model_entries(
@@ -774,7 +830,9 @@ impl PiApp {
         next: &ModelEntry,
         provider_impl: std::sync::Arc<dyn crate::provider::Provider>,
         resolved_key_opt: Option<&str>,
+        source: &str,
     ) -> Result<(), String> {
+        let previous_entry = self.model_entry.clone();
         let Ok(mut agent_guard) = self.agent.try_lock() else {
             return Err("Agent busy; try again".to_string());
         };
@@ -813,10 +871,39 @@ impl PiApp {
             *guard = next.clone();
         }
         self.model = format!("{}/{}", next.model.provider, next.model.id);
+        self.dispatch_model_select_event(next, Some(&previous_entry), source);
         Ok(())
     }
 
+    fn dispatch_model_select_event(
+        &self,
+        next: &ModelEntry,
+        previous: Option<&ModelEntry>,
+        source: &str,
+    ) {
+        let Some(manager) = self.extensions.clone() else {
+            return;
+        };
+        let runtime_handle = self.runtime_handle.clone();
+        let source = match source {
+            "selector" | "command" => "set",
+            other => other,
+        };
+        let payload = json!({
+            "model": model_entry_event_payload(next),
+            "previousModel": previous.map(model_entry_event_payload),
+            "source": source,
+        });
+
+        runtime_handle.spawn(async move {
+            let _ = manager
+                .dispatch_event(ExtensionEventName::ModelSelect, Some(payload))
+                .await;
+        });
+    }
+
     pub(super) fn sync_runtime_selection_from_session_header(&mut self) -> Result<(), String> {
+        let previous_entry = self.model_entry.clone();
         let Ok(mut agent_guard) = self.agent.try_lock() else {
             return Err("Agent busy; try again".to_string());
         };
@@ -900,16 +987,24 @@ impl PiApp {
         };
         drop(session_guard);
 
-        if sync_model && !model_entry_matches(&self.model_entry, &target_entry) {
+        let model_changed = if sync_model && !model_entry_matches(&self.model_entry, &target_entry)
+        {
             self.model_entry = target_entry.clone();
             if let Ok(mut guard) = self.model_entry_shared.lock() {
                 *guard = target_entry.clone();
             }
             self.model = format!("{}/{}", target_entry.model.provider, target_entry.model.id);
-        }
+            true
+        } else {
+            false
+        };
 
         if persist_needed {
             self.spawn_save_session();
+        }
+
+        if model_changed {
+            self.dispatch_model_select_event(&target_entry, Some(&previous_entry), "restore");
         }
 
         Ok(())
@@ -1132,6 +1227,7 @@ impl PiApp {
         None
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn submit_bash_command(
         &mut self,
         raw_message: &str,
@@ -1156,26 +1252,58 @@ impl PiApp {
         let session = Arc::clone(&self.session);
         let save_enabled = self.save_enabled;
         let cwd = self.cwd.clone();
+        let cwd_display = cwd.display().to_string();
         let shell_path = self.config.shell_path.clone();
         let command_prefix = self.config.shell_command_prefix.clone();
+        let extensions = self.extensions.clone();
         let runtime_handle = self.runtime_handle.clone();
         let task_cx = Cx::current().unwrap_or_else(Cx::for_request);
 
         runtime_handle.spawn(async move {
-            let result = crate::tools::run_bash_command(
-                &cwd,
-                shell_path.as_deref(),
-                command_prefix.as_deref(),
-                &command,
-                None,
-                None,
-            )
-            .await;
+            let mut override_result = None;
+            if let Some(manager) = extensions {
+                let response = manager
+                    .dispatch_event_with_response(
+                        ExtensionEventName::UserBash,
+                        Some(json!({
+                            "command": command.clone(),
+                            "excludeFromContext": exclude_from_context,
+                            "cwd": cwd_display,
+                        })),
+                        EXTENSION_EVENT_TIMEOUT_MS,
+                    )
+                    .await
+                    .unwrap_or(None);
+                if let Some(value) = response {
+                    override_result = parse_user_bash_event_result(&value);
+                }
+            }
+
+            let result = match override_result {
+                Some(result) => Ok(result),
+                None => {
+                    crate::tools::run_bash_command(
+                        &cwd,
+                        shell_path.as_deref(),
+                        command_prefix.as_deref(),
+                        &command,
+                        None,
+                        None,
+                    )
+                    .await
+                }
+            };
 
             match result {
                 Ok(result) => {
-                    let display =
-                        bash_execution_to_text(&command, &result.output, 0, false, false, None);
+                    let display = bash_execution_to_text(
+                        &command,
+                        &result.output,
+                        result.exit_code,
+                        result.cancelled,
+                        result.truncated,
+                        result.full_output_path.as_deref(),
+                    );
 
                     if exclude_from_context {
                         let mut extra = HashMap::new();
@@ -1838,6 +1966,104 @@ impl PiApp {
                     return None;
                 }
 
+                if let Some(extensions) = self.extensions.clone() {
+                    let session = Arc::clone(&self.session);
+                    let event_tx = self.event_tx.clone();
+                    let runtime_handle = self.runtime_handle.clone();
+                    let args = args.to_string();
+                    let task_cx = Cx::current().unwrap_or_else(Cx::for_request);
+
+                    runtime_handle.spawn(async move {
+                        let cx = Cx::current().unwrap_or_else(Cx::for_request);
+                        let (initial_selected_id, branch_count, entry_count) = match session
+                            .lock(&cx)
+                            .await
+                        {
+                            Ok(session_guard) => {
+                                let initial_selected_id =
+                                    resolve_tree_selector_initial_id(&session_guard, &args);
+                                let branch_count = session_guard.list_leaves().len();
+                                let entry_count = session_guard.entries.len();
+                                (initial_selected_id, branch_count, entry_count)
+                            }
+                            Err(err) => {
+                                let _ = crate::interactive::enqueue_pi_event(
+                                    &event_tx,
+                                    &task_cx,
+                                    PiMsg::AgentError(format!(
+                                        "Failed to lock session: {err}"
+                                    )),
+                                )
+                                .await;
+                                return;
+                            }
+                        };
+
+                        let response = extensions
+                            .dispatch_event_with_response(
+                                ExtensionEventName::SessionBeforeTree,
+                                Some(json!({
+                                    "preparation": {
+                                        "branchCount": branch_count,
+                                        "entryCount": entry_count,
+                                    }
+                                })),
+                                EXTENSION_EVENT_TIMEOUT_MS,
+                            )
+                            .await
+                            .unwrap_or(None);
+
+                        let mut label = None;
+                        let mut cancelled = false;
+                        if let Some(value) = response {
+                            if value.as_bool() == Some(false) {
+                                cancelled = true;
+                            }
+                            if let Some(obj) = value.as_object() {
+                                if obj
+                                    .get("cancel")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false)
+                                    || obj
+                                        .get("cancelled")
+                                        .and_then(Value::as_bool)
+                                        .unwrap_or(false)
+                                {
+                                    cancelled = true;
+                                }
+                                if let Some(custom_label) =
+                                    obj.get("label").and_then(Value::as_str)
+                                {
+                                    label = Some(custom_label.to_string());
+                                }
+                            }
+                        }
+
+                        if cancelled {
+                            let _ = crate::interactive::enqueue_pi_event(
+                                &event_tx,
+                                &task_cx,
+                                PiMsg::System("Session tree cancelled by extension".to_string()),
+                            )
+                            .await;
+                            return;
+                        }
+
+                        let _ = crate::interactive::enqueue_pi_event(
+                            &event_tx,
+                            &task_cx,
+                            PiMsg::OpenTree {
+                                initial_selected_id,
+                                label,
+                            },
+                        )
+                        .await;
+                    });
+
+                    self.status_message = Some("Preparing tree...".to_string());
+                    return None;
+                }
+
                 let Ok(session_guard) = self.session.try_lock() else {
                     self.status_message = Some("Session busy; try again".to_string());
                     return None;
@@ -1847,6 +2073,7 @@ impl PiApp {
                     &session_guard,
                     self.term_height,
                     initial_selected_id.as_deref(),
+                    None,
                 );
                 drop(session_guard);
                 self.tree_ui = Some(TreeUiState::Selector(selector));
@@ -1855,6 +2082,7 @@ impl PiApp {
             SlashCommand::Fork => self.handle_slash_fork(args),
             SlashCommand::Compact => self.handle_slash_compact(args),
             SlashCommand::Reload => self.handle_slash_reload(),
+            SlashCommand::Template => self.handle_slash_template(args),
             SlashCommand::Share => self.handle_slash_share(args),
         }
     }
@@ -2228,8 +2456,12 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
             }
         };
 
-        if let Err(message) =
-            self.switch_active_model(&next, provider_impl, resolved_key_opt.as_deref())
+        if let Err(message) = self.switch_active_model(
+            &next,
+            provider_impl,
+            resolved_key_opt.as_deref(),
+            "command",
+        )
         {
             self.status_message = Some(message);
             return None;
@@ -2424,13 +2656,27 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
         let cli = self.resource_cli.clone();
         let cwd = self.cwd.clone();
         let event_tx = self.event_tx.clone();
+        let extensions = self.extensions.clone();
         let runtime_handle = self.runtime_handle.clone();
         let task_cx = Cx::current().unwrap_or_else(Cx::for_request);
 
         runtime_handle.spawn(async move {
             let manager = PackageManager::new(cwd.clone());
             match ResourceLoader::load(&manager, &cwd, &config, &cli).await {
-                Ok(resources) => {
+                Ok(mut resources) => {
+                    if let Some(manager) = extensions {
+                        let discovered = manager.discover_resources(&cwd, "reload").await;
+                        if !discovered.is_empty() {
+                            if let Err(err) = resources.extend_with_paths(&cwd, &discovered) {
+                                tracing::warn!(
+                                    event = "pi.resources.reload.extension_paths_failed",
+                                    error = %err,
+                                    "Failed to apply extension-discovered resource paths"
+                                );
+                            }
+                        }
+                    }
+
                     let models_error =
                         match crate::auth::AuthStorage::load_async(Config::auth_path()).await {
                             Ok(auth) => {
@@ -2478,6 +2724,129 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
 
         self.status_message = Some("Reloading resources...".to_string());
         None
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn handle_slash_template(&mut self, args: &str) -> Option<Cmd> {
+        if self.agent_state != AgentState::Idle {
+            self.status_message = Some("Cannot expand template while processing".to_string());
+            return None;
+        }
+
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            let templates = self.resources.prompts();
+            if templates.is_empty() {
+                self.status_message = Some("No prompt templates loaded".to_string());
+                return None;
+            }
+
+            let mut listing = String::from("Available prompt templates:\n");
+            for template in templates {
+                if template.description.trim().is_empty() {
+                    let _ = writeln!(listing, "  /{}", template.name);
+                } else {
+                    let _ = writeln!(
+                        listing,
+                        "  /{} - {}",
+                        template.name, template.description
+                    );
+                }
+            }
+
+            self.messages.push(ConversationMessage {
+                role: MessageRole::System,
+                content: listing,
+                thinking: None,
+                collapsed: false,
+            });
+            self.scroll_to_last_match("Available prompt templates");
+            return None;
+        }
+
+        let history_entry = format!("/template {trimmed}");
+
+        let (name, rest) = trimmed
+            .split_once(char::is_whitespace)
+            .unwrap_or((trimmed, ""));
+        let name = name.trim_start_matches('/');
+        if name.is_empty() {
+            self.status_message = Some("Usage: /template <name> [args]".to_string());
+            return None;
+        }
+
+        let raw_input = if rest.trim().is_empty() {
+            format!("/{name}")
+        } else {
+            format!("/{name} {rest}")
+        };
+
+        let expanded = {
+            let templates = self.resources.prompts();
+            if templates.iter().all(|template| template.name != name) {
+                self.status_message = Some(format!("Template not found: {name}"));
+                return None;
+            }
+            crate::resources::expand_prompt_template(&raw_input, templates)
+        };
+
+        if expanded.trim().is_empty() {
+            self.status_message = Some("Template expansion produced empty output".to_string());
+            return None;
+        }
+
+        let (message_without_refs, file_refs) = self.extract_file_references(&expanded);
+        let message_for_agent = message_without_refs.trim().to_string();
+
+        if !file_refs.is_empty() {
+            let auto_resize = self
+                .config
+                .images
+                .as_ref()
+                .and_then(|images| images.auto_resize)
+                .unwrap_or(true);
+
+            let processed = match process_file_arguments(&file_refs, &self.cwd, auto_resize) {
+                Ok(processed) => processed,
+                Err(err) => {
+                    self.status_message = Some(err.to_string());
+                    return None;
+                }
+            };
+
+            let mut text = processed.text;
+            if !message_for_agent.trim().is_empty() {
+                text.push_str(&message_for_agent);
+            }
+
+            let mut content = Vec::new();
+            if !text.trim().is_empty() {
+                content.push(ContentBlock::Text(TextContent::new(text)));
+            }
+            for image in processed.images {
+                content.push(ContentBlock::Image(image));
+            }
+
+            if content.is_empty() {
+                self.status_message =
+                    Some("Template expansion produced no usable content".to_string());
+                return None;
+            }
+
+            self.history.push(history_entry);
+            let display = super::conversation::content_blocks_to_text(&content);
+            return self.submit_content_with_display(content, &display);
+        }
+
+        if message_for_agent.is_empty() {
+            self.status_message = Some("Template expansion produced empty output".to_string());
+            return None;
+        }
+
+        self.history.push(history_entry);
+        let content = vec![ContentBlock::Text(TextContent::new(message_for_agent))];
+        let display = super::conversation::content_blocks_to_text(&content);
+        self.submit_content_with_display(content, &display)
     }
 }
 

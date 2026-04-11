@@ -131,6 +131,10 @@ impl AutocompleteProvider {
         self.max_items = max_items.max(1);
     }
 
+    pub(crate) fn refresh_background(&mut self) {
+        self.file_cache.refresh_if_needed(&self.cwd);
+    }
+
     /// Return suggestions for the given editor state.
     ///
     /// `cursor` is interpreted as a byte offset into `text`. If it is out of
@@ -524,7 +528,7 @@ struct FileCache {
 }
 
 impl FileCache {
-    const TTL: Duration = Duration::from_secs(2);
+    const TTL: Duration = Duration::from_secs(30);
 
     const fn new() -> Self {
         Self {

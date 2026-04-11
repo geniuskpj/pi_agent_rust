@@ -340,6 +340,16 @@ impl PiApp {
     }
 
     fn handle_double_escape_action(&mut self) -> (bool, Option<Cmd>) {
+        let action = self
+            .config
+            .double_escape_action
+            .as_deref()
+            .unwrap_or("tree")
+            .trim();
+        if action.eq_ignore_ascii_case("none") {
+            self.last_escape_time = None;
+            return (false, None);
+        }
         let now = std::time::Instant::now();
         if let Some(last_time) = self.last_escape_time {
             if now.duration_since(last_time) < std::time::Duration::from_millis(500) {
@@ -360,11 +370,12 @@ impl PiApp {
             .trim();
         let action = raw_action.to_ascii_lowercase();
         match action.as_str() {
+            "none" => None,
             "tree" => self.handle_slash_command(SlashCommand::Tree, ""),
             "fork" => self.handle_slash_command(SlashCommand::Fork, ""),
             _ => {
                 self.status_message = Some(format!(
-                    "Unknown doubleEscapeAction: {raw_action} (expected tree or fork)"
+                    "Unknown doubleEscapeAction: {raw_action} (expected tree, fork, or none)"
                 ));
                 self.handle_slash_command(SlashCommand::Tree, "")
             }
@@ -452,8 +463,12 @@ impl PiApp {
             return;
         }
 
-        if let Err(message) =
-            self.switch_active_model(&next, provider_impl, resolved_key_opt.as_deref())
+        if let Err(message) = self.switch_active_model(
+            &next,
+            provider_impl,
+            resolved_key_opt.as_deref(),
+            "cycle",
+        )
         {
             self.status_message = Some(message);
             return;
@@ -1460,6 +1475,23 @@ mod tests {
         let app = build_test_app(current.clone(), vec![current]);
 
         assert!(app.should_consume_action(AppAction::CycleThinkingLevel));
+    }
+
+    #[test]
+    fn double_escape_action_none_does_not_arm_or_trigger() {
+        let current = model_entry("openai", "gpt-5.2", Some("old-key"), HashMap::new());
+        let mut app = build_test_app(current.clone(), vec![current]);
+        app.config.double_escape_action = Some("none".to_string());
+
+        let (triggered, cmd) = app.handle_double_escape_action();
+        assert!(!triggered);
+        assert!(cmd.is_none());
+        assert!(app.last_escape_time.is_none());
+
+        let (triggered_again, cmd_again) = app.handle_double_escape_action();
+        assert!(!triggered_again);
+        assert!(cmd_again.is_none());
+        assert!(app.last_escape_time.is_none());
     }
 
     #[test]

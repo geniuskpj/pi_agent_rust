@@ -11,7 +11,7 @@ use crate::model::{
 };
 use crate::models::CompatConfig;
 use crate::provider::{Context, Provider, StreamOptions, ToolDef};
-use crate::sse::SseStream;
+use crate::sse::{SseEvent, SseStream};
 use async_trait::async_trait;
 use base64::Engine;
 use futures::StreamExt;
@@ -19,6 +19,7 @@ use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
 // ============================================================================
 // Constants
@@ -241,7 +242,10 @@ impl Provider for OpenAIResponsesProvider {
         let mut request = self
             .client
             .post(&self.base_url)
-            .header("Accept", "text/event-stream");
+            .header(
+                "Accept",
+                "text/event-stream, application/x-ndjson, application/ndjson",
+            );
 
         if let Some(ref auth_value) = auth_value {
             request = request.header("Authorization", format!("Bearer {auth_value}"));
@@ -307,30 +311,38 @@ impl Provider for OpenAIResponsesProvider {
             ));
         }
 
-        // Validate Content-Type when present. If the header is missing entirely
-        // (as with some OpenAI Codex endpoints), proceed optimistically since the
-        // wire framing may still be SSE. If the header IS present and indicates
-        // a non-SSE type, reject early so we fail closed instead of silently
-        // dropping events in the SSE parser.
+        // Validate Content-Type when present. For standard OpenAI Responses
+        // endpoints we fail closed if the header is missing; for Codex we allow
+        // it because some endpoints omit the header while still streaming SSE.
+        // If the header IS present and indicates a non-SSE type, reject early
+        // so we fail closed instead of silently dropping events in the SSE parser.
         let content_type = response
             .headers()
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
             .map(|(_, value)| value.to_ascii_lowercase());
+        if content_type.is_none() && !self.codex_mode {
+            return Err(Error::api(format!(
+                "OpenAI API protocol error (HTTP {status}): missing content-type header (expected text/event-stream or application/x-ndjson)"
+            )));
+        }
+        let mut use_ndjson = false;
         if let Some(ref ct) = content_type {
-            if ct.contains("application/x-ndjson") {
+            if ct.contains("application/x-ndjson") || ct.contains("application/ndjson") {
+                use_ndjson = true;
+            } else if !ct.contains("text/event-stream") {
                 return Err(Error::api(format!(
-                    "OpenAI API protocol error (HTTP {status}): unsupported Content-Type {ct} (NDJSON streaming is not yet supported; expected text/event-stream)"
-                )));
-            }
-            if !ct.contains("text/event-stream") {
-                return Err(Error::api(format!(
-                    "OpenAI API protocol error (HTTP {status}): unexpected Content-Type {ct} (expected text/event-stream)"
+                    "OpenAI API protocol error (HTTP {status}): unexpected Content-Type {ct} (expected text/event-stream or application/x-ndjson)"
                 )));
             }
         }
 
-        let event_source = SseStream::new(response.bytes_stream());
+        let byte_stream = response.bytes_stream();
+        let event_source = if use_ndjson {
+            ResponsesEventStream::Ndjson(NdjsonStream::new(byte_stream))
+        } else {
+            ResponsesEventStream::Sse(SseStream::new(byte_stream))
+        };
 
         let model = self.model.clone();
         let api = self.api().to_string();
@@ -414,6 +426,172 @@ impl Provider for OpenAIResponsesProvider {
 }
 
 // ============================================================================
+// NDJSON Stream
+// ============================================================================
+
+const NDJSON_MAX_EVENT_BYTES: usize = 100 * 1024 * 1024;
+
+struct NdjsonStream<S> {
+    inner: S,
+    buffer: Vec<u8>,
+    pending: VecDeque<String>,
+    finished: bool,
+    max_event_bytes: usize,
+}
+
+impl<S> NdjsonStream<S> {
+    const fn new(inner: S) -> Self {
+        Self {
+            inner,
+            buffer: Vec::new(),
+            pending: VecDeque::new(),
+            finished: false,
+            max_event_bytes: NDJSON_MAX_EVENT_BYTES,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_max_event_bytes(inner: S, max_event_bytes: usize) -> Self {
+        Self {
+            inner,
+            buffer: Vec::new(),
+            pending: VecDeque::new(),
+            finished: false,
+            max_event_bytes,
+        }
+    }
+
+    fn invalid_utf8_error() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 in NDJSON stream")
+    }
+
+    fn event_too_large_error(&self) -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "NDJSON event exceeds {} bytes",
+                self.max_event_bytes
+            ),
+        )
+    }
+
+    fn push_line(&mut self, line_bytes: &[u8]) -> std::io::Result<()> {
+        if line_bytes.len() > self.max_event_bytes {
+            return Err(self.event_too_large_error());
+        }
+        let line = std::str::from_utf8(line_bytes).map_err(|_| Self::invalid_utf8_error())?;
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim().is_empty() {
+            return Ok(());
+        }
+        self.pending.push_back(line.to_string());
+        Ok(())
+    }
+
+    fn drain_buffer(&mut self) -> std::io::Result<()> {
+        if self.buffer.len() > self.max_event_bytes
+            && memchr::memchr(b'\n', &self.buffer).is_none()
+        {
+            return Err(self.event_too_large_error());
+        }
+        while let Some(pos) = self.buffer.iter().position(|b| *b == b'\n') {
+            if pos > self.max_event_bytes {
+                return Err(self.event_too_large_error());
+            }
+            let mut line = self.buffer.drain(..=pos).collect::<Vec<u8>>();
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if !line.is_empty() {
+                self.push_line(&line)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_buffer(&mut self) -> std::io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let line = std::mem::take(&mut self.buffer);
+        self.push_line(&line)?;
+        Ok(())
+    }
+
+    fn event_from_line(line: String) -> SseEvent {
+        SseEvent {
+            data: line,
+            ..SseEvent::default()
+        }
+    }
+}
+
+impl<S> Stream for NdjsonStream<S>
+where
+    S: Stream<Item = std::io::Result<Vec<u8>>> + Unpin,
+{
+    type Item = std::io::Result<SseEvent>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(line) = self.pending.pop_front() {
+            return Poll::Ready(Some(Ok(Self::event_from_line(line))));
+        }
+
+        if self.finished {
+            return Poll::Ready(None);
+        }
+
+        loop {
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    self.buffer.extend_from_slice(&chunk);
+                    if let Err(err) = self.drain_buffer() {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                    if let Some(line) = self.pending.pop_front() {
+                        return Poll::Ready(Some(Ok(Self::event_from_line(line))));
+                    }
+                }
+                Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
+                Poll::Ready(None) => {
+                    self.finished = true;
+                    if let Err(err) = self.finish_buffer() {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                    if let Some(line) = self.pending.pop_front() {
+                        return Poll::Ready(Some(Ok(Self::event_from_line(line))));
+                    }
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+enum ResponsesEventStream<S>
+where
+    S: Stream<Item = std::io::Result<Vec<u8>>> + Unpin,
+{
+    Ndjson(NdjsonStream<S>),
+    Sse(SseStream<S>),
+}
+
+impl<S> Stream for ResponsesEventStream<S>
+where
+    S: Stream<Item = std::io::Result<Vec<u8>>> + Unpin,
+{
+    type Item = std::io::Result<SseEvent>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        match self.as_mut().get_mut() {
+            Self::Ndjson(inner) => Pin::new(inner).poll_next(cx),
+            Self::Sse(inner) => Pin::new(inner).poll_next(cx),
+        }
+    }
+}
+
+// ============================================================================
 // Stream State
 // ============================================================================
 
@@ -459,9 +637,9 @@ enum TerminalContentSnapshot {
 
 struct StreamState<S>
 where
-    S: Stream<Item = std::result::Result<Vec<u8>, std::io::Error>> + Unpin,
+    S: Stream<Item = std::result::Result<SseEvent, std::io::Error>> + Unpin,
 {
-    event_source: SseStream<S>,
+    event_source: S,
     partial: AssistantMessage,
     pending_events: VecDeque<StreamEvent>,
     started: bool,
@@ -478,9 +656,9 @@ where
 
 impl<S> StreamState<S>
 where
-    S: Stream<Item = std::result::Result<Vec<u8>, std::io::Error>> + Unpin,
+    S: Stream<Item = std::result::Result<SseEvent, std::io::Error>> + Unpin,
 {
-    fn new(event_source: SseStream<S>, model: String, api: String, provider: String) -> Self {
+    fn new(event_source: S, model: String, api: String, provider: String) -> Self {
         Self {
             event_source,
             partial: AssistantMessage {
@@ -1479,6 +1657,8 @@ mod tests {
     use super::*;
     use asupersync::runtime::RuntimeBuilder;
     use futures::stream;
+    use proptest::prelude::*;
+    use proptest::string::string_regex;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::io::{Read, Write};
@@ -2456,7 +2636,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_rejects_ndjson_content_type_without_parser_support() {
+    fn test_stream_accepts_ndjson_content_type() {
         let body = concat!(
             "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"content_index\":0,\"delta\":\"ok\"}\n",
             "{\"type\":\"response.completed\",\"response\":{\"incomplete_details\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n"
@@ -2480,13 +2660,45 @@ mod tests {
             .build()
             .expect("runtime build");
         runtime.block_on(async {
-            let Err(err) = provider.stream(&context, &options).await else {
-                panic!("ndjson should be rejected until a parser exists");
-            };
-            let err_text = err.to_string();
-            assert!(err_text.contains("unsupported Content-Type"));
-            assert!(err_text.contains("application/x-ndjson"));
+            let mut stream = provider.stream(&context, &options).await.expect("stream");
+            let mut saw_delta = false;
+            let mut done_usage: Option<Usage> = None;
+
+            while let Some(event) = stream.next().await {
+                let event = event.expect("stream event");
+                match event {
+                    StreamEvent::TextDelta { delta, .. } if delta == "ok" => {
+                        saw_delta = true;
+                    }
+                    StreamEvent::Done { message, .. } => {
+                        let usage = message.usage;
+                        done_usage = Some(usage);
+                        break;
+                    }
+                    StreamEvent::Error { .. } => {
+                        panic!("unexpected error while reading NDJSON stream");
+                    }
+                    _ => {}
+                }
+            }
+
+            assert!(saw_delta, "expected NDJSON text delta");
+            let usage = done_usage.expect("missing Done usage");
+            assert_eq!(usage.input, 1);
+            assert_eq!(usage.output, 1);
+            assert_eq!(usage.total_tokens, 2);
         });
+    }
+
+    fn ndjson_body_from_events(events: &[Value]) -> String {
+        let mut lines = Vec::with_capacity(events.len());
+        for event in events {
+            let data = serde_json::to_string(event).expect("serialize event");
+            lines.push(data);
+        }
+        let mut body = lines.join("\n");
+        body.push('\n');
+        body
     }
 
     fn collect_events(events: &[Value]) -> Vec<StreamEvent> {
@@ -2544,6 +2756,41 @@ mod tests {
 
     fn collect_stream_events_from_body(body: &str) -> Vec<StreamEvent> {
         let (base_url, _rx) = spawn_test_server(200, "text/event-stream", body);
+        let provider = OpenAIResponsesProvider::new("gpt-4o").with_base_url(base_url);
+        let context = Context::owned(
+            None,
+            vec![Message::User(crate::model::UserMessage {
+                content: UserContent::Text("ping".to_string()),
+                timestamp: 0,
+            })],
+            Vec::new(),
+        );
+        let options = StreamOptions {
+            api_key: Some("test-openai-key".to_string()),
+            ..Default::default()
+        };
+
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        runtime.block_on(async {
+            let mut stream = provider.stream(&context, &options).await.expect("stream");
+            let mut out = Vec::new();
+            while let Some(event) = stream.next().await {
+                let event = event.expect("stream event");
+                let is_terminal =
+                    matches!(event, StreamEvent::Done { .. } | StreamEvent::Error { .. });
+                out.push(event);
+                if is_terminal {
+                    break;
+                }
+            }
+            out
+        })
+    }
+
+    fn collect_stream_events_from_ndjson_body(body: &str) -> Vec<StreamEvent> {
+        let (base_url, _rx) = spawn_test_server(200, "application/x-ndjson", body);
         let provider = OpenAIResponsesProvider::new("gpt-4o").with_base_url(base_url);
         let context = Context::owned(
             None,
@@ -2855,6 +3102,162 @@ mod tests {
             assert_eq!(summaries, case.expected, "case: {}", case.name);
         }
     }
+
+    #[test]
+    fn test_stream_ndjson_fixtures() {
+        let fixture = load_fixture("openai_responses_stream.json");
+        for case in fixture.cases {
+            let body = ndjson_body_from_events(&case.events);
+            let events = collect_stream_events_from_ndjson_body(&body);
+            let summaries: Vec<EventSummary> = events.iter().map(summarize_event).collect();
+            assert_eq!(summaries, case.expected, "case: {}", case.name);
+        }
+    }
+
+    #[test]
+    fn ndjson_rejects_oversized_event() {
+        let delta = "x".repeat(128);
+        let event = json!({
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "content_index": 0,
+            "delta": delta,
+        });
+        let line = serde_json::to_string(&event).expect("serialize event");
+        let max = line.len().saturating_sub(1).max(1);
+        let body = format!("{line}\n");
+
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        let err = runtime.block_on(async move {
+            let byte_stream = stream::iter(vec![Ok(body.into_bytes())]);
+            let mut event_source = NdjsonStream::with_max_event_bytes(byte_stream, max);
+            match event_source.next().await {
+                Some(Err(e)) => Some(e),
+                _ => None,
+            }
+        });
+
+        let err = err.expect("expected oversized NDJSON error");
+        assert!(
+            err.to_string().contains("NDJSON event exceeds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn ndjson_body_for_deltas(deltas: &[String]) -> String {
+        let mut lines = Vec::with_capacity(deltas.len() + 1);
+        for delta in deltas {
+            let event = json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "content_index": 0,
+                "delta": delta,
+            });
+            lines.push(serde_json::to_string(&event).expect("serialize event"));
+        }
+        let done = json!({
+            "type": "response.completed",
+            "response": {
+                "incomplete_details": null,
+                "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 }
+            }
+        });
+        lines.push(serde_json::to_string(&done).expect("serialize event"));
+        let mut body = lines.join("\n");
+        body.push('\n');
+        body
+    }
+
+    fn chunk_bytes(input: &[u8], chunk_sizes: &[usize]) -> Vec<Vec<u8>> {
+        if chunk_sizes.is_empty() {
+            return vec![input.to_vec()];
+        }
+        let mut chunks = Vec::new();
+        let mut offset = 0usize;
+        let mut idx = 0usize;
+        while offset < input.len() {
+            let size = chunk_sizes[idx % chunk_sizes.len()].max(1);
+            let end = (offset + size).min(input.len());
+            chunks.push(input[offset..end].to_vec());
+            offset = end;
+            idx += 1;
+        }
+        chunks
+    }
+
+    fn collect_ndjson_events_from_chunks(body: &str, chunk_sizes: &[usize]) -> Vec<StreamEvent> {
+        let bytes = body.as_bytes();
+        let chunks = chunk_bytes(bytes, chunk_sizes);
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        runtime.block_on(async move {
+            let byte_stream = stream::iter(chunks.into_iter().map(Ok));
+            let event_source = NdjsonStream::new(byte_stream);
+            let mut state = StreamState::new(
+                event_source,
+                "gpt-test".to_string(),
+                "openai-responses".to_string(),
+                "openai".to_string(),
+            );
+
+            let mut out = Vec::new();
+            loop {
+                if let Some(event) = state.pending_events.pop_front() {
+                    out.push(event);
+                    continue;
+                }
+
+                if state.finished {
+                    break;
+                }
+
+                match state.event_source.next().await {
+                    Some(item) => {
+                        let msg = item.expect("NDJSON event");
+                        state.process_event(&msg.data).expect("process_event");
+                    }
+                    None => {
+                        assert!(
+                            state.finish_terminal_response(),
+                            "stream ended without Done event"
+                        );
+                    }
+                }
+            }
+
+            out
+        })
+    }
+
+    fn summarize_events(events: &[StreamEvent]) -> Vec<EventSummary> {
+        events.iter().map(summarize_event).collect()
+    }
+
+    fn delta_strategy() -> impl Strategy<Value = String> {
+        string_regex("[a-z0-9 ]{1,8}").expect("delta regex")
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 64,
+            max_shrink_iters: 64,
+            .. ProptestConfig::default()
+        })]
+
+        #[test]
+        fn ndjson_chunking_invariant(
+            deltas in prop::collection::vec(delta_strategy(), 1..6),
+            chunk_sizes in prop::collection::vec(1usize..16, 0..8),
+        ) {
+            let body = ndjson_body_for_deltas(&deltas);
+            let expected = summarize_events(&collect_ndjson_events_from_chunks(&body, &[]));
+            let actual = summarize_events(&collect_ndjson_events_from_chunks(&body, &chunk_sizes));
+            prop_assert_eq!(actual, expected);
+        }
+    }
 }
 
 // ============================================================================
@@ -2867,8 +3270,9 @@ pub mod fuzz {
     use futures::stream;
     use std::pin::Pin;
 
-    type FuzzStream =
+    type FuzzByteStream =
         Pin<Box<futures::stream::Empty<std::result::Result<Vec<u8>, std::io::Error>>>>;
+    type FuzzStream = crate::sse::SseStream<FuzzByteStream>;
 
     /// Opaque wrapper around the OpenAI Responses stream processor state.
     pub struct Processor(StreamState<FuzzStream>);
@@ -2883,8 +3287,9 @@ pub mod fuzz {
         /// Create a fresh processor with default state.
         pub fn new() -> Self {
             let empty = stream::empty::<std::result::Result<Vec<u8>, std::io::Error>>();
+            let event_source = crate::sse::SseStream::new(Box::pin(empty));
             Self(StreamState::new(
-                crate::sse::SseStream::new(Box::pin(empty)),
+                event_source,
                 "gpt-responses-fuzz".into(),
                 "openai-responses".into(),
                 "openai".into(),

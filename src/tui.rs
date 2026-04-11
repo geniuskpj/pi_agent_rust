@@ -79,8 +79,14 @@ impl PiConsole {
 
     /// Render Markdown (TTY → styled output; non-TTY → raw Markdown).
     pub fn render_markdown(&self, markdown: &str) {
+        self.render_markdown_with_indent(markdown, None);
+    }
+
+    /// Render Markdown with an optional code block indentation override.
+    pub fn render_markdown_with_indent(&self, markdown: &str, code_block_indent: Option<usize>) {
         if self.is_tty {
-            let mut segments = render_markdown_with_syntax(markdown, self.width());
+            let indent = code_block_indent.unwrap_or(0);
+            let mut segments = render_markdown_with_syntax(markdown, self.width(), indent);
             let mut ends_with_newline = false;
             for segment in segments.iter().rev() {
                 let text = segment.text.as_ref();
@@ -491,7 +497,24 @@ fn render_syntax_line_by_line(
     Some(rendered)
 }
 
-fn render_markdown_with_syntax(markdown: &str, width: usize) -> Vec<Segment<'static>> {
+fn indent_code_block(code: &str, indent: usize) -> String {
+    if indent == 0 {
+        return code.to_string();
+    }
+    let prefix = " ".repeat(indent);
+    let mut out = String::with_capacity(code.len() + indent * code.lines().count().max(1));
+    for line in code.split_inclusive('\n') {
+        out.push_str(&prefix);
+        out.push_str(line);
+    }
+    out
+}
+
+fn render_markdown_with_syntax(
+    markdown: &str,
+    width: usize,
+    code_block_indent: usize,
+) -> Vec<Segment<'static>> {
     if !markdown.contains("```") {
         return Markdown::new(markdown)
             .render(width)
@@ -519,6 +542,9 @@ fn render_markdown_with_syntax(markdown: &str, width: usize) -> Vec<Segment<'sta
             MarkdownChunk::CodeBlock { language, mut code } => {
                 if !code.ends_with('\n') {
                     code.push('\n');
+                }
+                if code_block_indent > 0 {
+                    code = indent_code_block(&code, code_block_indent);
                 }
 
                 let language = language.unwrap_or_else(|| "text".to_string());
@@ -692,9 +718,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn capture_markdown_segments(markdown: &str) -> Vec<Segment<'static>> {
+        capture_markdown_segments_with_indent(markdown, None)
+    }
+
+    fn capture_markdown_segments_with_indent(
+        markdown: &str,
+        code_block_indent: Option<usize>,
+    ) -> Vec<Segment<'static>> {
         let console = PiConsole::with_color();
         console.console.begin_capture();
-        console.render_markdown(markdown);
+        console.render_markdown_with_indent(markdown, code_block_indent);
         console.console.end_capture()
     }
 
@@ -826,6 +859,35 @@ mod tests {
         assert!(
             code_styles.len() > 1,
             "expected multiple token styles from syntax highlighting, got {code_styles:?}"
+        );
+    }
+
+    #[test]
+    fn render_markdown_code_block_indent_applies_to_code_lines() {
+        let markdown = "Intro\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n";
+        let default_segments = capture_markdown_segments(markdown);
+        let indented_segments = capture_markdown_segments_with_indent(markdown, Some(4));
+
+        let default_text = segments_text(&default_segments);
+        let indented_text = segments_text(&indented_segments);
+
+        let default_line = default_text
+            .lines()
+            .find(|line| line.contains("fn main"))
+            .expect("default code line");
+        let indented_line = indented_text
+            .lines()
+            .find(|line| line.contains("fn main"))
+            .expect("indented code line");
+
+        assert!(
+            indented_line.starts_with("    "),
+            "expected indented code line, got: {indented_line:?}"
+        );
+        assert_eq!(
+            default_line.trim_start(),
+            indented_line.trim_start(),
+            "indent should only add leading spaces"
         );
     }
 

@@ -34,6 +34,7 @@ pub(super) struct TreeSelectorState {
     pub(super) selected: usize,
     pub(super) scroll: usize,
     pub(super) max_visible_lines: usize,
+    pub(super) label: Option<String>,
     pub(super) user_only: bool,
     pub(super) show_all: bool,
     pub(super) current_leaf_id: Option<String>,
@@ -95,6 +96,7 @@ impl TreeSelectorState {
         session: &Session,
         term_height: usize,
         initial_selected_id: Option<&str>,
+        label: Option<String>,
     ) -> Self {
         let max_visible_lines = (term_height / 2).max(5);
         let current_leaf_id = session.leaf_id.clone();
@@ -104,6 +106,7 @@ impl TreeSelectorState {
             selected: 0,
             scroll: 0,
             max_visible_lines,
+            label,
             user_only: false,
             show_all: false,
             current_leaf_id,
@@ -902,7 +905,12 @@ pub(super) fn view_tree_ui(tree_ui: &TreeUiState, styles: &TuiStyles) -> String 
 
 fn view_tree_selector(state: &TreeSelectorState, styles: &TuiStyles) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "  {}", styles.title.render("Session Tree"));
+    let title = state
+        .label
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Session Tree");
+    let _ = writeln!(out, "  {}", styles.title.render(title));
 
     let filters = format!(
         "  Filters: user-only={}  show-all={}",

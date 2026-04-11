@@ -96,7 +96,7 @@ pub struct ToolUpdate {
 pub const DEFAULT_MAX_LINES: usize = 2000;
 
 /// Default maximum bytes for truncation.
-pub const DEFAULT_MAX_BYTES: usize = 50 * 1024; // 50KB
+pub const DEFAULT_MAX_BYTES: usize = 1_000_000; // 1MB
 
 /// Maximum line length for grep results.
 pub const GREP_MAX_LINE_LENGTH: usize = 500;
@@ -683,6 +683,19 @@ pub(crate) fn resolve_read_path(file_path: &str, cwd: &Path) -> PathBuf {
     resolved
 }
 
+fn enforce_cwd_scope(path: &Path, cwd: &Path, action: &str) -> Result<PathBuf> {
+    let canonical_path = crate::extensions::safe_canonicalize(path);
+    let canonical_cwd = crate::extensions::safe_canonicalize(cwd);
+    if !canonical_path.starts_with(&canonical_cwd) {
+        return Err(Error::validation(format!(
+            "Cannot {action} outside the working directory (resolved: {}, cwd: {})",
+            canonical_path.display(),
+            canonical_cwd.display()
+        )));
+    }
+    Ok(canonical_path)
+}
+
 // ============================================================================
 // CLI @file Processor (used by src/main.rs)
 // ============================================================================
@@ -887,6 +900,7 @@ pub fn process_file_arguments(
     for file_arg in file_args {
         let resolved = resolve_read_path(file_arg, cwd);
         let absolute_path = normalize_dot_segments(&resolved);
+        let absolute_path = enforce_cwd_scope(&absolute_path, cwd, "read")?;
 
         let meta = std::fs::metadata(&absolute_path).map_err(|e| {
             Error::tool(
@@ -940,7 +954,7 @@ pub fn process_file_arguments(
 /// Resolve a file path relative to the current working directory.
 /// Public alias for `resolve_to_cwd` used by tools.
 fn resolve_path(file_path: &str, cwd: &Path) -> PathBuf {
-    resolve_to_cwd(file_path, cwd)
+    normalize_dot_segments(&resolve_to_cwd(file_path, cwd))
 }
 
 #[cfg(feature = "fuzzing")]
@@ -1351,7 +1365,7 @@ impl Tool for ReadTool {
         "read"
     }
     fn description(&self) -> &str {
-        "Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete."
+        "Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 1MB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -1405,6 +1419,7 @@ impl Tool for ReadTool {
         }
 
         let path = resolve_read_path(&input.path, &self.cwd);
+        let path = enforce_cwd_scope(&path, &self.cwd, "read")?;
 
         if let Ok(meta) = asupersync::fs::metadata(&path).await {
             if !meta.is_file() {
@@ -2153,7 +2168,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. `timeout` defaults to 120 seconds; set `timeout: 0` to disable."
+        "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 1MB (whichever is hit first). If truncated, full output is saved to a temp file. `timeout` defaults to 120 seconds; set `timeout: 0` to disable."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -2341,6 +2356,7 @@ struct FuzzyMatchResult {
     found: bool,
     index: usize,
     match_length: usize,
+    exact_match: bool,
 }
 
 /// Map a range in normalized content back to byte offsets in the original text.
@@ -2356,11 +2372,18 @@ fn map_normalized_range_to_original(
     let mut match_start = None;
     let mut match_end = None;
     let norm_match_end = norm_match_start + norm_match_len;
+    let mut last_trimmed_end = 0;
+    let mut last_has_newline = false;
 
     for line in content.split_inclusive('\n') {
         let line_content = line.strip_suffix('\n').unwrap_or(line);
         let has_newline = line.ends_with('\n');
-        let trimmed_len = line_content.trim_end_matches('\r').len();
+        let trimmed_len = line_content
+            .trim_end_matches(|c: char| c.is_whitespace() || is_special_unicode_space(c))
+            .len();
+        let trimmed_end = orig_idx + trimmed_len;
+        last_trimmed_end = trimmed_end;
+        last_has_newline = has_newline;
 
         for (char_offset, c) in line_content.char_indices() {
             // match_end can be detected at any position including trailing
@@ -2415,7 +2438,7 @@ fn map_normalized_range_to_original(
                 match_start = Some(orig_idx);
             }
             if norm_idx == norm_match_end && match_end.is_none() {
-                match_end = Some(orig_idx);
+                match_end = Some(trimmed_end);
             }
 
             norm_idx += 1;
@@ -2428,7 +2451,11 @@ fn map_normalized_range_to_original(
     }
 
     if norm_idx == norm_match_end && match_end.is_none() {
-        match_end = Some(orig_idx);
+        match_end = Some(if last_has_newline {
+            orig_idx
+        } else {
+            last_trimmed_end
+        });
     }
 
     let start = match_start.unwrap_or(0);
@@ -2441,7 +2468,9 @@ fn build_normalized_content(content: &str) -> String {
     let mut lines = content.split('\n').peekable();
 
     while let Some(line) = lines.next() {
-        let trimmed_len = line.trim_end_matches('\r').len();
+        let trimmed_len = line
+            .trim_end_matches(|c: char| c.is_whitespace() || is_special_unicode_space(c))
+            .len();
         for (char_offset, c) in line.char_indices() {
             if char_offset >= trimmed_len {
                 continue;
@@ -2495,6 +2524,7 @@ fn fuzzy_find_text_with_normalized(
             found: true,
             index,
             match_length: old_text.len(),
+            exact_match: true,
         };
     }
 
@@ -2517,6 +2547,7 @@ fn fuzzy_find_text_with_normalized(
             found: true,
             index: original_start,
             match_length: original_match_len,
+            exact_match: false,
         };
     }
 
@@ -2524,7 +2555,19 @@ fn fuzzy_find_text_with_normalized(
         found: false,
         index: 0,
         match_length: 0,
+        exact_match: false,
     }
+}
+
+fn count_overlapping_occurrences(haystack: &str, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+
+    haystack
+        .char_indices()
+        .filter(|(idx, _)| haystack[*idx..].starts_with(needle))
+        .count()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2786,7 +2829,7 @@ impl Tool for EditTool {
         "edit"
     }
     fn description(&self) -> &str {
-        "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits."
+        "Edit a file by replacing text. The oldText must match a unique region; matching is exact but normalizes line endings, Unicode spaces/quotes/dashes, and ignores trailing whitespace."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -2800,7 +2843,7 @@ impl Tool for EditTool {
                 "oldText": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Exact text to find and replace (must match exactly)"
+                    "description": "Text to find and replace (must match uniquely; matching normalizes line endings, Unicode spaces/quotes/dashes, and ignores trailing whitespace)"
                 },
                 "newText": {
                     "type": "string",
@@ -2829,56 +2872,51 @@ impl Tool for EditTool {
             )));
         }
 
-        let absolute_path =
-            crate::extensions::safe_canonicalize(&resolve_read_path(&input.path, &self.cwd));
+        let absolute_path = resolve_read_path(&input.path, &self.cwd);
+        let absolute_path = enforce_cwd_scope(&absolute_path, &self.cwd, "edit")?;
 
-        // Match legacy behavior: any access failure is reported as "File not found".
-        if !file_exists(&absolute_path) {
+        let meta = asupersync::fs::metadata(&absolute_path).await.map_err(|err| {
+            let message = match err.kind() {
+                std::io::ErrorKind::NotFound => format!("File not found: {}", input.path),
+                std::io::ErrorKind::PermissionDenied => {
+                    format!("Permission denied: {}", input.path)
+                }
+                _ => format!("Failed to access file {}: {err}", input.path),
+            };
+            Error::tool("edit", message)
+        })?;
+
+        if !meta.is_file() {
             return Err(Error::tool(
                 "edit",
-                format!("File not found: {}", input.path),
+                format!("Path {} is not a regular file", absolute_path.display()),
+            ));
+        }
+        if meta.len() > READ_TOOL_MAX_BYTES {
+            return Err(Error::tool(
+                "edit",
+                format!(
+                    "File is too large ({} bytes). Max allowed for editing is {} bytes.",
+                    meta.len(),
+                    READ_TOOL_MAX_BYTES
+                ),
             ));
         }
 
-        let canonical_cwd = crate::extensions::safe_canonicalize(&self.cwd);
-        if !absolute_path.starts_with(&canonical_cwd) {
-            return Err(Error::validation(format!(
-                "Cannot edit outside the working directory (resolved: {}, cwd: {})",
-                absolute_path.display(),
-                canonical_cwd.display()
-            )));
-        }
-
-        if asupersync::fs::OpenOptions::new()
+        if let Err(err) = asupersync::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(&absolute_path)
             .await
-            .is_err()
         {
-            return Err(Error::tool(
-                "edit",
-                format!("File not found: {}", input.path),
-            ));
-        }
-
-        if let Ok(meta) = asupersync::fs::metadata(&absolute_path).await {
-            if !meta.is_file() {
-                return Err(Error::tool(
-                    "edit",
-                    format!("Path {} is not a regular file", absolute_path.display()),
-                ));
-            }
-            if meta.len() > READ_TOOL_MAX_BYTES {
-                return Err(Error::tool(
-                    "edit",
-                    format!(
-                        "File is too large ({} bytes). Max allowed for editing is {} bytes.",
-                        meta.len(),
-                        READ_TOOL_MAX_BYTES
-                    ),
-                ));
-            }
+            let message = match err.kind() {
+                std::io::ErrorKind::NotFound => format!("File not found: {}", input.path),
+                std::io::ErrorKind::PermissionDenied => {
+                    format!("Permission denied: {}", input.path)
+                }
+                _ => format!("Failed to open file for editing: {err}"),
+            };
+            return Err(Error::tool("edit", message));
         }
 
         // Read bytes strictly up to the limit to prevent OOM if metadata failed or file grows.
@@ -2912,12 +2950,24 @@ impl Tool for EditTool {
 
         let original_ending = detect_line_ending(content_no_bom);
         let normalized_content = normalize_to_lf(content_no_bom);
+        let content_for_matching = if content_no_bom.contains('\r') && !content_no_bom.contains('\n')
+        {
+            std::borrow::Cow::Owned(content_no_bom.replace('\r', "\n"))
+        } else {
+            std::borrow::Cow::Borrowed(content_no_bom)
+        };
         let normalized_old_text = normalize_to_lf(&input.old_text);
 
         if normalized_old_text.is_empty() {
             return Err(Error::tool(
                 "edit",
                 "The old text cannot be empty. To prepend text, include the first line's content in oldText and newText.".to_string(),
+            ));
+        }
+        if build_normalized_content(&normalized_old_text).is_empty() {
+            return Err(Error::tool(
+                "edit",
+                "The old text must include at least one non-whitespace character.".to_string(),
             ));
         }
 
@@ -2942,26 +2992,26 @@ impl Tool for EditTool {
 
         // Pre-compute normalized versions once and reuse for both matching and
         // occurrence counting (avoids 2x redundant O(n) normalization).
-        let precomputed_content = build_normalized_content(content_no_bom);
+        let precomputed_content = build_normalized_content(content_for_matching.as_ref());
 
-        let mut best_match: Option<(FuzzyMatchResult, String)> = None;
+        let mut best_match: Option<(FuzzyMatchResult, String, String)> = None;
 
         for variant in variants {
             let precomputed_variant = build_normalized_content(&variant);
             let match_result = fuzzy_find_text_with_normalized(
-                content_no_bom,
+                content_for_matching.as_ref(),
                 &variant,
                 Some(precomputed_content.as_str()),
                 Some(precomputed_variant.as_str()),
             );
 
             if match_result.found {
-                best_match = Some((match_result, precomputed_variant));
+                best_match = Some((match_result, precomputed_variant, variant));
                 break;
             }
         }
 
-        let Some((match_result, normalized_old_text)) = best_match else {
+        let Some((match_result, normalized_old_text, matched_variant)) = best_match else {
             return Err(Error::tool(
                 "edit",
                 format!(
@@ -2971,14 +3021,12 @@ impl Tool for EditTool {
             ));
         };
 
-        // Count occurrences reusing pre-computed normalized versions.
-        let occurrences = if normalized_old_text.is_empty() {
-            0
+        // Count occurrences in the same matching mode to avoid false ambiguity
+        // when normalized matching collapses distinct trailing whitespace.
+        let occurrences = if match_result.exact_match {
+            count_overlapping_occurrences(content_for_matching.as_ref(), &matched_variant)
         } else {
-            precomputed_content
-                .split(&normalized_old_text)
-                .count()
-                .saturating_sub(1)
+            count_overlapping_occurrences(&precomputed_content, &normalized_old_text)
         };
 
         if occurrences > 1 {
@@ -3158,16 +3206,8 @@ impl Tool for WriteTool {
             )));
         }
 
-        let path = crate::extensions::safe_canonicalize(&resolve_path(&input.path, &self.cwd));
-
-        let canonical_cwd = crate::extensions::safe_canonicalize(&self.cwd);
-        if !path.starts_with(&canonical_cwd) {
-            return Err(Error::validation(format!(
-                "Cannot write outside the working directory (resolved: {}, cwd: {})",
-                path.display(),
-                canonical_cwd.display()
-            )));
-        }
+        let path = resolve_path(&input.path, &self.cwd);
+        let path = enforce_cwd_scope(&path, &self.cwd, "write")?;
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
@@ -3310,8 +3350,6 @@ fn process_rg_json_match_line(
         return;
     }
 
-    *match_count += 1;
-
     let file_path = event
         .pointer("/data/path/text")
         .and_then(serde_json::Value::as_str)
@@ -3323,10 +3361,10 @@ fn process_rg_json_match_line(
 
     if let (Some(fp), Some(ln)) = (file_path, line_number) {
         matches.push((fp, ln));
-    }
-
-    if *match_count >= scan_limit {
-        *match_limit_reached = true;
+        *match_count += 1;
+        if *match_count >= scan_limit {
+            *match_limit_reached = true;
+        }
     }
 }
 
@@ -3373,7 +3411,7 @@ impl Tool for GrepTool {
         "grep"
     }
     fn description(&self) -> &str {
-        "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to 100 matches or 50KB (whichever is hit first). Long lines are truncated to 500 chars. Use hashline=true to get N#AB content-hash tags for use with hashline_edit."
+        "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to 100 matches or 1MB (whichever is hit first). Long lines are truncated to 500 chars. Use hashline=true to get N#AB content-hash tags for use with hashline_edit."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -3431,6 +3469,12 @@ impl Tool for GrepTool {
         let input: GrepInput =
             serde_json::from_value(input).map_err(|e| Error::validation(e.to_string()))?;
 
+        if matches!(input.limit, Some(0)) {
+            return Err(Error::validation(
+                "`limit` must be greater than 0".to_string(),
+            ));
+        }
+
         if !rg_available() {
             return Err(Error::tool(
                 "grep",
@@ -3440,6 +3484,7 @@ impl Tool for GrepTool {
 
         let search_dir = input.path.as_deref().unwrap_or(".");
         let search_path = resolve_read_path(search_dir, &self.cwd);
+        let search_path = enforce_cwd_scope(&search_path, &self.cwd, "grep")?;
 
         let is_directory = asupersync::fs::metadata(&search_path)
             .await
@@ -3850,7 +3895,7 @@ impl Tool for FindTool {
         "find"
     }
     fn description(&self) -> &str {
-        "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 50KB (whichever is hit first)."
+        "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 1MB (whichever is hit first)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -3895,7 +3940,9 @@ impl Tool for FindTool {
         }
 
         let search_dir = input.path.as_deref().unwrap_or(".");
-        let search_path = strip_unc_prefix(resolve_read_path(search_dir, &self.cwd));
+        let search_path = resolve_read_path(search_dir, &self.cwd);
+        let search_path = enforce_cwd_scope(&search_path, &self.cwd, "find")?;
+        let search_path = strip_unc_prefix(search_path);
         let effective_limit = input.limit.unwrap_or(DEFAULT_FIND_LIMIT);
         // Overfetch one result so limit notices only appear after confirmed overflow.
         let scan_limit = effective_limit.saturating_add(1);
@@ -4066,6 +4113,12 @@ impl Tool for FindTool {
             relativized.push(rel);
         }
 
+        relativized.sort_by(|a, b| {
+            let a_lower = a.to_lowercase();
+            let b_lower = b.to_lowercase();
+            a_lower.cmp(&b_lower).then_with(|| a.cmp(b))
+        });
+
         if relativized.is_empty() {
             return Ok(ToolOutput {
                 content: vec![ContentBlock::Text(TextContent::new(
@@ -4160,7 +4213,7 @@ impl Tool for LsTool {
         "ls"
     }
     fn description(&self) -> &str {
-        "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first)."
+        "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 1MB (whichever is hit first)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -4202,6 +4255,7 @@ impl Tool for LsTool {
             .path
             .as_ref()
             .map_or_else(|| self.cwd.clone(), |p| resolve_read_path(p, &self.cwd));
+        let dir_path = enforce_cwd_scope(&dir_path, &self.cwd, "list")?;
 
         let effective_limit = input.limit.unwrap_or(DEFAULT_LS_LIMIT);
 
@@ -4938,7 +4992,14 @@ async fn get_file_lines_async<'a>(
         }
 
         // Match Node's `readFileSync(..., "utf-8")` behavior: decode lossily rather than failing.
-        let bytes = asupersync::fs::read(path).await.unwrap_or_default();
+        let bytes = match asupersync::fs::read(path).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::debug!("Failed to read grep file {}: {err}", path.display());
+                cache.insert(path.to_path_buf(), Vec::new());
+                return &[];
+            }
+        };
         let content = String::from_utf8_lossy(&bytes);
         let mut lines = Vec::new();
         for line in content.split('\n') {
@@ -5058,6 +5119,23 @@ fn format_hashline_tag(line_idx: usize, line: &str) -> String {
     format!("{}#{}{}", line_idx + 1, h[0] as char, h[1] as char)
 }
 
+/// Compute a hashline tag, reapplying a stripped BOM for the first line if needed.
+fn format_hashline_tag_with_bom(line_idx: usize, line: &str, had_bom: bool) -> String {
+    let h = compute_line_hash_with_bom(line_idx, line, had_bom);
+    format!("{}#{}{}", line_idx + 1, h[0] as char, h[1] as char)
+}
+
+fn compute_line_hash_with_bom(line_idx: usize, line: &str, had_bom: bool) -> [u8; 2] {
+    if had_bom && line_idx == 0 {
+        let mut with_bom = String::with_capacity(line.len().saturating_add(1));
+        with_bom.push('\u{FEFF}');
+        with_bom.push_str(line);
+        compute_line_hash(line_idx, &with_bom)
+    } else {
+        compute_line_hash(line_idx, line)
+    }
+}
+
 /// Regex for parsing hashline references like `5#KJ` or ` > +  5 # KJ `.
 /// Tolerates leading whitespace, diff markers (`>`, `+`, `-`), and spaces around `#`.
 static HASHLINE_TAG_RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -5160,7 +5238,11 @@ impl HashlineEditTool {
 
 /// Validate a hashline tag reference against actual file lines.
 /// Returns `Ok(0-indexed line)` or `Err(message)` with context.
-fn validate_line_ref(ref_str: &str, file_lines: &[&str]) -> std::result::Result<usize, String> {
+fn validate_line_ref(
+    ref_str: &str,
+    file_lines: &[&str],
+    had_bom: bool,
+) -> std::result::Result<usize, String> {
     let (line_num, expected_hash) = parse_hashline_tag(ref_str)?;
     let line_idx = line_num - 1;
     if line_idx >= file_lines.len() {
@@ -5169,9 +5251,9 @@ fn validate_line_ref(ref_str: &str, file_lines: &[&str]) -> std::result::Result<
             file_lines.len()
         ));
     }
-    let actual_hash = compute_line_hash(line_idx, file_lines[line_idx]);
+    let actual_hash = compute_line_hash_with_bom(line_idx, file_lines[line_idx], had_bom);
     if actual_hash != expected_hash {
-        let tag = format_hashline_tag(line_idx, file_lines[line_idx]);
+        let tag = format_hashline_tag_with_bom(line_idx, file_lines[line_idx], had_bom);
         return Err(format!(
             "Hash mismatch at line {line_num}: expected {}#{}{}, actual is {tag}",
             line_num, expected_hash[0] as char, expected_hash[1] as char,
@@ -5181,12 +5263,12 @@ fn validate_line_ref(ref_str: &str, file_lines: &[&str]) -> std::result::Result<
 }
 
 /// Build a context snippet around a mismatched line for error reporting.
-fn mismatch_context(file_lines: &[&str], line_idx: usize, context: usize) -> String {
+fn mismatch_context(file_lines: &[&str], line_idx: usize, context: usize, had_bom: bool) -> String {
     let start = line_idx.saturating_sub(context);
     let end = (line_idx + context + 1).min(file_lines.len());
     let mut out = String::new();
     for (i, &file_line) in file_lines.iter().enumerate().take(end).skip(start) {
-        let tag = format_hashline_tag(i, file_line);
+        let tag = format_hashline_tag_with_bom(i, file_line, had_bom);
         if i == line_idx {
             let _ = writeln!(out, ">>> {tag}:{file_line}");
         } else {
@@ -5200,25 +5282,32 @@ fn mismatch_context(file_lines: &[&str], line_idx: usize, context: usize) -> Str
 fn collect_mismatches(
     edits: &[HashlineOp],
     file_lines: &[&str],
+    had_bom: bool,
 ) -> std::result::Result<(), String> {
     let mut errors = Vec::new();
     for edit in edits {
         if let Some(ref pos) = edit.pos {
-            if let Err(e) = validate_line_ref(pos, file_lines) {
+            if let Err(e) = validate_line_ref(pos, file_lines, had_bom) {
                 // Find the line index for context
                 if let Ok((line_num, _)) = parse_hashline_tag(pos) {
                     let idx = (line_num - 1).min(file_lines.len().saturating_sub(1));
-                    errors.push(format!("{e}\n{}", mismatch_context(file_lines, idx, 2)));
+                    errors.push(format!(
+                        "{e}\n{}",
+                        mismatch_context(file_lines, idx, 2, had_bom)
+                    ));
                 } else {
                     errors.push(e);
                 }
             }
         }
         if let Some(ref end) = edit.end {
-            if let Err(e) = validate_line_ref(end, file_lines) {
+            if let Err(e) = validate_line_ref(end, file_lines, had_bom) {
                 if let Ok((line_num, _)) = parse_hashline_tag(end) {
                     let idx = (line_num - 1).min(file_lines.len().saturating_sub(1));
-                    errors.push(format!("{e}\n{}", mismatch_context(file_lines, idx, 2)));
+                    errors.push(format!(
+                        "{e}\n{}",
+                        mismatch_context(file_lines, idx, 2, had_bom)
+                    ));
                 } else {
                     errors.push(e);
                 }
@@ -5397,7 +5486,7 @@ impl Tool for HashlineEditTool {
         let file_lines: Vec<&str> = normalized.split('\n').collect();
 
         // Validate all hash references before making any changes
-        if let Err(e) = collect_mismatches(&input.edits, &file_lines) {
+        if let Err(e) = collect_mismatches(&input.edits, &file_lines, had_bom) {
             return Err(Error::tool(
                 "hashline_edit",
                 format!("Hash validation failed — re-read the file to get current tags.\n\n{e}"),
@@ -5441,7 +5530,7 @@ impl Tool for HashlineEditTool {
             match edit.op.as_str() {
                 "replace" => {
                     let start_idx = match &edit.pos {
-                        Some(pos) => validate_line_ref(pos, &file_lines)
+                        Some(pos) => validate_line_ref(pos, &file_lines, had_bom)
                             .map_err(|e| Error::tool("hashline_edit", e))?,
                         None => {
                             return Err(Error::tool(
@@ -5451,7 +5540,7 @@ impl Tool for HashlineEditTool {
                         }
                     };
                     let end_idx = match &edit.end {
-                        Some(end) => validate_line_ref(end, &file_lines)
+                        Some(end) => validate_line_ref(end, &file_lines, had_bom)
                             .map_err(|e| Error::tool("hashline_edit", e))?,
                         None => start_idx,
                     };
@@ -5474,7 +5563,7 @@ impl Tool for HashlineEditTool {
                 }
                 "prepend" => {
                     let idx = match &edit.pos {
-                        Some(pos) => validate_line_ref(pos, &file_lines)
+                        Some(pos) => validate_line_ref(pos, &file_lines, had_bom)
                             .map_err(|e| Error::tool("hashline_edit", e))?,
                         None => 0, // BOF
                     };
@@ -5496,7 +5585,7 @@ impl Tool for HashlineEditTool {
                 }
                 "append" => {
                     let idx = match &edit.pos {
-                        Some(pos) => validate_line_ref(pos, &file_lines)
+                        Some(pos) => validate_line_ref(pos, &file_lines, had_bom)
                             .map_err(|e| Error::tool("hashline_edit", e))?,
                         None => {
                             if file_lines.len() > 1 && file_lines.last() == Some(&"") {
@@ -5729,6 +5818,44 @@ mod tests {
     }
 
     #[test]
+    fn test_rg_match_requires_path_and_line_number() {
+        let mut matches = Vec::new();
+        let mut match_count = 0usize;
+        let mut match_limit_reached = false;
+        let scan_limit = 1;
+
+        let missing_line = Ok(
+            r#"{"type":"match","data":{"path":{"text":"file.txt"}}}"#.to_string(),
+        );
+        process_rg_json_match_line(
+            missing_line,
+            &mut matches,
+            &mut match_count,
+            &mut match_limit_reached,
+            scan_limit,
+        );
+        assert!(matches.is_empty());
+        assert_eq!(match_count, 0);
+        assert!(!match_limit_reached);
+
+        let valid_line = Ok(
+            r#"{"type":"match","data":{"path":{"text":"file.txt"},"line_number":3}}"#
+                .to_string(),
+        );
+        process_rg_json_match_line(
+            valid_line,
+            &mut matches,
+            &mut match_count,
+            &mut match_limit_reached,
+            scan_limit,
+        );
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].1, 3);
+        assert_eq!(match_count, 1);
+        assert!(match_limit_reached);
+    }
+
+    #[test]
     fn test_truncate_by_bytes() {
         let content = "short\nthis is a longer line\nanother".to_string();
         let result = truncate_head(content, 100, 15);
@@ -5755,6 +5882,26 @@ mod tests {
             "bounded reader should drain to EOF instead of SIGPIPEing the writer: {status:?}"
         );
         assert_eq!(captured.len(), 1025);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_get_file_lines_async_unreadable_file_returns_empty() {
+        asupersync::test_utils::run_test(|| async {
+            use std::os::unix::fs::PermissionsExt;
+
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("secret.txt");
+            std::fs::write(&path, "secret\n").unwrap();
+
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o000);
+            std::fs::set_permissions(&path, perms).unwrap();
+
+            let mut cache = HashMap::new();
+            let lines = get_file_lines_async(&path, &mut cache).await;
+            assert!(lines.is_empty());
+        });
     }
 
     #[test]
@@ -5892,6 +6039,26 @@ mod tests {
                 )
                 .await;
             assert!(err.is_err());
+        });
+    }
+
+    #[test]
+    fn test_read_rejects_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+
+            let tool = ReadTool::new(cwd.path());
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({ "path": outside.path().join("secret.txt").to_string_lossy() }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the working directory"));
         });
     }
 
@@ -6078,8 +6245,10 @@ mod tests {
 
     #[test]
     fn test_map_normalized_with_trailing_whitespace() {
-        // "A   \nB" -> "A   \nB" (normalized preserves trailing spaces now)
+        // "A   \nB" -> "A\nB" (normalized strips trailing spaces)
         let content = "A   \nB";
+        let normalized = build_normalized_content(content);
+        assert_eq!(normalized, "A\nB");
 
         // Find "A" (norm idx 0)
         let (start, len) = map_normalized_range_to_original(content, 0, 1);
@@ -6087,20 +6256,14 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(&content[start..start + len], "A");
 
-        // Find "   " (norm idx 1..4)
-        let (start, len) = map_normalized_range_to_original(content, 1, 3);
-        assert_eq!(start, 1);
-        assert_eq!(len, 3);
-        assert_eq!(&content[start..start + len], "   ");
-
-        // Find "\n" (norm idx 4)
-        let (start, len) = map_normalized_range_to_original(content, 4, 1);
+        // Find "\n" (norm idx 1)
+        let (start, len) = map_normalized_range_to_original(content, 1, 1);
         assert_eq!(start, 4);
         assert_eq!(len, 1);
         assert_eq!(&content[start..start + len], "\n");
 
-        // Find "B" (norm idx 5)
-        let (start, len) = map_normalized_range_to_original(content, 5, 1);
+        // Find "B" (norm idx 2)
+        let (start, len) = map_normalized_range_to_original(content, 2, 1);
         assert_eq!(start, 5);
         assert_eq!(len, 1);
         assert_eq!(&content[start..start + len], "B");
@@ -6232,7 +6395,11 @@ mod tests {
                 .unwrap();
 
             let text = get_text(&out.content);
-            assert!(text.contains("exceeds 50.0KB limit"));
+            let expected_limit = format!("exceeds {} limit", format_size(DEFAULT_MAX_BYTES));
+            assert!(
+                text.contains(&expected_limit),
+                "expected limit hint '{expected_limit}', got: {text}"
+            );
             let details = out.details.expect("expected truncation details");
             assert_eq!(
                 details
@@ -6360,6 +6527,40 @@ mod tests {
             assert_eq!(contents, "");
             let text = get_text(&out.content);
             assert!(text.contains("Successfully wrote 0 bytes"));
+        });
+    }
+
+    #[test]
+    fn test_write_rejects_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let tool = WriteTool::new(cwd.path());
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "path": outside.path().join("escape.txt").to_string_lossy(),
+                        "content": "nope"
+                    }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the working directory"));
+
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "path": "../escape.txt",
+                        "content": "nope"
+                    }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the working directory"));
         });
     }
 
@@ -6988,6 +7189,52 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_rejects_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+
+            let tool = GrepTool::new(cwd.path());
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "secret",
+                        "path": outside.path().join("secret.txt").to_string_lossy()
+                    }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the working directory"));
+        });
+    }
+
+    #[test]
+    fn test_grep_rejects_zero_limit() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(tmp.path().join("search.txt"), "alpha\nbeta\n").unwrap();
+
+            let tool = GrepTool::new(tmp.path());
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "alpha",
+                        "path": tmp.path().join("search.txt").to_string_lossy(),
+                        "limit": 0
+                    }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("`limit` must be greater than 0"));
+        });
+    }
+
+    #[test]
     fn test_grep_regex_pattern() {
         asupersync::test_utils::run_test(|| async {
             let tmp = tempfile::tempdir().unwrap();
@@ -7064,6 +7311,50 @@ mod tests {
             assert!(
                 text.contains("No matches found"),
                 "expected case-sensitive search to find no matches, got: {text}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_grep_append_non_matching_lines_invariant() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().unwrap();
+            let file = tmp.path().join("base.txt");
+            std::fs::write(&file, "needle one\nskip\nneedle two\n").unwrap();
+
+            let tool = GrepTool::new(tmp.path());
+            let base_out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "needle",
+                        "path": file.to_string_lossy(),
+                        "limit": 100
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            let base_text = get_text(&base_out.content);
+
+            std::fs::write(&file, "needle one\nskip\nneedle two\nalpha\nbeta\n").unwrap();
+            let extended_out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "needle",
+                        "path": file.to_string_lossy(),
+                        "limit": 100
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            let extended_text = get_text(&extended_out.content);
+
+            assert_eq!(
+                base_text, extended_text,
+                "adding non-matching lines should not alter grep output"
             );
         });
     }
@@ -7409,6 +7700,73 @@ mod tests {
     }
 
     #[test]
+    fn test_find_append_non_matching_file_invariant() {
+        asupersync::test_utils::run_test(|| async {
+            if find_fd_binary().is_none() {
+                return;
+            }
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(tmp.path().join("match.txt"), "a").unwrap();
+
+            let tool = FindTool::new(tmp.path());
+            let base_out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "*.txt",
+                        "path": tmp.path().to_string_lossy()
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            let base_text = get_text(&base_out.content);
+
+            std::fs::write(tmp.path().join("ignore.md"), "b").unwrap();
+            let extended_out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "*.txt",
+                        "path": tmp.path().to_string_lossy()
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            let extended_text = get_text(&extended_out.content);
+
+            assert_eq!(
+                base_text, extended_text,
+                "adding non-matching files should not alter find output"
+            );
+        });
+    }
+
+    #[test]
+    fn test_find_rejects_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+
+            let tool = FindTool::new(cwd.path());
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({
+                        "pattern": "*.txt",
+                        "path": outside.path().to_string_lossy()
+                    }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the working directory"));
+        });
+    }
+
+    #[test]
     fn test_find_limit() {
         asupersync::test_utils::run_test(|| async {
             if find_fd_binary().is_none() {
@@ -7697,6 +8055,26 @@ mod tests {
     }
 
     #[test]
+    fn test_ls_rejects_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+
+            let tool = LsTool::new(cwd.path());
+            let err = tool
+                .execute(
+                    "t",
+                    serde_json::json!({ "path": outside.path().to_string_lossy() }),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the working directory"));
+        });
+    }
+
+    #[test]
     fn test_ls_trailing_slash_for_dirs() {
         asupersync::test_utils::run_test(|| async {
             let tmp = tempfile::tempdir().unwrap();
@@ -7898,6 +8276,33 @@ mod tests {
     }
 
     #[test]
+    fn test_count_overlapping_occurrences() {
+        assert_eq!(count_overlapping_occurrences("aaaa", "aa"), 3);
+        assert_eq!(count_overlapping_occurrences("abababa", "aba"), 3);
+        assert_eq!(count_overlapping_occurrences("abc", "d"), 0);
+        assert_eq!(count_overlapping_occurrences("abc", ""), 0);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
+
+        #[test]
+        fn proptest_line_ending_roundtrip_invariant(
+            input in arbitrary_text(),
+            ending in prop_oneof![
+                Just("\n".to_string()),
+                Just("\r\n".to_string()),
+                Just("\r".to_string()),
+            ],
+        ) {
+            let normalized = normalize_to_lf(&input);
+            let restored = restore_line_endings(&normalized, &ending);
+            let renormalized = normalize_to_lf(&restored);
+            prop_assert_eq!(renormalized, normalized);
+        }
+    }
+
+    #[test]
     fn test_strip_bom_present() {
         let (result, had_bom) = strip_bom("\u{FEFF}hello");
         assert_eq!(result, "hello");
@@ -8081,6 +8486,72 @@ mod tests {
                     .rev()
                     .any(|line| line.ends_with(content_trimmed)));
             }
+        }
+
+        #[test]
+        fn proptest_truncate_head_monotonic_limits(
+            input in arbitrary_text(),
+            max_lines_a in 0usize..32,
+            max_lines_b in 0usize..32,
+            max_bytes_a in 0usize..256,
+            max_bytes_b in 0usize..256,
+        ) {
+            let low_lines = max_lines_a.min(max_lines_b);
+            let high_lines = max_lines_a.max(max_lines_b);
+            let low_bytes = max_bytes_a.min(max_bytes_b);
+            let high_bytes = max_bytes_a.max(max_bytes_b);
+
+            let small = truncate_head(input.clone(), low_lines, low_bytes);
+            let large = truncate_head(input, high_lines, high_bytes);
+
+            prop_assert!(large.content.starts_with(&small.content));
+            prop_assert!(large.output_bytes >= small.output_bytes);
+            prop_assert!(large.output_lines >= small.output_lines);
+        }
+
+        #[test]
+        fn proptest_truncate_tail_monotonic_limits(
+            input in arbitrary_text(),
+            max_lines_a in 0usize..32,
+            max_lines_b in 0usize..32,
+            max_bytes_a in 0usize..256,
+            max_bytes_b in 0usize..256,
+        ) {
+            let low_lines = max_lines_a.min(max_lines_b);
+            let high_lines = max_lines_a.max(max_lines_b);
+            let low_bytes = max_bytes_a.min(max_bytes_b);
+            let high_bytes = max_bytes_a.max(max_bytes_b);
+
+            let small = truncate_tail(input.clone(), low_lines, low_bytes);
+            let large = truncate_tail(input, high_lines, high_bytes);
+
+            prop_assert!(large.content.ends_with(&small.content));
+            prop_assert!(large.output_bytes >= small.output_bytes);
+            prop_assert!(large.output_lines >= small.output_lines);
+        }
+
+        #[test]
+        fn proptest_truncate_head_prefix_invariant_under_append(
+            base in arbitrary_text(),
+            suffix in arbitrary_text(),
+            max_lines in 0usize..32,
+            max_bytes in 0usize..256,
+        ) {
+            let base_result = truncate_head(base.clone(), max_lines, max_bytes);
+            let extended_result = truncate_head(format!("{base}{suffix}"), max_lines, max_bytes);
+            prop_assert!(extended_result.content.starts_with(&base_result.content));
+        }
+
+        #[test]
+        fn proptest_truncate_tail_suffix_invariant_under_prepend(
+            base in arbitrary_text(),
+            prefix in arbitrary_text(),
+            max_lines in 0usize..32,
+            max_bytes in 0usize..256,
+        ) {
+            let base_result = truncate_tail(base.clone(), max_lines, max_bytes);
+            let extended_result = truncate_tail(format!("{prefix}{base}"), max_lines, max_bytes);
+            prop_assert!(extended_result.content.ends_with(&base_result.content));
         }
     }
 
@@ -8355,6 +8826,28 @@ mod tests {
                 }),
                 "normalized content should not contain target Unicode chars"
             );
+        }
+
+        /// Appending trailing whitespace to each line should not change the
+        /// normalized content (metamorphic invariant).
+        #[test]
+        fn proptest_build_normalized_content_trailing_whitespace_invariant(
+            input in arbitrary_match_text()
+        ) {
+            let normalized = build_normalized_content(&input);
+            let mut with_trailing = String::new();
+            let mut lines = input.split('\n').peekable();
+
+            while let Some(line) = lines.next() {
+                with_trailing.push_str(line);
+                with_trailing.push_str("  \t");
+                if lines.peek().is_some() {
+                    with_trailing.push('\n');
+                }
+            }
+
+            let normalized_trailing = build_normalized_content(&with_trailing);
+            prop_assert_eq!(normalized_trailing, normalized);
         }
 
         /// `map_normalized_range_to_original` should produce valid byte
@@ -9052,6 +9545,34 @@ mod tests {
 
             let content = std::fs::read_to_string(&file).unwrap();
             assert_eq!(content, "world");
+        });
+    }
+
+    #[test]
+    fn test_hashline_edit_preserves_bom_hash_validation() {
+        asupersync::test_utils::run_test(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("bom.txt");
+            let bom = "\u{FEFF}";
+            std::fs::write(&file, format!("{bom}alpha\nbeta\n")).unwrap();
+
+            let tool = HashlineEditTool::new(dir.path());
+            let tag1 = format_hashline_tag(0, &format!("{bom}alpha"));
+
+            let input = serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": tag1,
+                    "lines": ["gamma"]
+                }]
+            });
+
+            let out = tool.execute("test", input, None).await.unwrap();
+            assert!(!out.is_error);
+
+            let content = std::fs::read_to_string(&file).unwrap();
+            assert_eq!(content, format!("{bom}gamma\nbeta\n"));
         });
     }
 

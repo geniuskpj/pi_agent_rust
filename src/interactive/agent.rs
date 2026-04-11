@@ -4,6 +4,7 @@ use super::conversation::{
 };
 use super::ext_session::{format_extension_ui_prompt, parse_extension_ui_response};
 use super::*;
+use crate::extension_events::{BeforeAgentStartOutcome, apply_before_agent_start_response};
 
 pub(super) fn extension_commands_for_catalog(
     manager: &ExtensionManager,
@@ -35,10 +36,14 @@ async fn dispatch_input_event(
     images: Vec<ImageContent>,
 ) -> crate::error::Result<InputEventOutcome> {
     let images_value = serde_json::to_value(&images).unwrap_or(Value::Null);
+    let attachments_value = images_value.clone();
+    let text_clone = text.clone();
     let payload = json!({
         "text": text,
+        "content": text_clone,
         "images": images_value,
-        "source": "user",
+        "attachments": attachments_value,
+        "source": "interactive",
     });
     let response = manager
         .dispatch_event_with_response(
@@ -292,6 +297,10 @@ impl PiApp {
             PiMsg::UiShutdown => {
                 // Internal signal for shutting down the async→UI bridge; should not normally reach
                 // the UI event loop, but handle it defensively.
+            }
+            PiMsg::AutocompleteRefresh => {
+                self.autocomplete.provider.refresh_background();
+                return Self::autocomplete_refresh_cmd();
             }
             PiMsg::TextDelta(text) => {
                 self.current_response.push_str(&text);
@@ -574,6 +583,27 @@ After approving access in the browser, press Enter in Pi to complete login."
                 self.input.set_value(&text);
                 self.input.focus();
             }
+            PiMsg::OpenTree {
+                initial_selected_id,
+                label,
+            } => {
+                if self.agent_state != AgentState::Idle {
+                    self.status_message = Some("Cannot open tree while processing".to_string());
+                    return None;
+                }
+
+                let Ok(session_guard) = self.session.try_lock() else {
+                    self.status_message = Some("Session busy; try again".to_string());
+                    return None;
+                };
+                let selector = TreeSelectorState::new(
+                    &session_guard,
+                    self.term_height,
+                    initial_selected_id.as_deref(),
+                    label,
+                );
+                self.tree_ui = Some(TreeUiState::Selector(selector));
+            }
             PiMsg::ResourcesReloaded {
                 resources,
                 status,
@@ -653,6 +683,86 @@ After approving access in the browser, press Enter in Pi to complete login."
             self.capability_prompt = Some(CapabilityPromptOverlay::from_request(request));
             return None;
         }
+        match request.method.as_str() {
+            "getEditorText" | "get_editor_text" => {
+                let value = Value::String(self.input.value());
+                self.send_extension_ui_response(ExtensionUiResponse {
+                    id: request.id,
+                    value: Some(value),
+                    cancelled: false,
+                });
+                return None;
+            }
+            "getAllThemes" | "get_all_themes" => {
+                let value = Value::Array(self.collect_extension_theme_infos());
+                self.send_extension_ui_response(ExtensionUiResponse {
+                    id: request.id,
+                    value: Some(value),
+                    cancelled: false,
+                });
+                return None;
+            }
+            "getTheme" | "get_theme" => {
+                let name = request
+                    .payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let value = if name.is_empty() {
+                    Value::Null
+                } else {
+                    Theme::resolve_spec(&name, &self.cwd)
+                        .ok()
+                        .and_then(|theme| serde_json::to_value(theme).ok())
+                        .unwrap_or(Value::Null)
+                };
+                self.send_extension_ui_response(ExtensionUiResponse {
+                    id: request.id,
+                    value: Some(value),
+                    cancelled: false,
+                });
+                return None;
+            }
+            "setTheme" | "set_theme" => {
+                let name = request
+                    .payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let mut response = serde_json::Map::new();
+                if name.is_empty() {
+                    response.insert("success".to_string(), Value::Bool(false));
+                    response.insert(
+                        "error".to_string(),
+                        Value::String("Theme name is required".to_string()),
+                    );
+                } else {
+                    match Theme::resolve_spec(&name, &self.cwd) {
+                        Ok(theme) => {
+                            let theme_name = theme.name.clone();
+                            self.apply_theme(theme);
+                            self.config.theme = Some(theme_name);
+                            response.insert("success".to_string(), Value::Bool(true));
+                        }
+                        Err(err) => {
+                            response.insert("success".to_string(), Value::Bool(false));
+                            response.insert("error".to_string(), Value::String(err.to_string()));
+                        }
+                    }
+                }
+                self.send_extension_ui_response(ExtensionUiResponse {
+                    id: request.id,
+                    value: Some(Value::Object(response)),
+                    cancelled: false,
+                });
+                return None;
+            }
+            _ => {}
+        }
         if request.method == "custom" {
             self.handle_custom_extension_ui_request(request);
             return None;
@@ -664,6 +774,43 @@ After approving access in the browser, press Enter in Pi to complete login."
             self.apply_extension_ui_effect(&request);
         }
         None
+    }
+
+    fn collect_extension_theme_infos(&self) -> Vec<Value> {
+        let mut entries: Vec<(String, Option<String>)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let mut push_entry = |name: &str, path: Option<String>| {
+            let key = name.to_ascii_lowercase();
+            if seen.insert(key) {
+                entries.push((name.to_string(), path));
+            }
+        };
+
+        push_entry("dark", None);
+        push_entry("light", None);
+        push_entry("solarized", None);
+
+        for path in Theme::discover_themes(&self.cwd) {
+            if let Ok(theme) = Theme::load(&path) {
+                push_entry(&theme.name, Some(path.display().to_string()));
+            }
+        }
+
+        entries.sort_by_key(|entry| entry.0.to_ascii_lowercase());
+
+        entries
+            .into_iter()
+            .map(|(name, path)| {
+                let mut map = serde_json::Map::new();
+                map.insert("name".to_string(), Value::String(name));
+                map.insert(
+                    "path".to_string(),
+                    path.map_or(Value::Null, Value::String),
+                );
+                Value::Object(map)
+            })
+            .collect()
     }
 
     fn handle_custom_extension_ui_request(&mut self, request: ExtensionUiRequest) {
@@ -1367,7 +1514,7 @@ After approving access in the browser, press Enter in Pi to complete login."
     }
 
     #[allow(clippy::too_many_lines)]
-    fn submit_content_with_display(
+    pub(super) fn submit_content_with_display(
         &mut self,
         content: Vec<ContentBlock>,
         display: &str,
@@ -1416,7 +1563,29 @@ After approving access in the browser, press Enter in Pi to complete login."
         let task_cx = Cx::current().unwrap_or_else(Cx::for_request);
         runtime_handle.spawn(async move {
             let mut content_for_agent = content_for_agent;
-            if let Some(manager) = extensions.clone() {
+            let base_system_prompt = {
+                let guard = match asupersync::sync::OwnedMutexGuard::lock(
+                    Arc::clone(&agent),
+                    &task_cx,
+                )
+                .await
+                {
+                    Ok(guard) => guard,
+                    Err(err) => {
+                        let _ = crate::interactive::enqueue_pi_event(
+                            &event_tx,
+                            &Cx::for_request(),
+                            PiMsg::AgentError(format!("Failed to lock agent: {err}")),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                let prompt = guard.system_prompt().map(str::to_string);
+                drop(guard);
+                prompt
+            };
+            let before_start = if let Some(manager) = extensions.clone() {
                 let (text, images) = split_content_blocks_for_input(&content_for_agent);
                 match dispatch_input_event(&manager, text, images).await {
                     Ok(InputEventOutcome::Continue { text, images }) => {
@@ -1457,10 +1626,29 @@ After approving access in the browser, press Enter in Pi to complete login."
                         return;
                     }
                 }
-                let _ = manager
-                    .dispatch_event(ExtensionEventName::BeforeAgentStart, None)
-                    .await;
-            }
+
+                let (text, images) = split_content_blocks_for_input(&content_for_agent);
+                let images_value = serde_json::to_value(&images).unwrap_or(Value::Null);
+                let payload = json!({
+                    "prompt": text,
+                    "images": images_value,
+                    "systemPrompt": base_system_prompt.as_deref().unwrap_or(""),
+                });
+                let response = manager
+                    .dispatch_event_with_response(
+                        ExtensionEventName::BeforeAgentStart,
+                        Some(payload),
+                        EXTENSION_EVENT_TIMEOUT_MS,
+                    )
+                    .await
+                    .unwrap_or(None);
+                apply_before_agent_start_response(response, Utc::now().timestamp_millis())
+            } else {
+                BeforeAgentStartOutcome {
+                    messages: Vec::new(),
+                    system_prompt: None,
+                }
+            };
 
             let mut agent_guard =
                 match asupersync::sync::OwnedMutexGuard::lock(Arc::clone(&agent), &task_cx).await {
@@ -1475,6 +1663,15 @@ After approving access in the browser, press Enter in Pi to complete login."
                         return;
                     }
                 };
+            let BeforeAgentStartOutcome {
+                messages: before_messages,
+                system_prompt,
+            } = before_start;
+            if let Some(prompt) = system_prompt {
+                agent_guard.set_system_prompt(Some(prompt));
+            } else {
+                agent_guard.set_system_prompt(base_system_prompt.clone());
+            }
             let previous_len = agent_guard.messages().len();
 
             let event_sender = event_tx.clone();
@@ -1487,8 +1684,16 @@ After approving access in the browser, press Enter in Pi to complete login."
                 event_sender.clone(),
             )));
             let ui_stream_batcher_for_events = Arc::clone(&ui_stream_batcher);
+            let user_message = ModelMessage::User(UserMessage {
+                content: UserContent::Blocks(content_for_agent),
+                timestamp: Utc::now().timestamp_millis(),
+            });
+            let mut prompts = Vec::with_capacity(1 + before_messages.len());
+            prompts.push(user_message);
+            prompts.extend(before_messages.into_iter().map(ModelMessage::Custom));
+
             let result = agent_guard
-                .run_with_content_with_abort(content_for_agent, Some(abort_signal), move |event| {
+                .run_with_messages_with_abort(prompts, Some(abort_signal), move |event| {
                     {
                         let mut batcher = match ui_stream_batcher_for_events.lock() {
                             Ok(guard) => guard,
@@ -1503,6 +1708,8 @@ After approving access in the browser, press Enter in Pi to complete login."
                 })
                 .await;
             flush_ui_stream_batcher_with_backpressure(&ui_stream_batcher).await;
+
+            agent_guard.set_system_prompt(base_system_prompt);
 
             let new_messages: Vec<crate::model::Message> =
                 agent_guard.messages()[previous_len..].to_vec();

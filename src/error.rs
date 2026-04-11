@@ -2090,6 +2090,8 @@ mod tests {
             ("moonshotai", "KIMI_API_KEY"),
             ("alibaba", "DASHSCOPE_API_KEY"),
             ("alibaba", "QWEN_API_KEY"),
+            ("alibaba-us", "DASHSCOPE_API_KEY"),
+            ("alibaba-us", "QWEN_API_KEY"),
             ("deepseek", "DEEPSEEK_API_KEY"),
             ("perplexity", "PERPLEXITY_API_KEY"),
             ("xai", "XAI_API_KEY"),

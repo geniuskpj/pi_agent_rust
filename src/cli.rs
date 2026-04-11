@@ -127,7 +127,6 @@ fn preprocess_extension_flags(raw_args: &[String]) -> (Vec<String>, Vec<Extensio
     let mut extracted = Vec::new();
     let mut expecting_value = false;
     let mut in_subcommand = false;
-    let mut in_message_args = false;
     let mut index = 1usize;
     while index < raw_args.len() {
         let token = &raw_args[index];
@@ -141,7 +140,7 @@ fn preprocess_extension_flags(raw_args: &[String]) -> (Vec<String>, Vec<Extensio
             index += 1;
             continue;
         }
-        if in_subcommand || in_message_args {
+        if in_subcommand {
             filtered.push(token.clone());
             index += 1;
             continue;
@@ -214,8 +213,6 @@ fn preprocess_extension_flags(raw_args: &[String]) -> (Vec<String>, Vec<Extensio
         }
         if ROOT_SUBCOMMANDS.contains(&token.as_str()) {
             in_subcommand = true;
-        } else {
-            in_message_args = true;
         }
         filtered.push(token.clone());
         index += 1;
@@ -285,7 +282,8 @@ pub struct Cli {
     pub version: bool,
 
     // === Model Configuration ===
-    /// LLM provider (e.g., anthropic, openai, google)
+    /// LLM provider (e.g., anthropic, openai, google).
+    /// Run --list-providers for canonical IDs + aliases.
     #[arg(long, env = "PI_PROVIDER")]
     pub provider: Option<String>,
 
@@ -370,10 +368,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_tools: bool,
 
-    /// Specific tools to enable (comma-separated: read,bash,edit,write,grep,find,ls,hashline_edit)
+    /// Specific tools to enable (comma-separated: read,write,edit,bash,grep,find,ls,hashline_edit)
     #[arg(
         long,
-        default_value = "read,bash,edit,write,grep,find,ls,hashline_edit"
+        default_value = "read,write,edit,bash"
     )]
     pub tools: String,
 
@@ -881,16 +879,7 @@ mod tests {
         let cli = Cli::parse_from(["pi"]);
         assert_eq!(
             cli.enabled_tools(),
-            vec![
-                "read",
-                "bash",
-                "edit",
-                "write",
-                "grep",
-                "find",
-                "ls",
-                "hashline_edit",
-            ]
+            vec!["read", "write", "edit", "bash"]
         );
     }
 
@@ -1058,6 +1047,22 @@ mod tests {
 
         assert!(parsed.cli.print);
         assert_eq!(parsed.cli.extension, vec!["ext.js".to_string()]);
+        assert_eq!(parsed.cli.message_args(), vec!["hello"]);
+        assert_eq!(parsed.extension_flags.len(), 1);
+        assert_eq!(parsed.extension_flags[0].name, "plan");
+        assert_eq!(parsed.extension_flags[0].value.as_deref(), Some("ship-it"));
+    }
+
+    #[test]
+    fn extension_flags_after_message_args_are_extracted() {
+        let parsed = parse_with_extension_flags(vec![
+            "pi".to_string(),
+            "hello".to_string(),
+            "--plan".to_string(),
+            "ship-it".to_string(),
+        ])
+        .expect("parse extension flag after message");
+
         assert_eq!(parsed.cli.message_args(), vec!["hello"]);
         assert_eq!(parsed.extension_flags.len(), 1);
         assert_eq!(parsed.extension_flags[0].name, "plan");

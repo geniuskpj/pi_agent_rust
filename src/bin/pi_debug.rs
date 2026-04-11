@@ -220,6 +220,7 @@ async fn run_debug(mut cli: cli::Cli, runtime_handle: RuntimeHandle) -> Result<(
         max_tool_iterations: 50,
         stream_options,
         block_images: config.image_block_images(),
+        fail_closed_hooks: config.fail_closed_hooks(),
     };
     let tools = ToolRegistry::new(&enabled_tools, &cwd, Some(&config));
     let session_arc = Arc::new(Mutex::new(session));
