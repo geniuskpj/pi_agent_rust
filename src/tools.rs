@@ -5091,7 +5091,8 @@ static HASHLINE_PREFIX_RE: OnceLock<regex::Regex> = OnceLock::new();
 
 fn strip_hashline_prefix(line: &str) -> &str {
     let re = HASHLINE_PREFIX_RE.get_or_init(|| {
-        regex::Regex::new(r"^\d+#[ZPMQVRWSNKTXJBYH]{2}:").expect("valid hashline prefix regex")
+        regex::Regex::new(r"^[\s>+\-]*\d+\s*#\s*[ZPMQVRWSNKTXJBYH]{2}\s*:")
+            .expect("valid hashline prefix regex")
     });
     re.find(line).map_or(line, |m| &line[m.end()..])
 }
@@ -8616,6 +8617,9 @@ mod tests {
     fn test_strip_hashline_prefix() {
         assert_eq!(strip_hashline_prefix("5#KJ:hello world"), "hello world");
         assert_eq!(strip_hashline_prefix("100#ZZ:fn main() {"), "fn main() {");
+        assert_eq!(strip_hashline_prefix(" 5 # KJ:hello world"), "hello world");
+        assert_eq!(strip_hashline_prefix("> + 5#KJ:hello world"), "hello world");
+        assert_eq!(strip_hashline_prefix("5#KJ :hello world"), "hello world");
         // No prefix → unchanged
         assert_eq!(strip_hashline_prefix("hello world"), "hello world");
         assert_eq!(strip_hashline_prefix(""), "");

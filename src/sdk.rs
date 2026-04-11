@@ -207,20 +207,21 @@ impl EventListeners {
     /// Register a session-level event listener.
     pub fn subscribe(&self, listener: EventSubscriber) -> SubscriptionId {
         let id = SubscriptionId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        self.subscribers
+        let mut subs = self
+            .subscribers
             .lock()
-            .expect("EventListeners lock poisoned")
-            .insert(id, listener);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        subs.insert(id, listener);
         id
     }
 
     /// Remove a previously registered listener.
     pub fn unsubscribe(&self, id: SubscriptionId) -> bool {
-        self.subscribers
+        let mut subs = self
+            .subscribers
             .lock()
-            .expect("EventListeners lock poisoned")
-            .remove(&id)
-            .is_some()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        subs.remove(&id).is_some()
     }
 
     /// Dispatch an [`AgentEvent`] to all registered subscribers.
@@ -229,7 +230,7 @@ impl EventListeners {
             let subs = self
                 .subscribers
                 .lock()
-                .expect("EventListeners lock poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             subs.values().cloned().collect()
         };
         for listener in listeners {

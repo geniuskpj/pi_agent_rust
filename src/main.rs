@@ -1163,18 +1163,22 @@ async fn run(
             has_cli_api_key_override(cli.api_key.as_deref()),
         )
     };
+    let has_extensions = !resources.extensions().is_empty();
 
     if has_cli_api_key_override(cli.api_key.as_deref())
         && cli.provider.is_none()
         && cli.model.is_none()
-        && scoped_models.is_empty()
     {
-        bail!("--api-key requires a model to be specified via --provider/--model or --models");
+        let allow_unresolved_scope = has_extensions && !scoped_patterns.is_empty();
+        if scoped_models.is_empty() && !allow_unresolved_scope {
+            bail!(
+                "--api-key requires a model to be specified via --provider/--model or --models"
+            );
+        }
     }
 
     let allow_setup_prompt =
         is_interactive && io::stdin().is_terminal() && io::stdout().is_terminal();
-    let has_extensions = !resources.extensions().is_empty();
     let session = Box::pin(Session::new(&cli, &config)).await?;
 
     let (mut selection, mut resolved_key) = match resolve_selection_with_auth(
@@ -3470,6 +3474,30 @@ const PROVIDER_CHOICES: &[ProviderChoice] = &[
         label: "OpenRouter",
         kind: SetupCredentialKind::ApiKey,
         env: "OPENROUTER_API_KEY",
+    },
+    ProviderChoice {
+        provider: "cohere",
+        label: "Cohere",
+        kind: SetupCredentialKind::ApiKey,
+        env: "COHERE_API_KEY",
+    },
+    ProviderChoice {
+        provider: "groq",
+        label: "Groq",
+        kind: SetupCredentialKind::ApiKey,
+        env: "GROQ_API_KEY",
+    },
+    ProviderChoice {
+        provider: "deepseek",
+        label: "DeepSeek",
+        kind: SetupCredentialKind::ApiKey,
+        env: "DEEPSEEK_API_KEY",
+    },
+    ProviderChoice {
+        provider: "mistral",
+        label: "Mistral AI",
+        kind: SetupCredentialKind::ApiKey,
+        env: "MISTRAL_API_KEY",
     },
 ];
 

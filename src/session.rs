@@ -2148,38 +2148,30 @@ impl Session {
             changed = true;
         }
 
-        match self.effective_model_for_current_path() {
-            Some((provider, model_id)) => {
-                if self.header.provider.as_deref() != Some(provider.as_str())
-                    || self.header.model_id.as_deref() != Some(model_id.as_str())
-                {
-                    self.header.provider = Some(provider);
-                    self.header.model_id = Some(model_id);
-                    changed = true;
-                }
-            }
-            None if self.has_any_model_change()
-                && (self.header.provider.is_some() || self.header.model_id.is_some()) =>
+        if let Some((provider, model_id)) = self.effective_model_for_current_path() {
+            if self.header.provider.as_deref() != Some(provider.as_str())
+                || self.header.model_id.as_deref() != Some(model_id.as_str())
             {
-                self.header.provider = None;
-                self.header.model_id = None;
+                self.header.provider = Some(provider);
+                self.header.model_id = Some(model_id);
                 changed = true;
             }
-            None => {}
+        } else if self.has_any_model_change()
+            && (self.header.provider.is_some() || self.header.model_id.is_some())
+        {
+            self.header.provider = None;
+            self.header.model_id = None;
+            changed = true;
         }
 
-        match self.effective_thinking_level_for_current_path() {
-            Some(thinking_level) => {
-                if self.header.thinking_level.as_deref() != Some(thinking_level.as_str()) {
-                    self.header.thinking_level = Some(thinking_level);
-                    changed = true;
-                }
-            }
-            None if self.has_any_thinking_level_change() && self.header.thinking_level.is_some() => {
-                self.header.thinking_level = None;
+        if let Some(thinking_level) = self.effective_thinking_level_for_current_path() {
+            if self.header.thinking_level.as_deref() != Some(thinking_level.as_str()) {
+                self.header.thinking_level = Some(thinking_level);
                 changed = true;
             }
-            None => {}
+        } else if self.has_any_thinking_level_change() && self.header.thinking_level.is_some() {
+            self.header.thinking_level = None;
+            changed = true;
         }
 
         if changed {
@@ -3448,22 +3440,24 @@ impl SessionHeader {
     }
 
     fn materialize_branch_fallbacks(&mut self) -> bool {
-        let mut changed = false;
+        // Track mutations as booleans, then materialize them.
+        // This pattern avoids clippy::useless_let_if_seq while
+        // remaining readable for multiple independent conditions.
+        let set_provider = self.fallback_provider.is_none() && self.provider.is_some();
+        let set_model_id = self.fallback_model_id.is_none() && self.model_id.is_some();
+        let set_thinking = self.fallback_thinking_level.is_none() && self.thinking_level.is_some();
 
-        if self.fallback_provider.is_none() && self.provider.is_some() {
+        if set_provider {
             self.fallback_provider = self.provider.clone();
-            changed = true;
         }
-        if self.fallback_model_id.is_none() && self.model_id.is_some() {
+        if set_model_id {
             self.fallback_model_id = self.model_id.clone();
-            changed = true;
         }
-        if self.fallback_thinking_level.is_none() && self.thinking_level.is_some() {
+        if set_thinking {
             self.fallback_thinking_level = self.thinking_level.clone();
-            changed = true;
         }
 
-        changed
+        set_provider || set_model_id || set_thinking
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
