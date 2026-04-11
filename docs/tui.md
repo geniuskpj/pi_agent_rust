@@ -72,6 +72,7 @@ command surface implemented in `src/interactive.rs`.
 | `/fork [id\|index]` | Fork from a user message (default: last on current path). |
 | `/compact [notes]` | Compact older context with optional instructions. |
 | `/reload` | Reload skills/prompts from disk. |
+| `/template <name> [args]` | Expand a prompt template by name. |
 | `/share` | Upload session HTML to a secret GitHub gist and show URL. |
 | `/exit` (`/quit`, `/q`) | Exit Pi. |
 

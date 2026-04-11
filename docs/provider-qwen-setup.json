@@ -6,7 +6,7 @@
   "last_verified_utc": "2026-02-13T10:00:00Z",
 
   "quick_start": {
-    "description": "Qwen (Alibaba DashScope) provides two Pi entries: alibaba (international/Singapore) and alibaba-cn (China/Beijing). Uses OpenAI-compatible Chat Completions API with critical streaming+tools limitation.",
+    "description": "Qwen (Alibaba DashScope) provides three Pi entries: alibaba (international/Singapore), alibaba-us (US/Virginia), and alibaba-cn (China/Beijing). Uses OpenAI-compatible Chat Completions API with critical streaming+tools limitation.",
     "auth_env": "DASHSCOPE_API_KEY",
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "api_type": "openai-completions",
@@ -29,11 +29,12 @@
       "example_cli_options": [
         "pi --provider alibaba --model qwen-max          # Most capable general model",
         "pi --provider alibaba --model qwen3-coder-plus  # Specialized for code",
+        "pi --provider alibaba-us --model qwen-plus      # US/Virginia endpoint",
         "pi --provider alibaba-cn --model qwen-plus      # China endpoint"
       ],
       "notes": [
-        "QWEN_API_KEY is only used as fallback for alibaba (intl); not for alibaba-cn.",
-        "US endpoint (dashscope-us.aliyuncs.com) not yet registered as separate provider.",
+        "QWEN_API_KEY is only used as fallback for alibaba and alibaba-us; not for alibaba-cn.",
+        "alibaba-us targets the Virginia endpoint (dashscope-us.aliyuncs.com) for US-specific models.",
         "stream_options.include_usage=true is needed to get token counts in final streaming chunk."
       ]
     }
@@ -42,11 +43,11 @@
   "caveats": [
     {
       "id": "qwen-cav-001",
-      "severity": "critical",
-      "summary": "Tool calling CANNOT be combined with streaming",
-      "detail": "When tools are defined, stream must be set to false. The current OpenAIProvider hardcodes stream=true (src/providers/openai.rs line 139), so tool-calling turns will produce incorrect results. A non-streaming fallback for tool-call turns needs to be added as a future enhancement.",
+      "severity": "warning",
+      "summary": "Tool calling requires non-streaming requests",
+      "detail": "Qwen's OpenAI-compatible endpoint does not support streaming responses when tools are provided. Pi automatically disables streaming for tool-call turns on alibaba/alibaba-us/alibaba-cn; streaming remains available for non-tool turns.",
       "test_evidence": "docs/provider-qwen-capability-profile.json spec-003",
-      "workaround": "Avoid tool-calling models with Qwen until the non-streaming fallback is implemented."
+      "workaround": "None (handled automatically by Pi)."
     },
     {
       "id": "qwen-cav-002",
@@ -107,7 +108,7 @@
     {
       "symptom": "Tool calls produce empty or malformed results",
       "cause": "Streaming + tools combination not supported",
-      "fix": "Known limitation (qwen-cav-001). Avoid tool-calling with Qwen until non-streaming fallback is implemented in OpenAIProvider.",
+      "fix": "Update to a build that auto-disables streaming for Qwen tool-call turns (qwen-cav-001).",
       "test_evidence": "docs/provider-qwen-capability-profile.json spec-003"
     },
     {
@@ -119,7 +120,7 @@
     {
       "symptom": "Provider not found for 'qwen'",
       "cause": "Provider ID is 'alibaba', not 'qwen'",
-      "fix": "Use: pi --provider alibaba --model qwen-plus (or alibaba-cn for China endpoint).",
+      "fix": "Use: pi --provider alibaba --model qwen-plus (or alibaba-us for US endpoint, alibaba-cn for China endpoint).",
       "test_evidence": "src/provider_metadata.rs canonical_provider_id mapping"
     }
   ],

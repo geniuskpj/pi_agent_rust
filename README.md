@@ -284,7 +284,7 @@ Watch the response appear token-by-token, with thinking blocks shown inline.
 | `ls` | List directory contents | What's in src/? |
 
 All tools include:
-- Automatic truncation for large outputs (2000 lines / 50KB)
+- Automatic truncation for large outputs (2000 lines / 1MB)
 - Detailed metadata in responses
 - Process tree cleanup for bash (no orphaned processes)
 
@@ -1123,7 +1123,7 @@ Large outputs from tools (file reads, command output, grep results) must be trun
 | Limit | Value | Rationale |
 |-------|-------|-----------|
 | `MAX_LINES` | 2000 | Balances context usage vs. completeness |
-| `MAX_BYTES` | 50KB | Prevents binary file accidents |
+| `MAX_BYTES` | 1MB | Prevents binary file accidents |
 | `GREP_MAX_LINE_LENGTH` | 500 chars | Truncates minified code |
 
 The algorithm:
@@ -1520,21 +1520,21 @@ The RPC mode (`pi --mode rpc`) exposes a line-delimited JSON protocol over stdin
 ```json
 {"type": "prompt", "message": "Explain this function", "id": "req-001"}
 {"type": "steer", "message": "Focus on error handling"}
-{"type": "follow-up", "message": "Now add tests"}
+{"type": "follow_up", "message": "Now add tests"}
 {"type": "abort"}
-{"type": "get-state"}
-{"type": "compact", "reserve": 8192, "keepRecent": 20000}
+{"type": "get_state"}
+{"type": "compact", "reserveTokens": 8192, "keepRecentTokens": 20000}
 ```
 
 **Pi → Client (stdout):**
 
 ```json
-{"type": "event", "event": "agent_start", "data": {"session_id": "..."}}
-{"type": "event", "event": "text_delta", "data": {"text": "The function"}}
-{"type": "event", "event": "tool_start", "data": {"tool": "read", "input": {}}}
-{"type": "event", "event": "tool_end", "data": {"tool": "read", "output": {}}}
-{"type": "event", "event": "agent_done", "data": {"usage": {}}}
-{"type": "response", "id": "req-001", "data": {"status": "ok"}}
+{"type": "agent_start", "sessionId": "..."}
+{"type": "message_update", "message": {...}, "assistantMessageEvent": {"type": "text_delta", "delta": "The function", "contentIndex": 0}}
+{"type": "tool_execution_start", "toolCallId": "...", "toolName": "read", "args": {}}
+{"type": "tool_execution_end", "toolCallId": "...", "toolName": "read", "result": {}, "isError": false}
+{"type": "agent_end", "sessionId": "...", "messages": [...]}
+{"type": "response", "id": "req-001", "command": "prompt", "success": true, "data": {"status": "ok"}}
 ```
 
 **I/O architecture**: Two dedicated threads handle stdin reading and stdout writing, bridged to the async agent runtime via channels. The stdin thread retries on transient errors to prevent dropped input. The stdout thread flushes after every line to prevent buffering delays.
@@ -1548,7 +1548,7 @@ The RPC mode (`pi --mode rpc`) exposes a line-delimited JSON protocol over stdin
 
 Queue modes (`All` or `OneAtATime`) control whether multiple queued messages are batched into a single turn or processed individually.
 
-**Extension UI over RPC**: When an extension requests user input (capability prompt, selection dialog), Pi emits an `extensionUiRequest` event. The client renders the prompt in its own UI and responds with an `extensionUiResponse` message. IDE extensions can then present native UI for capability decisions instead of falling back to terminal prompts.
+**Extension UI over RPC**: When an extension requests user input (capability prompt, selection dialog), Pi emits an `extension_ui_request` event. The client renders the prompt in its own UI and responds with an `extension_ui_response` message. IDE extensions can then present native UI for capability decisions instead of falling back to terminal prompts.
 
 ### Session Indexing
 
@@ -1650,7 +1650,7 @@ Input: { "path": "src/main.rs", "offset": 10, "limit": 50 }
 - Supports images (jpg, png, gif, webp) with optional auto-resize
 - Streams file bytes in chunks with hard size limits to reduce peak memory usage
 - Applies defensive image decode limits to block decompression-bomb/OOM inputs
-- Truncates at 2000 lines or 50KB
+- Truncates at 2000 lines or 1MB
 - Returns continuation hint if truncated
 
 ### bash
@@ -2017,7 +2017,7 @@ Pi is honest about what it doesn't do:
 | **Not all provider APIs** | Built-in support includes Anthropic, OpenAI (Chat + Responses), Gemini, Cohere, Azure OpenAI, Bedrock, Vertex AI, GitHub Copilot, and GitLab Duo; some ecosystem-specific APIs are still TBD |
 | **No web browsing** | Use bash with curl |
 | **No GUI** | Terminal-only by design |
-| **Some extensions need npm stubs** | 5 npm packages not yet shimmed; see EXTENSIONS.md §8.1 |
+| **Some extensions need npm stubs** | Common stubs are provided; unlisted npm packages still require a stub. See EXTENSIONS.md §8.1 |
 | **English-centric** | Works but not optimized for other languages |
 | **Nightly Rust required** | Uses 2024 edition features |
 

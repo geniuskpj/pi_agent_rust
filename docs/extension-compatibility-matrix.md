@@ -67,7 +67,7 @@ routes `readFileSync` and `statSync` calls through the hostcall boundary
 | `createHmac(algo, key)` | Real | HMAC-SHA256, HMAC-SHA1 |
 | `timingSafeEqual(a, b)` | Real | Constant-time comparison |
 | `getHashes()` | Real | Returns supported algorithm list |
-| `pbkdf2`/`scrypt` | Missing | Key derivation not implemented |
+| `pbkdf2`/`scrypt` | Real | Key derivation via native hostcall |
 | `sign`/`verify` | Missing | Asymmetric crypto not implemented |
 | `createCipher`/`createDecipher` | Missing | Symmetric encryption not implemented |
 
@@ -139,6 +139,10 @@ for optional features.
 | `execa` | `bash()` returns empty | Process execution via hostcall instead |
 | `@anthropic-ai/sdk` | `Anthropic` class | API client stub |
 | `@anthropic-ai/bedrock-sdk` | `SandboxManager` | Sandbox manager stub |
+| `openai` | `OpenAI` class | API client stub |
+| `adm-zip` | `AdmZip` class | Zip handling stub |
+| `linkedom` | `parseHTML()` | DOM parser stub |
+| `@sourcegraph/scip-typescript` | `scip.Index` class | Indexer stub |
 
 ## Pi SDK (`@mariozechner/pi-coding-agent`)
 

@@ -1530,7 +1530,7 @@ Extensions that rely on the following will not work in the Rust QuickJS runtime:
 
 | Limitation | Impact | Workaround |
 |------------|--------|------------|
-| **npm packages not stubbed** | 5 failures (`openai`, `adm-zip`, `linkedom`, `@sourcegraph/scip-typescript`) | Add virtual module stubs |
+| **npm packages without stubs** | Extensions importing unlisted npm packages fail to load | Add virtual module stubs (see §8.2 for the current stub list) |
 | **Unbundled package-style multi-file imports** | failures for layouts requiring broader package resolution (`../../shared`, `./dist/extension.js`, etc.) | Bundle into single file before loading |
 | **Native Node addons** | Blocked | Use hostcalls or WASM |
 | **Worker threads / cluster** | Blocked | Unsupported concurrency model |
@@ -1574,7 +1574,8 @@ address it via runtime compatibility work (new generic shim/connector support)
 or capability-governed alternative APIs.
 
 16+ npm package stubs are provided for common third-party dependencies
-(`node-pty`, `chokidar`, `jsdom`, `turndown`, `@opentelemetry/*`, etc.).
+(`openai`, `adm-zip`, `linkedom`, `@sourcegraph/scip-typescript`, `node-pty`,
+`chokidar`, `jsdom`, `turndown`, `@opentelemetry/*`, etc.).
 
 ---
 
@@ -1616,8 +1617,7 @@ correction is needed.
 - **WASM component runtime** (Tier A) — wasmtime integration with WIT hostcalls.
 - **`extc` compiler pipeline** — SWC-based TS→JS bundling + QuickJS bytecode
   precompilation for faster cold loads.
-- **Remaining npm stubs** — `openai`, `adm-zip`, `linkedom`,
-  `@sourcegraph/scip-typescript`.
+- **Expand npm stubs** — add new package stubs as they appear in the corpus.
 - **Multi-file bundling** — resolve cross-directory imports for complex
   extensions.
 - **Release build benchmarks** — establish release-mode baselines (expected

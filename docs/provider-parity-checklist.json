@@ -354,7 +354,7 @@
       "owner_track": "provider-native-core",
       "implementation_mode": "native-adapter-required",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "AZURE_OPENAI_API_KEY",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -619,7 +619,7 @@
       "owner_track": "provider-routing-gateways",
       "implementation_mode": "gateway-wrapper-routing",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "CLOUDFLARE_API_TOKEN",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -672,7 +672,7 @@
       "owner_track": "provider-native-core",
       "implementation_mode": "native-adapter-required",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "CLOUDFLARE_API_TOKEN",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -1124,7 +1124,7 @@
       "owner_track": "provider-native-core",
       "implementation_mode": "native-adapter-required",
       "current_runtime_status": "enum-or-auth-only",
-      "auth_path_hint": "GITHUB_COPILOT_API_KEY",
+      "auth_path_hint": "GITHUB_COPILOT_API_KEY or GITHUB_TOKEN",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -1179,7 +1179,7 @@
       "owner_track": "provider-routing-gateways",
       "implementation_mode": "gateway-wrapper-routing",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "GITHUB_TOKEN",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -1232,7 +1232,7 @@
       "owner_track": "provider-program-planning",
       "implementation_mode": "deferred",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "GITLAB_TOKEN or GITLAB_API_KEY",
       "required_test_tiers": [
         "unit-metadata"
       ],
@@ -1265,7 +1265,7 @@
       "owner_track": "provider-native-core",
       "implementation_mode": "native-adapter-required",
       "current_runtime_status": "implemented",
-      "auth_path_hint": "GOOGLE_API_KEY",
+      "auth_path_hint": "GOOGLE_API_KEY or GEMINI_API_KEY",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -1310,7 +1310,7 @@
       "owner_track": "provider-native-core",
       "implementation_mode": "native-adapter-required",
       "current_runtime_status": "enum-or-auth-only",
-      "auth_path_hint": "GOOGLE_CLOUD_API_KEY",
+      "auth_path_hint": "GOOGLE_CLOUD_API_KEY or VERTEX_API_KEY",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -1365,7 +1365,7 @@
       "owner_track": "provider-native-core",
       "implementation_mode": "native-adapter-required",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "GOOGLE_CLOUD_API_KEY or VERTEX_API_KEY",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -1464,7 +1464,7 @@
       "owner_track": "provider-routing-gateways",
       "implementation_mode": "gateway-wrapper-routing",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "HELICONE_API_KEY",
       "required_test_tiers": [
         "unit",
         "contract",
@@ -3250,7 +3250,7 @@
       "owner_track": "provider-routing-gateways",
       "implementation_mode": "gateway-wrapper-routing",
       "current_runtime_status": "missing",
-      "auth_path_hint": "TBD (provider-specific credential chain)",
+      "auth_path_hint": "AI_GATEWAY_API_KEY",
       "required_test_tiers": [
         "unit",
         "contract",

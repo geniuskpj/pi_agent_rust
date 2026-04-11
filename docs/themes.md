@@ -26,7 +26,7 @@ Discovery is by file extension only; Pi loads each JSON file and uses the `name`
 - ` /theme ` (no args): list discovered themes
 - ` /theme <name> `: switch themes
 
-Note: `/settings` currently has a Theme entry but the picker UI is not wired up yet (tracked under `bd-22p`). Use `/theme` or edit `settings.json` manually.
+Note: `/settings` includes a Theme entry that opens the picker. `/theme` remains available for quick switching, and editing `settings.json` works as well.
 
 ### Settings file
 
@@ -90,4 +90,3 @@ Minimal example:
 Legacy pi-mono supports additional theme discovery mechanisms (packages, `themes[]` settings paths, CLI `--theme`, hot reload, many more tokens). The Rust port is intentionally smaller right now.
 
 Track progress in `bd-22p`.
-

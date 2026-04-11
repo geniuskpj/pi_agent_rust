@@ -71,7 +71,7 @@
       "notes": "Alibaba also supports OpenAI Responses API format at /responses endpoint"
     },
     "endpoint_disambiguation": {
-      "note": "Pi has TWO distinct provider entries for the Alibaba/Qwen family",
+      "note": "Pi has THREE distinct provider entries for the Alibaba/Qwen family",
       "entries": [
         {
           "canonical_id": "alibaba",
@@ -82,6 +82,14 @@
           "note": "International endpoint (Singapore default)"
         },
         {
+          "canonical_id": "alibaba-us",
+          "aliases": [],
+          "base_url": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+          "api_family": "openai-completions",
+          "auth_keys": ["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+          "note": "US endpoint (Virginia)"
+        },
+        {
           "canonical_id": "alibaba-cn",
           "aliases": [],
           "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -90,7 +98,7 @@
           "note": "China endpoint (Beijing)"
         }
       ],
-      "us_endpoint_note": "Virginia endpoint (dashscope-us) exists but not yet registered in Pi. May add if needed for US-specific models (qwen-plus-us, qwen-flash-us)."
+      "us_endpoint_note": "Virginia endpoint (dashscope-us) is registered as alibaba-us for US-specific models (qwen-plus-us, qwen-flash-us)."
     }
   },
   "openai_compatibility_contract": {
@@ -342,8 +350,8 @@
   "implementation_decisions_for_pi": [
     {
       "decision_id": "qwen-spec-001",
-      "decision": "Maintain two Pi provider entries: alibaba (international/Singapore) and alibaba-cn (China/Beijing). Do NOT add Virginia endpoint as separate provider unless US-specific models are needed.",
-      "rationale": "International endpoint already covers most users. Adding Virginia would triple provider entries without clear benefit. Can add later if needed.",
+      "decision": "Maintain three Pi provider entries: alibaba (international/Singapore), alibaba-us (US/Virginia), and alibaba-cn (China/Beijing).",
+      "rationale": "US-specific model variants (qwen-plus-us, qwen-flash-us) require the Virginia endpoint; keeping separate entries avoids base_url ambiguity and preserves regional key handling.",
       "downstream_bead": "bd-3uqg.11.9.3"
     },
     {

@@ -154,9 +154,9 @@
       "root_cause": "missing_implementation",
       "severity": "medium",
       "user_impact": "Users see cryptic IDs like '302ai', 'xai', 'moonshotai' in model listings and selector instead of human-friendly names like 'Together AI', 'Grok (xAI)'.",
-      "evidence": "src/provider_metadata.rs: ProviderMetadata struct has no display_name field",
-      "remediation_status": "open",
-      "remediation_note": "Requires adding display_name: Option<&'static str> to ProviderMetadata struct and populating for all 88 providers. Medium effort.",
+      "evidence": "src/provider_metadata.rs: ProviderMetadata includes display_name and PROVIDER_METADATA populates it per provider.",
+      "remediation_status": "fixed",
+      "remediation_note": "ProviderMetadata now includes display_name and the catalog populates it for all canonical providers.",
       "affected_providers": ["all"]
     },
     {
@@ -166,9 +166,9 @@
       "root_cause": "missing_implementation",
       "severity": "medium",
       "user_impact": "Interactive onboarding only offers Anthropic, OpenAI, Google. Users of other providers (Groq, Cohere, DeepSeek, etc.) get no setup guidance.",
-      "evidence": "src/main.rs:1526-1542 PROVIDER_CHOICES array has 3 entries",
-      "remediation_status": "open",
-      "remediation_note": "Expand PROVIDER_CHOICES to include at least groq, cohere, deepseek, mistral. Or add 'Other' option with provider search.",
+      "evidence": "src/main.rs: PROVIDER_CHOICES expanded and provider_choice_from_token accepts canonical IDs/aliases.",
+      "remediation_status": "fixed",
+      "remediation_note": "Onboarding choices now include additional providers (Cohere, Groq, DeepSeek, Mistral, OpenRouter, Azure) and fall back to provider metadata when users type other canonical IDs or aliases.",
       "affected_providers": ["all except anthropic, openai, google"]
     },
     {
@@ -214,9 +214,9 @@
       "root_cause": "logging_schema_drift",
       "severity": "low",
       "user_impact": "Cross-CI-run correlation requires manual matching. Does not affect test execution or provider behavior.",
-      "evidence": "docs/provider_e2e_artifact_contract.json → gaps_identified[0] (GAP-1)",
-      "remediation_status": "open",
-      "remediation_note": "Add optional ci_correlation_id field to pi.test.log.v2 context. Inject from CI_CORRELATION_ID env var.",
+      "evidence": "tests/common/logging.rs: TestLogger reads CI_CORRELATION_ID and includes ci_correlation_id; validators accept the field.",
+      "remediation_status": "fixed",
+      "remediation_note": "pi.test.log.v2 now supports ci_correlation_id, and TestLogger injects CI_CORRELATION_ID into every JSONL record.",
       "affected_providers": ["none (test infra)"]
     },
     {
@@ -226,9 +226,9 @@
       "root_cause": "logging_schema_drift",
       "severity": "medium",
       "user_impact": "Potential for unredacted API keys in provider e2e output artifacts. Redaction functions exist and are unit-tested but are not applied to actual provider output.",
-      "evidence": "docs/provider_e2e_artifact_contract.json → gaps_identified[1] (GAP-2)",
-      "remediation_status": "open",
-      "remediation_note": "Add integration test that runs find_unredacted_keys() on provider test JSONL fixtures post-execution.",
+      "evidence": "tests/e2e_live_harness.rs: assert_json_values_redacted runs find_unredacted_keys over live provider logs/results/artifacts.",
+      "remediation_status": "fixed",
+      "remediation_note": "Live provider harness and redaction scans now enforce find_unredacted_keys() over JSONL artifacts.",
       "affected_providers": ["all providers with live test runs"]
     },
     {
@@ -238,9 +238,9 @@
       "root_cause": "logging_schema_drift",
       "severity": "low",
       "user_impact": "Artifact-index.jsonl may reference paths that don't exist. No direct user impact (internal tooling).",
-      "evidence": "docs/provider_e2e_artifact_contract.json → gaps_identified[2] (GAP-3)",
-      "remediation_status": "open",
-      "remediation_note": "Add cross-reference check in evidence contract validation that artifact paths exist.",
+      "evidence": "tests/validate_e2e_artifact_schema.rs: validate_artifact_index_paths cross-checks artifact-index.jsonl paths.",
+      "remediation_status": "fixed",
+      "remediation_note": "Artifact index validation now cross-checks referenced paths and reports missing entries.",
       "affected_providers": ["none (test infra)"]
     },
     {
@@ -250,9 +250,9 @@
       "root_cause": "logging_schema_drift",
       "severity": "low",
       "user_impact": "No direct user impact. evidence_contract.json referenced in CI policy but lacks formal schema definition.",
-      "evidence": "docs/provider_e2e_artifact_contract.json → gaps_identified[3] (GAP-4)",
-      "remediation_status": "open",
-      "remediation_note": "Define pi.qa.evidence_contract.v1 schema with required fields.",
+      "evidence": "docs/evidence-contract-schema.json defines pi.qa.evidence_contract.v1.",
+      "remediation_status": "fixed",
+      "remediation_note": "Formal evidence_contract JSON schema added as docs/evidence-contract-schema.json.",
       "affected_providers": ["none (test infra)"]
     },
     {
@@ -262,9 +262,9 @@
       "root_cause": "test_evidence_gap",
       "severity": "low",
       "user_impact": "No direct user impact. New tests could use deprecated v1 schema without warning.",
-      "evidence": "docs/provider_e2e_artifact_contract.json → gaps_identified[4] (GAP-5)",
-      "remediation_status": "open",
-      "remediation_note": "Add lint or CI check that new test files emit pi.test.log.v2 only.",
+      "evidence": "tests/common/logging.rs: validate_jsonl_v2_only rejects pi.test.log.v1; used in tests/validate_e2e_artifact_schema.rs.",
+      "remediation_status": "fixed",
+      "remediation_note": "V2-only JSONL validation added and used in schema validation to reject new v1 log records.",
       "affected_providers": ["none (test infra)"]
     },
     {
@@ -286,9 +286,9 @@
       "root_cause": "docs_mismatch",
       "severity": "medium",
       "user_impact": "Users reading --help see 'e.g., anthropic, openai, google' and may not realize 85+ other providers are available.",
-      "evidence": "src/cli.rs --provider arg help text, TopazFalcon audit Gap 3",
-      "remediation_status": "open",
-      "remediation_note": "Update --provider help text to mention --list-providers for full list. Add note about alias support.",
+      "evidence": "src/cli.rs: --provider help text points to --list-providers and mentions canonical IDs/aliases.",
+      "remediation_status": "fixed",
+      "remediation_note": "--provider help text now points to --list-providers and mentions canonical IDs/aliases.",
       "affected_providers": ["all"]
     },
     {
@@ -298,9 +298,9 @@
       "root_cause": "docs_mismatch",
       "severity": "info",
       "user_impact": "Users see only configured providers in --list-models, which is intentional but may confuse users who expect to see all available providers.",
-      "evidence": "TopazFalcon audit Gap 1: registry.get_available() filters by api_key.is_some()",
-      "remediation_status": "open",
-      "remediation_note": "Consider adding a note in --list-models output: 'Showing X of 88 providers. Run --list-providers to see all.'",
+      "evidence": "src/main.rs: maybe_print_list_models_note prints a subset warning and points to --list-providers.",
+      "remediation_status": "fixed",
+      "remediation_note": "--list-models now prints a note when showing a subset of providers and points to --list-providers for the full list.",
       "affected_providers": ["all"]
     }
   ],
@@ -309,11 +309,24 @@
     "description": "Discrepancies grouped by remediation priority for downstream bead creation",
     "p0_immediate": {
       "description": "Already fixed in this sprint",
-      "items": ["DISC-004", "DISC-005", "DISC-006"]
+      "items": [
+        "DISC-004",
+        "DISC-005",
+        "DISC-006",
+        "DISC-007",
+        "DISC-008",
+        "DISC-012",
+        "DISC-013",
+        "DISC-014",
+        "DISC-015",
+        "DISC-016",
+        "DISC-018",
+        "DISC-019"
+      ]
     },
     "p1_high_value": {
       "description": "High user impact, actionable code changes",
-      "items": ["DISC-003", "DISC-007", "DISC-008", "DISC-013", "DISC-018"]
+      "items": ["DISC-003", "DISC-013"]
     },
     "p2_medium_value": {
       "description": "Infrastructure/docs improvements",
@@ -321,7 +334,7 @@
     },
     "p3_low_value": {
       "description": "Nice-to-have or informational",
-      "items": ["DISC-001", "DISC-002", "DISC-012", "DISC-014", "DISC-015", "DISC-016", "DISC-019"]
+      "items": ["DISC-001", "DISC-002"]
     }
   },
 

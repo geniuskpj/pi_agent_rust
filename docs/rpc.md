@@ -63,7 +63,7 @@ Communication is via **JSON Lines** over stdin/stdout. Each line must be a valid
 - **export_html**: Export conversation.
   - Params: `outputPath`.
 - **compact**: Trigger context compaction.
-  - Params: `customInstructions` (optional).
+  - Params: `customInstructions` (optional), `reserveTokens` (optional), `keepRecentTokens` (optional).
 - **fork**: Fork from a message.
   - Params: `entryId`.
 

@@ -630,10 +630,13 @@
         "legacy_pi_mono_code/pi-mono/packages/coding-agent/docs/settings.md"
       ],
       "rust_evidence": [
-        "src/config.rs"
+        "src/config.rs",
+        "src/interactive.rs",
+        "src/tui.rs",
+        "src/main.rs"
       ],
-      "status": "missing_or_unverified_in_rust",
-      "assigned_bead": "bd-uuf2z"
+      "status": "provisional_present_both",
+      "reconcile_with_bead": "bd-uuf2z"
     },
     {
       "row_id": "config.rust_additional_policy_knobs",
@@ -771,12 +774,6 @@
       "impact": "CLI parity for extension-registered flags is not fully closed."
     },
     {
-      "id": "unknown-03-markdown-code-block-indent",
-      "description": "Upstream markdown.codeBlockIndent knob requires parity classification/implementation decision in Rust.",
-      "assigned_bead": "bd-uuf2z",
-      "impact": "Configuration compatibility surface has at least one unresolved knob."
-    },
-    {
       "id": "unknown-04-gap-ledger-reconciliation",
       "description": "Rows marked unknown/partial need severity + ownership mapping in canonical gap ledger.",
       "assigned_bead": "bd-13pqz",
@@ -786,13 +783,13 @@
   "inventory_summary": {
     "row_count": 32,
     "status_counts": {
-      "provisional_present_both": 22,
+      "provisional_present_both": 23,
       "mostly_present_both": 1,
       "partial_contract_shape_diff": 1,
       "partial_in_progress": 1,
       "in_progress_parity_hardening": 1,
       "partial_some_not_fully_wired": 1,
-      "missing_or_unverified_in_rust": 1,
+      "missing_or_unverified_in_rust": 0,
       "rust_superset": 3,
       "unknown_needs_gap_classification": 1
     },

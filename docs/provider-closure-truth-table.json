@@ -503,6 +503,19 @@
           "parallel_tools": false,
           "streaming": true
         },
+        "alibaba-us": {
+          "canonical_id": "alibaba-us",
+          "aliases": [],
+          "provider_module": "src/providers/openai.rs",
+          "api_family": "openai-completions",
+          "base_url": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+          "route_kind": "ApiOpenAICompletions",
+          "metadata_source": "src/provider_metadata.rs:880-906",
+          "onboarding_mode": "OpenAICompatiblePreset",
+          "context_window": 128000,
+          "max_tokens": 16384,
+          "note": "US/Virginia endpoint"
+        },
         "alibaba-cn": {
           "canonical_id": "alibaba-cn",
           "aliases": [],
@@ -519,6 +532,12 @@
       },
       "auth_env_contract": {
         "alibaba": {
+          "primary_key": "DASHSCOPE_API_KEY",
+          "fallback_keys": ["QWEN_API_KEY"],
+          "auth_header": true,
+          "auth_format": "Bearer <key>"
+        },
+        "alibaba-us": {
           "primary_key": "DASHSCOPE_API_KEY",
           "fallback_keys": ["QWEN_API_KEY"],
           "auth_header": true,
@@ -547,6 +566,11 @@
                 "verify_alibaba_error_rate_limit_429"
               ],
               "coverage": "7/7 canonical scenarios"
+            },
+            "alibaba-us": {
+              "count": 0,
+              "scenarios": [],
+              "coverage": "0/7 (new regional variant, fixtures pending)"
             },
             "alibaba-cn": {
               "count": 4,
@@ -601,7 +625,7 @@
         "429 errors have two sub-types: qps (retryable) vs quota (non-retryable billing)",
         "stream_options.include_usage=true required for token counts",
         "system_fingerprint returns empty string",
-        "Virginia endpoint (dashscope-us.aliyuncs.com) exists but not yet registered in Pi"
+        "alibaba-us entry added; VCR fixtures pending (0/7 coverage)"
       ],
       "related_beads": {
         "onboarding": { "id": "bd-3uqg.11.9", "status": "CLOSED" },
@@ -611,7 +635,7 @@
         "status": "CLOSED",
         "label": "PRODUCTION_READY",
         "blocking_issues": 0,
-        "summary": "Full parity for VCR/conformance/e2e coverage. 11 VCR cassettes across 2 entries. tools+streaming incompatibility documented as critical caveat — requires stream=false fallback for tool calls (documented, not blocking audit closure)."
+        "summary": "Parity validated for VCR/conformance/e2e coverage. 11 VCR cassettes across 3 entries, with alibaba-us currently lacking fixtures. tools+streaming incompatibility documented as critical caveat — requires stream=false fallback for tool calls (documented, not blocking audit closure)."
       }
     }
   },
@@ -620,13 +644,13 @@
     "headers": ["capability", "groq", "cerebras", "openrouter", "kimi", "qwen"],
     "rows": [
       ["api_family", "openai-completions", "openai-completions", "openai-completions", "openai-completions + anthropic-messages", "openai-completions"],
-      ["pi_entries", 1, 1, 1, 3, 2],
+      ["pi_entries", 1, 1, 1, 3, 3],
       ["tool_calling", "all models", "model-gated (3/6)", "normalized", "all models", "model-gated (4 models)"],
       ["parallel_tools", true, true, "varies_by_model", false, false],
       ["streaming", true, true, "true + comment frames", true, "true (NOT with tools)"],
       ["vision", false, false, "via_model_selection", "kimi-k2.5 only", "qwen-vl-* models"],
       ["reasoning", true, "model-gated", "via_model_selection", "thinking models", "model-gated"],
-      ["regional_variants", 0, 0, 0, 2, 1],
+      ["regional_variants", 0, 0, 0, 2, 2],
       ["vcr_cassettes", 7, 7, 7, 15, 11],
       ["open_discrepancies", 0, 0, 1, 2, 2],
       ["production_ready", true, true, true, true, true]
@@ -635,9 +659,9 @@
 
   "aggregate_summary": {
     "total_providers_audited": 5,
-    "total_pi_entries": 8,
+    "total_pi_entries": 9,
     "total_vcr_cassettes": 47,
-    "canonical_scenarios_covered": "7/7 for all primary entries, 4/7 for regional/variant entries",
+    "canonical_scenarios_covered": "7/7 for all primary entries, 4/7 for existing regional variants, 0/7 for alibaba-us (fixtures pending)",
     "all_dispositions_closed": true,
     "all_production_ready": true,
     "blocking_issues": 0,

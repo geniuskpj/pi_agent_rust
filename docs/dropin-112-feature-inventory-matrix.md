@@ -161,7 +161,7 @@
 | Limit | TS Pi | Rust Pi | Notes |
 |-------|-------|---------|-------|
 | DEFAULT_MAX_LINES | 2000 | 2000 | Match |
-| DEFAULT_MAX_BYTES | 1,000,000 | 50,000 | **DIVERGENCE**: Rust is 50KB vs TS 1MB |
+| DEFAULT_MAX_BYTES | 1,000,000 | 1,000,000 | Match |
 | GREP_MAX_LINE_LENGTH | ? | 500 | Needs TS verification |
 | DEFAULT_GREP_LIMIT | ? | 100 | Needs TS verification |
 | DEFAULT_FIND_LIMIT | ? | 1000 | Needs TS verification |
@@ -247,7 +247,7 @@
 | Setting | TS Pi | Rust Pi | Notes |
 |---------|-------|---------|-------|
 | `compaction.enabled` | Y | Y | Enable compaction |
-| `compaction.reserveTokens` | Y (16384) | Y (8192) | **DIVERGENCE**: different defaults |
+| `compaction.reserveTokens` | Y (16384) | Y (16384) | Match |
 | `compaction.keepRecentTokens` | Y (20000) | Y (20000) | Match |
 
 ### Branch Summary
@@ -262,8 +262,8 @@
 |---------|-------|---------|-------|
 | `retry.enabled` | Y | Y | Enable auto retry |
 | `retry.maxRetries` | Y (3) | Y (3) | Match |
-| `retry.baseDelayMs` | Y (2000) | Y (1000) | **DIVERGENCE**: different defaults |
-| `retry.maxDelayMs` | Y (60000) | Y (30000) | **DIVERGENCE**: different defaults |
+| `retry.baseDelayMs` | Y (2000) | Y (2000) | Match |
+| `retry.maxDelayMs` | Y (60000) | Y (60000) | Match |
 
 ### Shell
 
@@ -308,7 +308,7 @@
 
 | Setting | TS Pi | Rust Pi | Notes |
 |---------|-------|---------|-------|
-| `markdown.codeBlockIndent` | Y | ? | Needs verification |
+| `markdown.codeBlockIndent` | Y | Y | Verified (rendered indentation) |
 
 ### Extension Policy (Rust-only)
 
@@ -723,8 +723,6 @@
 4. **Extension events**: Several hook points unverified (`session_before_*`, `model_select`, `user_bash`, `input`)
 5. **Extension UI**: Several UI methods unverified (`setWorkingMessage`, `setFooter`, `setHeader`, `custom`, `setEditorText`, `editor`)
 6. **Provider support**: Vercel AI Gateway, ZAI, MiniMax, Kimi — unclear if in Rust
-7. **Config defaults**: Some divergent defaults (compaction reserveTokens, retry delays)
-8. **Tool limits**: DEFAULT_MAX_BYTES diverges (1MB TS vs 50KB Rust)
 
 ### Features in Rust Pi not in TS Pi (Rust-only)
 

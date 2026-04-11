@@ -17,8 +17,9 @@ gaps by severity with exploit narratives and proposed mitigations.
 **Overall posture:** The Rust implementation provides a **significantly stronger
 security baseline** than Node/Bun through capability-gated hostcalls, process-tree
 RAII cleanup, blocklist-based secret filtering, TOCTOU-resistant filesystem checks
-(Linux), and hash-chained audit ledgers. However, **7 gaps** remain, ranging from
-a medium-severity policy bypass to informational design asymmetries.
+(Linux), and hash-chained audit ledgers. However, **4 gaps** remain; G-1, G-2,
+and G-4 have since been fixed, leaving low-severity hardening work and
+informational design asymmetries.
 
 ---
 
@@ -314,11 +315,6 @@ prediction residuals, and hash-chained evidence.
 
 **Current code:**
 ```rust
-let policy_check = self.policy.evaluate(capability);
-```
-
-**Expected code:**
-```rust
 let policy_check = self.policy.evaluate_for(capability, extension_id);
 ```
 
@@ -332,12 +328,11 @@ per-extension deny. The file is read despite the operator's intent.
 extension explicitly denied a capability can still exercise it through the FS
 connector path.
 
-**Proposed mitigation:** Thread `extension_id` through `FsConnector::handle_fs_params()`
-and call `evaluate_for()` instead of `evaluate()`. Add test case: extension with
-per-extension `deny: ["read"]` should fail FS read.
+**Status:** Fixed. `FsConnector` threads `extension_id` through policy evaluation
+and enforces per-extension overrides.
 
 **Test:** `cargo test extensions::tests::fs_connector_respects_per_extension_deny`
-(does not exist yet — needs creation).
+(added).
 
 ---
 
@@ -347,9 +342,8 @@ per-extension `deny: ["read"]` should fail FS read.
 **Threat ID:** T1 (Malicious Extension Input)
 **Location:** `src/tools.rs` line ~2310
 
-**Current code:** `WriteTool::execute()` calls `resolve_path()` but this
-function does not apply `normalize_dot_segments()` to strip `../` traversals
-the same way `resolve_read_path()` does for reads.
+**Current code:** `resolve_path()` now applies `normalize_dot_segments()` and
+write/edit/grep/find/ls enforce that resolved paths stay under the CWD.
 
 **Exploit narrative:** An LLM-steered write call with
 `path: "../../../etc/cron.d/backdoor"` could create files outside the working
@@ -360,12 +354,10 @@ call parameters via session manipulation.
 **Impact:** Files created outside expected project directory. On a multi-tenant
 system, this could affect other users.
 
-**Proposed mitigation:** Apply `normalize_dot_segments()` in `resolve_path()`
-and add a bounds check that the resolved path is within or under the CWD.
-Add test: write with `../../../tmp/escape` should be rejected or resolved
-relative to CWD.
+**Status:** Fixed. Dot-segment traversal is normalized and out-of-root writes
+are rejected.
 
-**Test:** Needs creation.
+**Test:** `tools::tests::test_write_rejects_outside_cwd` (includes `../` escape).
 
 ---
 
@@ -400,13 +392,9 @@ as a configuration option.
 **Threat ID:** T4 (Runtime Abuse)
 **Location:** `src/agent.rs` lines 1386-1389
 
-**Current code:**
-```rust
-Err(err) => {
-    tracing::warn!(...);
-    None  // tool executes despite hook error
-}
-```
+**Current code:** Hook errors are fail-open by default, but can be made
+fail-closed with `fail_closed_hooks` configuration (tool execution is denied
+when the hook errors or times out).
 
 **Exploit narrative:** An extension registers a security-enforcement tool hook
 that is supposed to block dangerous bash commands. If the hook crashes or times
@@ -416,10 +404,8 @@ cause the hook to fail to bypass another extension's security check.
 **Impact:** Security hooks provide weaker guarantees than policy checks. An
 extension cannot rely on another extension's hook for security.
 
-**Proposed mitigation:** Add a `fail_closed_hooks: bool` configuration option
-(default `false` for compatibility). When enabled, hook errors deny tool
-execution. Document that hooks are advisory, not enforcement — policy is the
-enforcement layer.
+**Status:** Fixed. Hook failure handling is now configurable via
+`fail_closed_hooks` (default fail-open).
 
 ---
 
@@ -555,10 +541,10 @@ Pi adds 4 interposition boundaries where Node/Bun has 0.
 
 | Priority | Gap ID | Severity | Effort | Downstream Beads |
 |----------|--------|----------|--------|-----------------|
-| 1 | G-1 | Medium | Low (thread extension_id through FsConnector) | New |
-| 2 | G-2 | Medium | Low (apply normalize_dot_segments in resolve_path) | New |
+| 1 | G-1 | Medium | Fixed (per-extension overrides enforced) | — |
+| 2 | G-2 | Medium | Fixed (dot-segment normalization + CWD bounds) | — |
 | 3 | G-3 | Low | Medium (add optional env allow-list mode) | bd-zh0hj, bd-wzzp4 |
-| 4 | G-4 | Low | Low (add fail_closed_hooks config option) | New |
+| 4 | G-4 | Low | Fixed (`fail_closed_hooks` config option) | — |
 | 5 | G-5 | Low | Medium (port Linux fd-based check to other platforms) | New |
 | 6 | G-6 | Low | Medium (split session capability) | New |
 | 7 | G-7 | Informational | N/A (tracked in existing calibration beads) | bd-3i9da, bd-cu17q |
@@ -576,15 +562,16 @@ Pi adds 4 interposition boundaries where Node/Bun has 0.
 | Extension OAuth | `tests/extensions_provider_oauth.rs` | 20 | Good |
 | Hostcall dispatch | `extensions::tests` | 30+ | Good (capability mapping, policy enforcement) |
 | Runtime risk ledger | `extensions::tests` | 10+ | Good (hash chain, verify, replay) |
-| FsConnector policy | `extensions::tests` | Limited | **Gap** — no per-extension override test |
+| FsConnector policy | `extensions::tests` | Good | Per-extension override test added |
 
 ---
 
 ## 8. Recommendations for Downstream Beads
 
 1. **bd-2ezm9 (SEC-1.2 Invariants):** Should codify that "every hostcall MUST
-   flow through `dispatch_host_call_shared()`" as an invariant. The FsConnector
-   bypass (G-1) violates this invariant.
+   flow through `dispatch_host_call_shared()`" as an invariant. The prior
+   FsConnector bypass (G-1) is now fixed, but the invariant should remain
+   explicit.
 
 2. **bd-f0huc (SEC-2.1 Manifest v2):** Extension manifest should declare
    required capabilities so that policy can be pre-evaluated at install time,
@@ -610,7 +597,6 @@ than the Node/Bun ambient model:
 - **Hash-chained audit ledger** vs no audit trail in Node/Bun
 - **Bayesian runtime risk scoring** (when enabled) vs nothing in Node/Bun
 
-The 7 identified gaps are real but bounded: none allows full sandbox escape,
-and the two medium-severity items (G-1, G-2) have straightforward fixes.
+The remaining gaps are real but bounded: none allows full sandbox escape.
 The most critical systemic improvement would be enabling the runtime risk
 controller by default once calibration is complete.

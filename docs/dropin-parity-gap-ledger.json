@@ -234,7 +234,7 @@
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:4-built-in-tools"
       ],
-      "current_state": "read/tool byte limits include at least one documented TS vs Rust divergence (1MB vs 50KB default max bytes)",
+      "current_state": "Resolved: DEFAULT_MAX_BYTES aligned to 1,000,000 bytes in Rust tool/runtime defaults.",
       "user_impact": "Same tool call can truncate or fail differently, breaking automation assumptions.",
       "owner_issue_primary": "bd-2xalc",
       "owner_issue_supporting": [
@@ -264,7 +264,7 @@
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:6-configuration-settings-compaction-retry"
       ],
-      "current_state": "documented default differences for compaction reserve tokens and retry backoff values",
+      "current_state": "Resolved: compaction.reserveTokens and retry base/max delay defaults now match TS (16384/2000/60000) and docs are aligned.",
       "user_impact": "Out-of-the-box behavior differs even with equivalent user config.",
       "owner_issue_primary": "bd-uuf2z",
       "owner_issue_supporting": [
@@ -316,10 +316,9 @@
       "mismatch_kind": "missing_or_unverified_in_rust",
       "severity": "medium",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:config.markdown",
-        "docs/dropin-feature-inventory-matrix.json#unknown:unknown-03-markdown-code-block-indent"
+        "docs/dropin-feature-inventory-matrix.json#row:config.markdown"
       ],
-      "current_state": "markdown.codeBlockIndent is unresolved for parity classification/implementation",
+      "current_state": "Resolved: markdown.codeBlockIndent is implemented and wired for interactive + print rendering; inventory/docs updated.",
       "user_impact": "Markdown rendering/output formatting may differ unexpectedly.",
       "owner_issue_primary": "bd-uuf2z",
       "owner_issue_supporting": [
@@ -452,7 +451,7 @@
       },
       {
         "row_id": "config.markdown",
-        "status": "missing_or_unverified_in_rust",
+        "status": "provisional_present_both",
         "ledger_gap_id": "gap-config-markdown-indent"
       },
       {
@@ -485,10 +484,6 @@
       {
         "summary_item": "Provider support unknowns",
         "ledger_gap_id": "gap-provider-support-verification"
-      },
-      {
-        "summary_item": "Config default divergences",
-        "ledger_gap_id": "gap-config-defaults-compaction-retry"
       },
       {
         "summary_item": "Tool byte-limit divergence",
