@@ -162,6 +162,10 @@ fn proptest_session_header() -> impl Strategy<Value = SessionHeader> {
                 provider,
                 model_id,
                 thinking_level,
+                fallback_provider: None,
+                fallback_model_id: None,
+                fallback_thinking_level: None,
+                current_leaf: None,
                 parent_session,
             },
         )
@@ -263,6 +267,10 @@ proptest! {
             provider: None,
             model_id: None,
             thinking_level: None,
+            fallback_provider: None,
+            fallback_model_id: None,
+            fallback_thinking_level: None,
+            current_leaf: None,
             parent_session: None,
         };
         session.entries = decoded_entries;

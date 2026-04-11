@@ -12,6 +12,7 @@ use crate::model::{
     AssistantMessage, ContentBlock, Message, TextContent, ToolResultMessage, UserContent,
     UserMessage,
 };
+use crate::provider_metadata::{canonical_provider_id, provider_ids_match};
 use crate::session_index::{
     SessionIndex, enqueue_session_index_snapshot_update, is_session_file_path, session_file_stats,
 };
@@ -40,6 +41,7 @@ pub const SESSION_VERSION: u8 = 3;
 const MAX_JSONL_LINE_BYTES: usize = 100 * 1024 * 1024;
 const V2_CHAIN_HASH_GENESIS: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
+const ROOT_LEAF_OVERRIDE_SENTINEL: &str = "";
 
 fn finish_worker_result<T, E>(
     handle: thread::JoinHandle<()>,
@@ -240,6 +242,23 @@ fn prepare_jsonl_full_rewrite(
     Ok((header_to_write, merged_entries))
 }
 
+fn resolve_loaded_leaf_id(
+    header: &SessionHeader,
+    natural_leaf_id: Option<String>,
+    entry_index: &HashMap<String, usize>,
+) -> Option<String> {
+    match header.current_leaf.as_deref() {
+        Some(ROOT_LEAF_OVERRIDE_SENTINEL) => None,
+        Some(leaf_id) if entry_index.contains_key(leaf_id) => Some(leaf_id.to_string()),
+        _ => natural_leaf_id,
+    }
+}
+
+fn normalize_loaded_header(mut header: SessionHeader) -> (SessionHeader, bool) {
+    let header_dirty = header.materialize_branch_fallbacks();
+    (header, header_dirty)
+}
+
 fn total_v2_message_count(store: &SessionStoreV2) -> Result<Option<u64>> {
     if let Some(manifest) = store.read_manifest()? {
         return Ok(Some(manifest.counters.messages_total));
@@ -257,6 +276,22 @@ fn total_v2_message_count(store: &SessionStoreV2) -> Result<Option<u64>> {
 /// Handle to a thread-safe shared session.
 #[derive(Clone, Debug)]
 pub struct SessionHandle(pub Arc<Mutex<Session>>);
+
+fn current_path_model_pair(session: &Session) -> Option<(String, String)> {
+    session.effective_model_for_current_path()
+}
+
+fn current_path_model_fields(session: &Session) -> (Option<String>, Option<String>) {
+    if let Some((provider, model_id)) = current_path_model_pair(session) {
+        (Some(provider), Some(model_id))
+    } else {
+        session.header.branch_fallback_model_fields()
+    }
+}
+
+fn current_path_thinking_level(session: &Session) -> Option<String> {
+    session.effective_thinking_level_for_current_path()
+}
 
 #[async_trait]
 impl ExtensionSession for SessionHandle {
@@ -282,22 +317,15 @@ impl ExtensionSession for SessionHandle {
         let session_file = session.path.as_ref().map(|p| p.display().to_string());
         let session_id = session.header.id.clone();
         let session_name = session.get_name();
-        let model = session
-            .header
-            .provider
-            .as_ref()
-            .zip(session.header.model_id.as_ref())
-            .map_or(Value::Null, |(provider, model_id)| {
+        let model =
+            current_path_model_pair(&session).map_or(Value::Null, |(provider, model_id)| {
                 serde_json::json!({
                     "provider": provider,
                     "id": model_id,
                 })
             });
-        let thinking_level = session
-            .header
-            .thinking_level
-            .clone()
-            .unwrap_or_else(|| "off".to_string());
+        let thinking_level =
+            current_path_thinking_level(&session).unwrap_or_else(|| "off".to_string());
         let message_count = session
             .entries_for_current_path()
             .iter()
@@ -415,12 +443,22 @@ impl ExtensionSession for SessionHandle {
             .lock(cx.cx())
             .await
             .map_err(|e| Error::session(format!("Failed to lock session: {e}")))?;
-        let changed = session.header.provider.as_deref() != Some(provider.as_str())
-            || session.header.model_id.as_deref() != Some(model_id.as_str());
+        let normalized_provider = canonical_provider_id(&provider)
+            .unwrap_or(&provider)
+            .to_string();
+        let (stored_provider, stored_model_id, changed) = match current_path_model_pair(&session) {
+            Some((current_provider, current_model_id))
+                if provider_ids_match(&current_provider, &provider)
+                    && current_model_id.eq_ignore_ascii_case(&model_id) =>
+            {
+                (current_provider, current_model_id, false)
+            }
+            _ => (normalized_provider, model_id.clone(), true),
+        };
         if changed {
-            session.append_model_change(provider.clone(), model_id.clone());
+            session.append_model_change(stored_provider.clone(), stored_model_id.clone());
         }
-        session.set_model_header(Some(provider), Some(model_id), None);
+        session.set_model_header(Some(stored_provider), Some(stored_model_id), None);
         Ok(())
     }
 
@@ -429,10 +467,7 @@ impl ExtensionSession for SessionHandle {
         let Ok(session) = self.0.lock(cx.cx()).await else {
             return (None, None);
         };
-        (
-            session.header.provider.clone(),
-            session.header.model_id.clone(),
-        )
+        current_path_model_fields(&session)
     }
 
     async fn set_thinking_level(&self, level: String) -> Result<()> {
@@ -442,7 +477,7 @@ impl ExtensionSession for SessionHandle {
             .lock(cx.cx())
             .await
             .map_err(|e| Error::session(format!("Failed to lock session: {e}")))?;
-        let changed = session.header.thinking_level.as_deref() != Some(level.as_str());
+        let changed = current_path_thinking_level(&session).as_deref() != Some(level.as_str());
         if changed {
             session.append_thinking_level_change(level.clone());
         }
@@ -455,7 +490,7 @@ impl ExtensionSession for SessionHandle {
         let Ok(session) = self.0.lock(cx.cx()).await else {
             return None;
         };
-        session.header.thinking_level.clone()
+        current_path_thinking_level(&session)
     }
 
     async fn set_label(&self, target_id: String, label: Option<String>) -> Result<()> {
@@ -1380,6 +1415,7 @@ impl Session {
         header
             .validate()
             .map_err(|reason| crate::Error::session(format!("Invalid session header: {reason}")))?;
+        let (header, normalized_header_dirty) = normalize_loaded_header(header);
         let frames = match mode {
             V2OpenMode::Full => store.read_all_entries()?,
             V2OpenMode::ActivePath => match store.head() {
@@ -1422,16 +1458,19 @@ impl Session {
         }
 
         let entry_count = entries.len();
+        let natural_leaf_id = finalized.leaf_id.clone();
+        let leaf_id =
+            resolve_loaded_leaf_id(&header, natural_leaf_id.clone(), &finalized.entry_index);
         Ok((
             Self {
                 header,
                 entries,
                 path: None,
-                leaf_id: finalized.leaf_id,
+                leaf_id: leaf_id.clone(),
                 session_dir: None,
                 store_kind: SessionStoreKind::Jsonl,
                 entry_ids: finalized.entry_ids,
-                is_linear: finalized.is_linear,
+                is_linear: finalized.is_linear && leaf_id == natural_leaf_id,
                 entry_index: finalized.entry_index,
                 cached_message_count: finalized
                     .message_count
@@ -1440,7 +1479,7 @@ impl Session {
                 autosave_queue: AutosaveQueue::new(),
                 autosave_durability: AutosaveDurabilityMode::from_env(),
                 persisted_entry_count: Arc::new(AtomicUsize::new(entry_count)),
-                header_dirty: false,
+                header_dirty: normalized_header_dirty,
                 appends_since_checkpoint: 0,
                 v2_sidecar_root: None,
                 v2_partial_hydration: !matches!(mode, V2OpenMode::Full),
@@ -1486,25 +1525,29 @@ impl Session {
     #[cfg(feature = "sqlite-sessions")]
     async fn open_sqlite(path: &Path) -> Result<Self> {
         let (header, mut entries) = crate::session_sqlite::load_session(path).await?;
+        let (header, normalized_header_dirty) = normalize_loaded_header(header);
         let finalized = finalize_loaded_entries(&mut entries);
         let entry_count = entries.len();
+        let natural_leaf_id = finalized.leaf_id.clone();
+        let leaf_id =
+            resolve_loaded_leaf_id(&header, natural_leaf_id.clone(), &finalized.entry_index);
 
         Ok(Self {
             header,
             entries,
             path: Some(path.to_path_buf()),
-            leaf_id: finalized.leaf_id,
+            leaf_id: leaf_id.clone(),
             session_dir: None,
             store_kind: SessionStoreKind::Sqlite,
             entry_ids: finalized.entry_ids,
-            is_linear: finalized.is_linear,
+            is_linear: finalized.is_linear && leaf_id == natural_leaf_id,
             entry_index: finalized.entry_index,
             cached_message_count: finalized.message_count,
             cached_name: finalized.name,
             autosave_queue: AutosaveQueue::new(),
             autosave_durability: AutosaveDurabilityMode::from_env(),
             persisted_entry_count: Arc::new(AtomicUsize::new(entry_count)),
-            header_dirty: false,
+            header_dirty: normalized_header_dirty,
             appends_since_checkpoint: 0,
             v2_sidecar_root: None,
             v2_partial_hydration: false,
@@ -1829,7 +1872,16 @@ impl Session {
                 .session_dir
                 .clone()
                 .unwrap_or_else(Config::sessions_dir);
-            let cwd = std::env::current_dir()?;
+            let cwd = if self.header.cwd.trim().is_empty() {
+                std::env::current_dir()?
+            } else {
+                let configured_cwd = PathBuf::from(self.header.cwd.trim());
+                if configured_cwd.is_absolute() {
+                    configured_cwd
+                } else {
+                    std::env::current_dir()?.join(configured_cwd)
+                }
+            };
             let encoded_cwd = encode_cwd(&cwd);
             let project_session_dir = base_dir.join(&encoded_cwd);
 
@@ -1865,6 +1917,11 @@ impl Session {
         // The filename fallback above still keeps empty ids on-disk-path-safe.
         if self.header.id.trim().is_empty() {
             self.header.id = uuid::Uuid::new_v4().to_string();
+            self.header_dirty = true;
+        }
+        let desired_leaf_override = self.persisted_leaf_override();
+        if self.header.current_leaf != desired_leaf_override {
+            self.header.current_leaf = desired_leaf_override;
             self.header_dirty = true;
         }
         self.header
@@ -2024,6 +2081,121 @@ impl Session {
         self.autosave_queue.enqueue_mutation(kind);
     }
 
+    fn latest_model_change_for_current_path(&self) -> Option<(String, String)> {
+        for entry in self.entries_for_current_path().iter().rev() {
+            if let SessionEntry::ModelChange(change) = entry {
+                return Some((change.provider.clone(), change.model_id.clone()));
+            }
+        }
+        None
+    }
+
+    fn latest_thinking_level_for_current_path(&self) -> Option<String> {
+        for entry in self.entries_for_current_path().iter().rev() {
+            if let SessionEntry::ThinkingLevelChange(change) = entry {
+                return Some(change.thinking_level.clone());
+            }
+        }
+        None
+    }
+
+    pub fn effective_model_for_current_path(&self) -> Option<(String, String)> {
+        self.latest_model_change_for_current_path()
+            .or_else(|| self.header.branch_fallback_model_pair())
+    }
+
+    pub fn effective_thinking_level_for_current_path(&self) -> Option<String> {
+        self.latest_thinking_level_for_current_path()
+            .or_else(|| self.header.branch_fallback_thinking_level())
+    }
+
+    fn has_any_model_change(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry, SessionEntry::ModelChange(_)))
+    }
+
+    fn has_any_thinking_level_change(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry, SessionEntry::ThinkingLevelChange(_)))
+    }
+
+    fn persisted_leaf_override(&self) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
+        match (
+            self.leaf_id.as_deref(),
+            self.entries
+                .last()
+                .and_then(SessionEntry::base_id)
+                .map(String::as_str),
+        ) {
+            (None, _) => Some(ROOT_LEAF_OVERRIDE_SENTINEL.to_string()),
+            (Some(current), Some(natural_tip)) if current == natural_tip => None,
+            (Some(current), _) => Some(current.to_string()),
+        }
+    }
+
+    fn sync_navigation_state_to_header(&mut self) {
+        let mut changed = false;
+
+        let desired_leaf_override = self.persisted_leaf_override();
+        if self.header.current_leaf != desired_leaf_override {
+            self.header.current_leaf = desired_leaf_override;
+            changed = true;
+        }
+
+        match self.effective_model_for_current_path() {
+            Some((provider, model_id)) => {
+                if self.header.provider.as_deref() != Some(provider.as_str())
+                    || self.header.model_id.as_deref() != Some(model_id.as_str())
+                {
+                    self.header.provider = Some(provider);
+                    self.header.model_id = Some(model_id);
+                    changed = true;
+                }
+            }
+            None if self.has_any_model_change()
+                && (self.header.provider.is_some() || self.header.model_id.is_some()) =>
+            {
+                self.header.provider = None;
+                self.header.model_id = None;
+                changed = true;
+            }
+            None => {}
+        }
+
+        match self.effective_thinking_level_for_current_path() {
+            Some(thinking_level) => {
+                if self.header.thinking_level.as_deref() != Some(thinking_level.as_str()) {
+                    self.header.thinking_level = Some(thinking_level);
+                    changed = true;
+                }
+            }
+            None if self.has_any_thinking_level_change() && self.header.thinking_level.is_some() => {
+                self.header.thinking_level = None;
+                changed = true;
+            }
+            None => {}
+        }
+
+        if changed {
+            self.header_dirty = true;
+            self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
+        }
+    }
+
+    fn clear_persisted_leaf_override_after_append(&mut self) {
+        let desired_leaf_override = self.persisted_leaf_override();
+        if self.header.current_leaf != desired_leaf_override {
+            self.header.current_leaf = desired_leaf_override;
+            self.header_dirty = true;
+        }
+    }
+
     /// Append a session message entry.
     pub fn append_message(&mut self, message: SessionMessage) -> String {
         let id = self.next_entry_id();
@@ -2034,6 +2206,7 @@ impl Session {
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
         self.cached_message_count += 1;
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Message);
         id
     }
@@ -2055,6 +2228,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
         id
     }
@@ -2070,6 +2244,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
         id
     }
@@ -2085,6 +2260,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
         id
     }
@@ -2106,6 +2282,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
         id
     }
@@ -2139,6 +2316,7 @@ impl Session {
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
         self.cached_message_count += 1;
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Message);
         id
     }
@@ -2175,6 +2353,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
         id
     }
@@ -2199,6 +2378,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Metadata);
         id
     }
@@ -2468,6 +2648,7 @@ impl Session {
                 self.is_linear = false;
             }
             self.leaf_id = Some(entry_id.to_string());
+            self.sync_header_to_current_path_metadata();
             true
         } else {
             false
@@ -2487,12 +2668,18 @@ impl Session {
         self.entries = plan.entries;
         self.leaf_id = plan.leaf_id;
         self.rebuild_all_caches();
+        self.sync_navigation_state_to_header();
     }
 
     /// Set the leaf ID directly (for tests only).
     pub fn _test_set_leaf_id(&mut self, id: Option<String>) {
         self.leaf_id = id;
         self.rebuild_all_caches();
+        self.sync_navigation_state_to_header();
+    }
+
+    fn sync_header_to_current_path_metadata(&mut self) {
+        self.sync_navigation_state_to_header();
     }
 
     /// Revert the last user message on the current path, effectively abandoning it.
@@ -2524,6 +2711,9 @@ impl Session {
                 break;
             }
         }
+        if reverted_any {
+            self.sync_navigation_state_to_header();
+        }
         reverted_any
     }
 
@@ -2535,6 +2725,7 @@ impl Session {
     pub fn reset_leaf(&mut self) {
         self.leaf_id = None;
         self.is_linear = false;
+        self.sync_navigation_state_to_header();
     }
 
     /// Create a new branch starting from a specific entry.
@@ -2862,6 +3053,7 @@ impl Session {
         self.entries.push(entry);
         self.entry_index.insert(id.clone(), self.entries.len() - 1);
         self.entry_ids.insert(id.clone());
+        self.clear_persisted_leaf_override_after_append();
         self.enqueue_autosave_mutation(AutosaveMutationKind::Label);
         Some(id)
     }
@@ -3195,6 +3387,14 @@ pub struct SessionHeader {
     pub model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_thinking_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "leafId")]
+    pub current_leaf: Option<String>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         rename = "branchedFrom",
@@ -3217,8 +3417,53 @@ impl SessionHeader {
             provider: None,
             model_id: None,
             thinking_level: None,
+            fallback_provider: None,
+            fallback_model_id: None,
+            fallback_thinking_level: None,
+            current_leaf: None,
             parent_session: None,
         }
+    }
+
+    fn branch_fallback_model_fields(&self) -> (Option<String>, Option<String>) {
+        (
+            self.fallback_provider
+                .clone()
+                .or_else(|| self.provider.clone()),
+            self.fallback_model_id
+                .clone()
+                .or_else(|| self.model_id.clone()),
+        )
+    }
+
+    fn branch_fallback_model_pair(&self) -> Option<(String, String)> {
+        let (provider, model_id) = self.branch_fallback_model_fields();
+        provider.zip(model_id)
+    }
+
+    fn branch_fallback_thinking_level(&self) -> Option<String> {
+        self.fallback_thinking_level
+            .clone()
+            .or_else(|| self.thinking_level.clone())
+    }
+
+    fn materialize_branch_fallbacks(&mut self) -> bool {
+        let mut changed = false;
+
+        if self.fallback_provider.is_none() && self.provider.is_some() {
+            self.fallback_provider = self.provider.clone();
+            changed = true;
+        }
+        if self.fallback_model_id.is_none() && self.model_id.is_some() {
+            self.fallback_model_id = self.model_id.clone();
+            changed = true;
+        }
+        if self.fallback_thinking_level.is_none() && self.thinking_level.is_some() {
+            self.fallback_thinking_level = self.thinking_level.clone();
+            changed = true;
+        }
+
+        changed
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
@@ -3977,6 +4222,7 @@ fn open_jsonl_blocking(path_buf: PathBuf) -> Result<(Session, SessionOpenDiagnos
     header
         .validate()
         .map_err(|reason| crate::Error::session(format!("Invalid session header: {reason}")))?;
+    let (header, normalized_header_dirty) = normalize_loaded_header(header);
 
     let mut entries = Vec::new();
     let mut diagnostics = SessionOpenDiagnostics::default();
@@ -4104,24 +4350,26 @@ fn open_jsonl_blocking(path_buf: PathBuf) -> Result<(Session, SessionOpenDiagnos
     }
 
     let entry_count = entries.len();
+    let natural_leaf_id = finalized.leaf_id.clone();
+    let leaf_id = resolve_loaded_leaf_id(&header, natural_leaf_id.clone(), &finalized.entry_index);
 
     Ok((
         Session {
             header,
             entries,
             path: Some(path_buf),
-            leaf_id: finalized.leaf_id,
+            leaf_id: leaf_id.clone(),
             session_dir: None,
             store_kind: SessionStoreKind::Jsonl,
             entry_ids: finalized.entry_ids,
-            is_linear: finalized.is_linear,
+            is_linear: finalized.is_linear && leaf_id == natural_leaf_id,
             entry_index: finalized.entry_index,
             cached_message_count: finalized.message_count,
             cached_name: finalized.name,
             autosave_queue: AutosaveQueue::new(),
             autosave_durability: AutosaveDurabilityMode::from_env(),
             persisted_entry_count: Arc::new(AtomicUsize::new(entry_count)),
-            header_dirty: false,
+            header_dirty: normalized_header_dirty,
             appends_since_checkpoint: 0,
             v2_sidecar_root: None,
             v2_partial_hydration: false,
@@ -4920,8 +5168,12 @@ mod tests {
     use super::*;
     use crate::model::{Cost, StopReason, Usage};
     use asupersync::runtime::RuntimeBuilder;
+    use asupersync::sync::Mutex as AsyncMutex;
     use clap::Parser;
+    use std::env;
     use std::future::Future;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex as StdMutex, OnceLock};
     use std::time::Duration;
 
     fn make_test_message(text: &str) -> SessionMessage {
@@ -4936,6 +5188,29 @@ mod tests {
             .build()
             .expect("build runtime");
         runtime.block_on(future)
+    }
+
+    fn current_dir_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(())).lock().expect("lock")
+    }
+
+    struct CurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn new(path: &Path) -> Self {
+            let previous = env::current_dir().expect("current dir");
+            env::set_current_dir(path).expect("set current dir");
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = env::set_current_dir(&self.previous);
+        }
     }
 
     #[test]
@@ -5213,7 +5488,7 @@ mod tests {
         session.set_autosave_durability_for_test(AutosaveDurabilityMode::Throughput);
         // Point at a directory path so an eager save would fail with an IO error.
         session.path = Some(temp_dir.path().to_path_buf());
-        let handle = SessionHandle(Arc::new(Mutex::new(session)));
+        let handle = SessionHandle(Arc::new(AsyncMutex::new(session)));
 
         run_async(async { handle.set_name("deferred-save".to_string()).await })
             .expect("set_name should not trigger immediate save");
@@ -5299,7 +5574,7 @@ mod tests {
             .expect("build runtime");
 
         runtime.block_on(async {
-            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let session = Arc::new(AsyncMutex::new(Session::in_memory()));
             let handle = SessionHandle(Arc::clone(&session));
 
             let hold_cx = AgentCx::for_request();
@@ -5348,7 +5623,7 @@ mod tests {
                 }
             }
 
-            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let session = Arc::new(AsyncMutex::new(Session::in_memory()));
             let handle = SessionHandle(Arc::clone(&session));
 
             let (probe_tx, probe_rx) = std::sync::mpsc::channel();
@@ -5387,7 +5662,7 @@ mod tests {
 
     #[test]
     fn test_session_handle_set_model_and_thinking_level_dedupe_history() {
-        let handle = SessionHandle(Arc::new(Mutex::new(Session::in_memory())));
+        let handle = SessionHandle(Arc::new(AsyncMutex::new(Session::in_memory())));
 
         run_async(async {
             handle
@@ -5419,6 +5694,159 @@ mod tests {
             .count();
         assert_eq!(model_changes, 1);
         assert_eq!(thinking_changes, 1);
+    }
+
+    #[test]
+    fn test_session_handle_preserves_alias_equivalent_model_state() {
+        let mut session = Session::in_memory();
+        session.append_model_change("google".to_string(), "gemini-2.5-pro".to_string());
+        session.set_model_header(
+            Some("google".to_string()),
+            Some("gemini-2.5-pro".to_string()),
+            None,
+        );
+        let handle = SessionHandle(Arc::new(AsyncMutex::new(session)));
+
+        run_async(async {
+            handle
+                .set_model("gemini".to_string(), "GEMINI-2.5-PRO".to_string())
+                .await
+        })
+        .expect("alias-equivalent model should dedupe");
+
+        let branch = run_async(async { handle.get_branch().await });
+        let model_changes: Vec<_> = branch
+            .iter()
+            .filter_map(|entry| {
+                if entry.get("type").and_then(Value::as_str) == Some("model_change") {
+                    Some((
+                        entry.get("provider").and_then(Value::as_str),
+                        entry.get("model_id").and_then(Value::as_str),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            model_changes,
+            vec![(Some("google"), Some("gemini-2.5-pro"))],
+            "alias-equivalent set_model should not append duplicate history"
+        );
+
+        let (provider, model_id) = run_async(async { handle.get_model().await });
+        assert_eq!(provider.as_deref(), Some("google"));
+        assert_eq!(model_id.as_deref(), Some("gemini-2.5-pro"));
+
+        let state = run_async(async { handle.get_state().await });
+        assert_eq!(state["model"]["provider"], "google");
+        assert_eq!(state["model"]["id"], "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn session_handle_reports_branch_local_model_and_thinking_state() {
+        let mut session = Session::in_memory();
+        let root_id = session.append_message(make_test_message("root"));
+
+        session.append_model_change("openai".to_string(), "gpt-4o".to_string());
+        let branch_a_thinking = session.append_thinking_level_change("low".to_string());
+        session.set_model_header(
+            Some("openai".to_string()),
+            Some("gpt-4o".to_string()),
+            Some("low".to_string()),
+        );
+
+        assert!(session.create_branch_from(&root_id));
+        session.append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+        session.append_thinking_level_change("high".to_string());
+        session.set_model_header(
+            Some("anthropic".to_string()),
+            Some("claude-sonnet-4-5".to_string()),
+            Some("high".to_string()),
+        );
+
+        assert!(session.navigate_to(&branch_a_thinking));
+
+        let handle = SessionHandle(Arc::new(AsyncMutex::new(session)));
+        let state = run_async(async { handle.get_state().await });
+        let (provider, model_id) = run_async(async { handle.get_model().await });
+        let thinking_level = run_async(async { handle.get_thinking_level().await });
+
+        assert_eq!(provider.as_deref(), Some("openai"));
+        assert_eq!(model_id.as_deref(), Some("gpt-4o"));
+        assert_eq!(thinking_level.as_deref(), Some("low"));
+        assert_eq!(
+            state
+                .get("model")
+                .and_then(|model| model.get("provider"))
+                .and_then(Value::as_str),
+            Some("openai")
+        );
+        assert_eq!(
+            state
+                .get("model")
+                .and_then(|model| model.get("id"))
+                .and_then(Value::as_str),
+            Some("gpt-4o")
+        );
+        assert_eq!(
+            state.get("thinkingLevel").and_then(Value::as_str),
+            Some("low")
+        );
+    }
+
+    #[test]
+    fn session_handle_set_model_and_thinking_level_dedupe_on_switched_branch() {
+        let mut session = Session::in_memory();
+        let root_id = session.append_message(make_test_message("root"));
+
+        session.append_model_change("openai".to_string(), "gpt-4o".to_string());
+        let branch_a_thinking = session.append_thinking_level_change("low".to_string());
+        session.set_model_header(
+            Some("openai".to_string()),
+            Some("gpt-4o".to_string()),
+            Some("low".to_string()),
+        );
+
+        assert!(session.create_branch_from(&root_id));
+        session.append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+        session.append_thinking_level_change("high".to_string());
+        session.set_model_header(
+            Some("anthropic".to_string()),
+            Some("claude-sonnet-4-5".to_string()),
+            Some("high".to_string()),
+        );
+
+        assert!(session.navigate_to(&branch_a_thinking));
+
+        let handle = SessionHandle(Arc::new(AsyncMutex::new(session)));
+
+        run_async(async {
+            handle
+                .set_model("openai".to_string(), "gpt-4o".to_string())
+                .await
+        })
+        .expect("same-branch model should dedupe");
+        run_async(async { handle.set_thinking_level("low".to_string()).await })
+            .expect("same-branch thinking should dedupe");
+
+        let branch = run_async(async { handle.get_branch().await });
+        let model_changes = branch
+            .iter()
+            .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("model_change"))
+            .count();
+        let thinking_changes = branch
+            .iter()
+            .filter(|entry| {
+                entry.get("type").and_then(Value::as_str) == Some("thinking_level_change")
+            })
+            .count();
+
+        assert_eq!(model_changes, 1, "expected one branch-local model_change");
+        assert_eq!(
+            thinking_changes, 1,
+            "expected one branch-local thinking_level_change"
+        );
     }
 
     #[test]
@@ -5647,6 +6075,105 @@ mod tests {
         // Navigate back to second
         assert!(session.navigate_to(&id2));
         assert_eq!(session.leaf_id.as_deref(), Some(id2.as_str()));
+    }
+
+    #[test]
+    fn test_navigation_syncs_header_to_current_branch_metadata() {
+        let mut session = Session::in_memory();
+
+        let root_id = session.append_message(make_test_message("root"));
+        let openai_id = session.append_model_change("openai".to_string(), "gpt-5.4".to_string());
+        let high_id = session.append_thinking_level_change("high".to_string());
+        let _tip_a = session.append_message(make_test_message("branch-a"));
+
+        assert!(session.create_branch_from(&root_id));
+        session.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
+        let minimal_id = session.append_thinking_level_change("minimal".to_string());
+        let _tip_b = session.append_message(make_test_message("branch-b"));
+
+        assert!(session.navigate_to(&high_id));
+        assert_eq!(session.header.provider.as_deref(), Some("openai"));
+        assert_eq!(session.header.model_id.as_deref(), Some("gpt-5.4"));
+        assert_eq!(session.header.thinking_level.as_deref(), Some("high"));
+
+        assert!(session.navigate_to(&minimal_id));
+        assert_eq!(session.header.provider.as_deref(), Some("anthropic"));
+        assert_eq!(session.header.model_id.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(session.header.thinking_level.as_deref(), Some("minimal"));
+
+        assert!(session.navigate_to(&openai_id));
+        assert_eq!(session.header.provider.as_deref(), Some("openai"));
+        assert_eq!(session.header.model_id.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn test_navigation_clears_stale_header_metadata_when_target_branch_has_no_override() {
+        let mut session = Session::in_memory();
+
+        let root_id = session.append_message(make_test_message("root"));
+        let branch_a_tip = session.append_message(make_test_message("branch-a"));
+
+        assert!(session.create_branch_from(&root_id));
+        session.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
+        session.append_thinking_level_change("high".to_string());
+        session.set_model_header(
+            Some("anthropic".to_string()),
+            Some("claude-sonnet-4".to_string()),
+            Some("high".to_string()),
+        );
+
+        assert!(session.navigate_to(&branch_a_tip));
+        assert!(session.header.provider.is_none());
+        assert!(session.header.model_id.is_none());
+        assert!(session.header.thinking_level.is_none());
+    }
+
+    #[test]
+    fn test_open_materializes_header_fallback_for_historyless_branch_navigation() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("legacy-historyless-branch.jsonl");
+
+        let mut legacy = Session::in_memory();
+        legacy.header.provider = Some("openai".to_string());
+        legacy.header.model_id = Some("gpt-5.4".to_string());
+        legacy.header.thinking_level = Some("low".to_string());
+
+        let root_id = legacy.append_message(make_test_message("root"));
+        let branch_b_tip = legacy.append_message(make_test_message("branch-b"));
+
+        assert!(legacy.create_branch_from(&root_id));
+        legacy.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
+        legacy.append_thinking_level_change("high".to_string());
+        let branch_a_tip = legacy.append_message(make_test_message("branch-a"));
+
+        legacy.header.current_leaf = Some(branch_b_tip.clone());
+
+        let mut jsonl = serde_json::to_string(&legacy.header).expect("serialize legacy header");
+        jsonl.push('\n');
+        for entry in &legacy.entries {
+            jsonl.push_str(&serde_json::to_string(entry).expect("serialize session entry"));
+            jsonl.push('\n');
+        }
+        std::fs::write(&path, jsonl).expect("write legacy session");
+
+        let mut loaded =
+            run_async(async { Session::open(path.to_string_lossy().as_ref()).await })
+                .expect("open legacy session");
+
+        assert_eq!(loaded.leaf_id.as_deref(), Some(branch_b_tip.as_str()));
+        assert_eq!(loaded.header.fallback_provider.as_deref(), Some("openai"));
+        assert_eq!(loaded.header.fallback_model_id.as_deref(), Some("gpt-5.4"));
+        assert_eq!(loaded.header.fallback_thinking_level.as_deref(), Some("low"));
+
+        assert!(loaded.navigate_to(&branch_a_tip));
+        assert_eq!(loaded.header.provider.as_deref(), Some("anthropic"));
+        assert_eq!(loaded.header.model_id.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(loaded.header.thinking_level.as_deref(), Some("high"));
+
+        assert!(loaded.navigate_to(&branch_b_tip));
+        assert_eq!(loaded.header.provider.as_deref(), Some("openai"));
+        assert_eq!(loaded.header.model_id.as_deref(), Some("gpt-5.4"));
+        assert_eq!(loaded.header.thinking_level.as_deref(), Some("low"));
     }
 
     #[test]
@@ -6432,6 +6959,76 @@ mod tests {
             run_async(async { Session::open(path.to_string_lossy().as_ref()).await }).unwrap();
 
         assert_eq!(loaded.leaf_id.as_deref(), Some(id2.as_str()));
+    }
+
+    #[test]
+    fn test_round_trip_preserves_selected_branch_leaf_and_header_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
+
+        let root_id = session.append_message(make_test_message("root"));
+        let _openai_model =
+            session.append_model_change("openai".to_string(), "gpt-5.4".to_string());
+        session.set_model_header(
+            Some("openai".to_string()),
+            Some("gpt-5.4".to_string()),
+            None,
+        );
+        let high_id = session.append_thinking_level_change("high".to_string());
+        session.set_model_header(None, None, Some("high".to_string()));
+
+        assert!(session.create_branch_from(&root_id));
+        let _anthropic_model =
+            session.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
+        session.set_model_header(
+            Some("anthropic".to_string()),
+            Some("claude-sonnet-4".to_string()),
+            None,
+        );
+        session.append_thinking_level_change("medium".to_string());
+        session.set_model_header(None, None, Some("medium".to_string()));
+
+        assert!(session.navigate_to(&high_id));
+
+        run_async(async { session.save().await }).unwrap();
+        let path = session.path.clone().unwrap();
+
+        let loaded =
+            run_async(async { Session::open(path.to_string_lossy().as_ref()).await }).unwrap();
+
+        assert_eq!(loaded.leaf_id.as_deref(), Some(high_id.as_str()));
+        assert_eq!(
+            loaded.header.current_leaf.as_deref(),
+            Some(high_id.as_str())
+        );
+        assert_eq!(loaded.header.provider.as_deref(), Some("openai"));
+        assert_eq!(loaded.header.model_id.as_deref(), Some("gpt-5.4"));
+        assert_eq!(loaded.header.thinking_level.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn test_append_after_branch_navigation_clears_persisted_leaf_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
+
+        let id_a = session.append_message(make_test_message("A"));
+        let id_b = session.append_message(make_test_message("B"));
+        session.append_message(make_test_message("C"));
+
+        assert!(session.create_branch_from(&id_a));
+        session.append_message(make_test_message("D"));
+
+        assert!(session.navigate_to(&id_b));
+        let id_e = session.append_message(make_test_message("E"));
+
+        run_async(async { session.save().await }).unwrap();
+        let path = session.path.clone().unwrap();
+
+        let loaded =
+            run_async(async { Session::open(path.to_string_lossy().as_ref()).await }).unwrap();
+
+        assert_eq!(loaded.leaf_id.as_deref(), Some(id_e.as_str()));
+        assert!(loaded.header.current_leaf.is_none());
     }
 
     #[test]
@@ -7227,6 +7824,27 @@ mod tests {
 
         // The file should have .jsonl extension
         assert_eq!(path.extension().unwrap(), "jsonl");
+    }
+
+    #[test]
+    fn test_save_uses_session_header_cwd_for_project_session_dir() {
+        let _lock = current_dir_lock();
+        let process_cwd = tempfile::tempdir().unwrap();
+        let _guard = CurrentDirGuard::new(process_cwd.path());
+
+        let sessions_root = tempfile::tempdir().unwrap();
+        let session_cwd = tempfile::tempdir().unwrap();
+        let mut session = Session::create_with_dir(Some(sessions_root.path().to_path_buf()));
+        session.header.cwd = session_cwd.path().display().to_string();
+        session.append_message(make_test_message("test"));
+
+        run_async(async { session.save().await }).unwrap();
+        let path = session.path.clone().expect("session path");
+        let expected_dir = sessions_root.path().join(encode_cwd(session_cwd.path()));
+        let process_dir = sessions_root.path().join(encode_cwd(process_cwd.path()));
+
+        assert_eq!(path.parent(), Some(expected_dir.as_path()));
+        assert_ne!(path.parent(), Some(process_dir.as_path()));
     }
 
     #[test]

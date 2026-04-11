@@ -4544,24 +4544,26 @@ fn parse_thinking_level(level: &str) -> Result<crate::model::ThinkingLevel> {
 fn session_thinking_level(
     session: &crate::session::Session,
 ) -> Option<crate::model::ThinkingLevel> {
-    session.header.thinking_level.as_deref().and_then(|raw| {
-        raw.parse::<crate::model::ThinkingLevel>().map_or_else(
-            |_| {
-                tracing::warn!("Ignoring invalid session thinking level in RPC state: {raw}");
-                None
-            },
-            Some,
-        )
-    })
+    session
+        .effective_thinking_level_for_current_path()
+        .as_deref()
+        .and_then(|raw| {
+            raw.parse::<crate::model::ThinkingLevel>().map_or_else(
+                |_| {
+                    tracing::warn!("Ignoring invalid session thinking level in RPC state: {raw}");
+                    None
+                },
+                Some,
+            )
+        })
 }
 
 fn current_model_entry<'a>(
     session: &crate::session::Session,
     options: &'a RpcOptions,
 ) -> Option<&'a ModelEntry> {
-    let provider = session.header.provider.as_deref()?;
-    let model_id = session.header.model_id.as_deref()?;
-    model_entry_for_provider_and_id(provider, model_id, options)
+    let (provider, model_id) = session.effective_model_for_current_path()?;
+    model_entry_for_provider_and_id(&provider, &model_id, options)
 }
 
 fn current_or_runtime_model_entry<'a>(

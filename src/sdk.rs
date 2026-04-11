@@ -1295,20 +1295,16 @@ impl AgentSessionHandle {
                 .lock(cx.cx())
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
-            let (provider_id, model_id) = match (
-                guard.header.provider.as_deref(),
-                guard.header.model_id.as_deref(),
-            ) {
-                (Some(provider_id), Some(model_id)) => {
-                    (provider_id.to_string(), model_id.to_string())
-                }
-                _ => self.model(),
-            };
+            let (provider_id, model_id) = guard
+                .effective_model_for_current_path()
+                .unwrap_or_else(|| self.model());
             let effective_level =
                 self.session
                     .clamp_thinking_level_for_model(&provider_id, &model_id, level);
             let level_string = effective_level.to_string();
-            let changed = guard.header.thinking_level.as_deref() != Some(level_string.as_str());
+            let changed =
+                guard.effective_thinking_level_for_current_path().as_deref()
+                    != Some(level_string.as_str());
             guard.set_model_header(None, None, Some(level_string.clone()));
             if changed {
                 guard.append_thinking_level_change(level_string);
