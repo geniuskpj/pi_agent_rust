@@ -982,6 +982,7 @@ pub fn create_provider(
             let runtime = resolve_azure_provider_runtime(entry)?;
             Ok(Arc::new(
                 azure::AzureOpenAIProvider::new(runtime.resource, runtime.deployment)
+                    .with_provider_name(&entry.model.provider)
                     .with_api_version(runtime.api_version)
                     .with_endpoint_url(runtime.endpoint_url)
                     .with_compat(entry.compat.clone())
@@ -2152,7 +2153,7 @@ export default function init(pi) {
             "https://myresource.openai.azure.com",
         );
         let provider = create_provider(&entry, None).expect("azure provider");
-        assert_eq!(provider.name(), "azure");
+        assert_eq!(provider.name(), "azure-openai");
         assert_eq!(provider.api(), "azure-openai");
         assert!(!provider.model_id().is_empty());
     }
@@ -2166,7 +2167,7 @@ export default function init(pi) {
             "https://myresource.cognitiveservices.azure.com",
         );
         let provider = create_provider(&entry, None).expect("azure cognitive provider");
-        assert_eq!(provider.name(), "azure");
+        assert_eq!(provider.name(), "azure-cognitive-services");
         assert_eq!(provider.api(), "azure-openai");
         assert!(!provider.model_id().is_empty());
     }

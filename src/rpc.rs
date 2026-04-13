@@ -1684,13 +1684,36 @@ pub async fn run(
                     continue;
                 }
 
-                let loaded = crate::session::Session::open(session_path).await;
+                // Validate relative paths against the sessions directory to prevent traversal.
+                let session_path_buf = std::path::PathBuf::from(session_path);
+                let sessions_dir = crate::config::Config::sessions_dir();
+                let resolved_path = if session_path_buf.is_relative() {
+                    sessions_dir.join(&session_path_buf)
+                } else {
+                    session_path_buf.clone()
+                };
+                if session_path_buf.is_relative() {
+                    let canonical_session = crate::extensions::safe_canonicalize(&resolved_path);
+                    let canonical_sessions_dir =
+                        crate::extensions::safe_canonicalize(&sessions_dir);
+                    if !canonical_session.starts_with(&canonical_sessions_dir) {
+                        let _ = out_tx.send(response_error(
+                            id,
+                            "switch_session",
+                            "Session path is outside the sessions directory".to_string(),
+                        ));
+                        continue;
+                    }
+                }
+
+                let loaded =
+                    crate::session::Session::open(resolved_path.to_string_lossy().as_ref()).await;
                 match loaded {
                     Ok(new_session) => {
-                        let target_session_file = new_session
-                            .path
-                            .as_ref()
-                            .map_or_else(|| session_path.to_string(), |p| p.display().to_string());
+                        let target_session_file = new_session.path.as_ref().map_or_else(
+                            || resolved_path.display().to_string(),
+                            |p| p.display().to_string(),
+                        );
                         let messages = new_session.to_messages_for_current_path();
                         let session_id = new_session.header.id.clone();
                         let previous_session_file;

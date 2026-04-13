@@ -87,6 +87,8 @@ fn api_key_override(options: &StreamOptions, compat: Option<&CompatConfig>) -> O
 /// Azure OpenAI Chat Completions API provider.
 pub struct AzureOpenAIProvider {
     client: Client,
+    /// Provider name for event reporting (defaults to "azure").
+    provider: String,
     /// The deployment name (model deployment in Azure)
     deployment: String,
     /// Azure resource name (part of the URL)
@@ -107,12 +109,20 @@ impl AzureOpenAIProvider {
     pub fn new(resource: impl Into<String>, deployment: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
+            provider: "azure".to_string(),
             deployment: deployment.into(),
             resource: resource.into(),
             api_version: azure_api_version(),
             endpoint_url_override: None,
             compat: None,
         }
+    }
+
+    /// Set the provider name for event reporting.
+    #[must_use]
+    pub fn with_provider_name(mut self, provider: impl Into<String>) -> Self {
+        self.provider = provider.into();
+        self
     }
 
     /// Set the API version.
@@ -211,8 +221,8 @@ impl AzureOpenAIProvider {
 #[async_trait]
 #[allow(clippy::too_many_lines)]
 impl Provider for AzureOpenAIProvider {
-    fn name(&self) -> &'static str {
-        "azure"
+    fn name(&self) -> &str {
+        &self.provider
     }
 
     fn api(&self) -> &'static str {
