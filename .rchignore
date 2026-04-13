@@ -1,5 +1,7 @@
 ubuntu/
 ubuntu/**
+codex/
+codex/**
 codex-audit/
 codex-audit/**
 codex-checks/

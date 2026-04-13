@@ -1018,7 +1018,6 @@ impl Agent {
                     {
                         Ok(outcome) => outcome,
                         Err(err) => {
-                            let _err_string = err.to_string();
                             let steering_to_add = self.drain_steering_messages().await;
                             for message in steering_to_add {
                                 self.messages.push(message.clone());
@@ -2406,6 +2405,23 @@ pub struct PreWarmedExtensionRuntime {
     pub tools: Arc<ToolRegistry>,
 }
 
+/// RAII guard that resets an `AtomicBool` to `false` on drop, ensuring the
+/// flag is cleared even if the enclosing async task is cancelled.
+struct AtomicBoolGuard(Arc<AtomicBool>);
+
+impl AtomicBoolGuard {
+    fn activate(flag: &Arc<AtomicBool>) -> Self {
+        flag.store(true, Ordering::SeqCst);
+        Self(Arc::clone(flag))
+    }
+}
+
+impl Drop for AtomicBoolGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 pub struct AgentSession {
     pub agent: Agent,
     pub session: Arc<Mutex<Session>>,
@@ -2519,6 +2535,7 @@ impl AgentSessionHostActions {
     fn enqueue(&self, deliver_as: Option<ExtensionDeliverAs>, message: Message) {
         let deliver_as = deliver_as.unwrap_or(ExtensionDeliverAs::Steer);
         let Ok(mut queue) = self.injected.lock() else {
+            tracing::error!("injected queue mutex poisoned; dropping extension message");
             return;
         };
         match deliver_as {
@@ -2544,6 +2561,7 @@ impl AgentSessionHostActions {
 
     fn queue_pending_idle_action(&self, action: PendingIdleAction) {
         let Ok(mut actions) = self.pending_idle_actions.lock() else {
+            tracing::error!("pending idle actions mutex poisoned; dropping idle action");
             return;
         };
         actions.push_back(action);
@@ -7221,7 +7239,7 @@ impl AgentSession {
             }
         }
 
-        self.extensions_is_streaming.store(true, Ordering::SeqCst);
+        let streaming_guard = AtomicBoolGuard::activate(&self.extensions_is_streaming);
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
@@ -7229,7 +7247,7 @@ impl AgentSession {
                 on_event_for_run(event);
             })
             .await;
-        self.extensions_is_streaming.store(false, Ordering::SeqCst);
+        drop(streaming_guard);
 
         let persist_result = self.persist_new_messages(start_len + 1).await;
 
@@ -7284,7 +7302,7 @@ impl AgentSession {
             }
         }
 
-        self.extensions_is_streaming.store(true, Ordering::SeqCst);
+        let streaming_guard = AtomicBoolGuard::activate(&self.extensions_is_streaming);
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
@@ -7292,7 +7310,7 @@ impl AgentSession {
                 on_event_for_run(event);
             })
             .await;
-        self.extensions_is_streaming.store(false, Ordering::SeqCst);
+        drop(streaming_guard);
 
         // Persist any NEW messages (assistant/tools) generated before the agent stopped,
         // even if it stopped due to an error, skipping the user message we already saved.
@@ -7349,7 +7367,7 @@ impl AgentSession {
             }
         }
 
-        self.extensions_is_streaming.store(true, Ordering::SeqCst);
+        let streaming_guard = AtomicBoolGuard::activate(&self.extensions_is_streaming);
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
@@ -7357,7 +7375,7 @@ impl AgentSession {
                 on_event_for_run(event);
             })
             .await;
-        self.extensions_is_streaming.store(false, Ordering::SeqCst);
+        drop(streaming_guard);
 
         // Persist any NEW messages (assistant/tools) generated before the agent stopped,
         // even if it stopped due to an error, skipping the user message we already saved.

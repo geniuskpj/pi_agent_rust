@@ -2734,8 +2734,13 @@ fn error_hints_value(error: &Error) -> Value {
 }
 
 fn rpc_session_message_value(message: SessionMessage) -> Value {
-    let mut value =
-        serde_json::to_value(message).expect("SessionMessage should always serialize to JSON");
+    let mut value = match serde_json::to_value(message) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::error!("Failed to serialize SessionMessage: {err}");
+            return serde_json::json!({"error": format!("serialization error: {err}")});
+        }
+    };
     rpc_flatten_content_blocks(&mut value);
     value
 }

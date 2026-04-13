@@ -652,8 +652,14 @@ fn file_exists(path: &Path) -> bool {
 
 /// Resolve a file path for reading, including macOS screenshot name variants.
 pub(crate) fn resolve_read_path(file_path: &str, cwd: &Path) -> PathBuf {
-    let resolved = resolve_to_cwd(file_path, cwd);
-    if file_exists(&resolved) {
+    let resolved = normalize_dot_segments(&resolve_to_cwd(file_path, cwd));
+    let normalized_cwd = normalize_dot_segments(cwd);
+    let within_cwd = resolved.starts_with(&normalized_cwd);
+    if within_cwd && file_exists(&resolved) {
+        return resolved;
+    }
+    if !within_cwd {
+        // Avoid probing the filesystem outside the working directory.
         return resolved;
     }
 
@@ -662,23 +668,35 @@ pub(crate) fn resolve_read_path(file_path: &str, cwd: &Path) -> PathBuf {
     };
 
     let am_pm_variant = try_mac_os_screenshot_path(resolved_str);
-    if am_pm_variant != resolved_str && file_exists(Path::new(&am_pm_variant)) {
-        return PathBuf::from(am_pm_variant);
+    if am_pm_variant != resolved_str {
+        let candidate = PathBuf::from(&am_pm_variant);
+        if candidate.starts_with(&normalized_cwd) && file_exists(&candidate) {
+            return candidate;
+        }
     }
 
     let nfd_variant = try_nfd_variant(resolved_str);
-    if nfd_variant != resolved_str && file_exists(Path::new(&nfd_variant)) {
-        return PathBuf::from(nfd_variant);
+    if nfd_variant != resolved_str {
+        let candidate = PathBuf::from(&nfd_variant);
+        if candidate.starts_with(&normalized_cwd) && file_exists(&candidate) {
+            return candidate;
+        }
     }
 
     let curly_variant = try_curly_quote_variant(resolved_str);
-    if curly_variant != resolved_str && file_exists(Path::new(&curly_variant)) {
-        return PathBuf::from(curly_variant);
+    if curly_variant != resolved_str {
+        let candidate = PathBuf::from(&curly_variant);
+        if candidate.starts_with(&normalized_cwd) && file_exists(&candidate) {
+            return candidate;
+        }
     }
 
     let nfd_curly_variant = try_curly_quote_variant(&nfd_variant);
-    if nfd_curly_variant != resolved_str && file_exists(Path::new(&nfd_curly_variant)) {
-        return PathBuf::from(nfd_curly_variant);
+    if nfd_curly_variant != resolved_str {
+        let candidate = PathBuf::from(&nfd_curly_variant);
+        if candidate.starts_with(&normalized_cwd) && file_exists(&candidate) {
+            return candidate;
+        }
     }
 
     resolved
@@ -4797,13 +4815,17 @@ fn emit_bash_update(
                 "byteCount": state.total_bytes
             }
         });
-        let details_map = details.as_object_mut().expect("just built");
+        let Some(details_map) = details.as_object_mut() else {
+            return Ok(());
+        };
 
         if let Some(timeout) = state.timeout_ms {
-            details_map["progress"]
-                .as_object_mut()
-                .expect("just built")
-                .insert("timeoutMs".into(), serde_json::json!(timeout));
+            if let Some(progress) = details_map
+                .get_mut("progress")
+                .and_then(|v| v.as_object_mut())
+            {
+                progress.insert("timeoutMs".into(), serde_json::json!(timeout));
+            }
         }
         if truncation.truncated {
             details_map.insert("truncation".into(), serde_json::to_value(&truncation)?);
@@ -5439,29 +5461,23 @@ impl Tool for HashlineEditTool {
             return Err(Error::tool("hashline_edit", "No edits provided"));
         }
 
-        // Resolve file path
-        let absolute_path =
-            crate::extensions::safe_canonicalize(&resolve_read_path(&input.path, &self.cwd));
-        if !file_exists(&absolute_path) {
-            return Err(Error::tool(
-                "hashline_edit",
-                format!("File not found: {}", input.path),
-            ));
-        }
-
-        let canonical_cwd = crate::extensions::safe_canonicalize(&self.cwd);
-        if !absolute_path.starts_with(&canonical_cwd) {
-            return Err(Error::validation(format!(
-                "Cannot edit outside the working directory (resolved: {}, cwd: {})",
-                absolute_path.display(),
-                canonical_cwd.display()
-            )));
-        }
+        // Resolve file path and enforce scope before touching the filesystem.
+        let resolved = resolve_read_path(&input.path, &self.cwd);
+        let absolute_path = enforce_cwd_scope(&resolved, &self.cwd, "hashline_edit")?;
 
         // Check file size
         let metadata = asupersync::fs::metadata(&absolute_path)
             .await
-            .map_err(|e| Error::tool("hashline_edit", format!("Cannot read file metadata: {e}")))?;
+            .map_err(|err| {
+                let message = match err.kind() {
+                    std::io::ErrorKind::NotFound => format!("File not found: {}", input.path),
+                    std::io::ErrorKind::PermissionDenied => {
+                        format!("Permission denied: {}", input.path)
+                    }
+                    _ => format!("Cannot read file metadata: {err}"),
+                };
+                Error::tool("hashline_edit", message)
+            })?;
         if !metadata.is_file() {
             return Err(Error::tool(
                 "hashline_edit",
@@ -7986,14 +8002,21 @@ mod tests {
 
     #[test]
     fn test_find_results_are_sorted() {
+        // FindTool sorts by modification time (most recent first), then alphabetically
+        // as a tie-breaker for files with the same mtime.
         asupersync::test_utils::run_test(|| async {
             if find_fd_binary().is_none() {
                 return;
             }
             let tmp = tempfile::tempdir().unwrap();
-            std::fs::write(tmp.path().join("zeta.txt"), "").unwrap();
-            std::fs::write(tmp.path().join("alpha.txt"), "").unwrap();
-            std::fs::write(tmp.path().join("beta.txt"), "").unwrap();
+
+            // Create files with delays to ensure distinct modification times.
+            // Order: oldest first, so the expected output (most recent first) is reversed.
+            std::fs::write(tmp.path().join("oldest.txt"), "").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::write(tmp.path().join("middle.txt"), "").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::write(tmp.path().join("newest.txt"), "").unwrap();
 
             let tool = FindTool::new(tmp.path());
             let out = tool
@@ -8013,9 +8036,13 @@ mod tests {
                 .filter(|line| !line.is_empty())
                 .map(str::to_string)
                 .collect();
-            let mut sorted = lines.clone();
-            sorted.sort_by_key(|line| line.to_lowercase());
-            assert_eq!(lines, sorted, "expected sorted find output");
+
+            // Expected order: most recent first
+            assert_eq!(
+                lines,
+                vec!["newest.txt", "middle.txt", "oldest.txt"],
+                "expected mtime-sorted find output (most recent first)"
+            );
         });
     }
 
