@@ -27,7 +27,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -54,10 +54,12 @@ fn finish_worker_result<T, E>(
     recv_result.map_err(|_| crate::Error::session(cancelled_message))?
 }
 
-fn read_capped_utf8_line_with_limit<R: BufRead>(
+fn read_capped_utf8_line_with_limit<R: std::io::BufRead>(
     reader: &mut R,
     max_bytes: usize,
 ) -> std::io::Result<Option<String>> {
+    use std::io::BufRead;
+
     let limit = u64::try_from(max_bytes)
         .unwrap_or(u64::MAX.saturating_sub(2))
         .saturating_add(2);
@@ -90,7 +92,7 @@ fn read_capped_utf8_line_with_limit<R: BufRead>(
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
 }
 
-fn read_capped_utf8_line<R: BufRead>(reader: &mut R) -> std::io::Result<Option<String>> {
+fn read_capped_utf8_line<R: std::io::BufRead>(reader: &mut R) -> std::io::Result<Option<String>> {
     read_capped_utf8_line_with_limit(reader, MAX_JSONL_LINE_BYTES)
 }
 
@@ -4503,20 +4505,14 @@ pub fn create_v2_sidecar_from_jsonl(jsonl_path: &Path) -> Result<SessionStoreV2>
 }
 
 fn build_v2_sidecar_from_jsonl_into(jsonl_path: &Path, v2_root: &Path) -> Result<SessionStoreV2> {
-    use std::io::BufRead;
-
     let build_result = (|| -> Result<SessionStoreV2> {
         let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
         let mut reader = std::io::BufReader::new(file);
 
-        let mut header_line = String::new();
-        reader
-            .read_line(&mut header_line)
-            .map_err(|e| crate::Error::Io(Box::new(e)))?;
-
-        if header_line.trim().is_empty() {
-            return Err(crate::Error::session("Empty JSONL session file"));
-        }
+        let header_line = read_capped_utf8_line(&mut reader)
+            .map_err(|e| crate::Error::Io(Box::new(e)))?
+            .filter(|l| !l.trim().is_empty())
+            .ok_or_else(|| crate::Error::session("Empty JSONL session file"))?;
 
         let header: SessionHeader = serde_json::from_str(header_line.trim())
             .map_err(|e| crate::Error::session(format!("Invalid header in JSONL: {e}")))?;

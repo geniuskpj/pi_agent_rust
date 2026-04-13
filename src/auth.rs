@@ -660,36 +660,32 @@ impl AuthStorage {
                 "anthropic" => {
                     Box::pin(refresh_anthropic_oauth_token(client, &refresh_token)).await
                 }
-                "google-gemini-cli" => {
-                    let (_, project_id) = decode_project_scoped_access_token(&access_token)
-                        .ok_or_else(|| {
-                            Error::auth(
-                                "google-gemini-cli OAuth credential missing projectId payload"
-                                    .to_string(),
-                            )
-                        })?;
-                    Box::pin(refresh_google_gemini_cli_oauth_token(
-                        client,
-                        &refresh_token,
-                        &project_id,
-                    ))
-                    .await
-                }
-                "google-antigravity" => {
-                    let (_, project_id) = decode_project_scoped_access_token(&access_token)
-                        .ok_or_else(|| {
-                            Error::auth(
-                                "google-antigravity OAuth credential missing projectId payload"
-                                    .to_string(),
-                            )
-                        })?;
-                    Box::pin(refresh_google_antigravity_oauth_token(
-                        client,
-                        &refresh_token,
-                        &project_id,
-                    ))
-                    .await
-                }
+                "google-gemini-cli" => match decode_project_scoped_access_token(&access_token) {
+                    Some((_, project_id)) => {
+                        Box::pin(refresh_google_gemini_cli_oauth_token(
+                            client,
+                            &refresh_token,
+                            &project_id,
+                        ))
+                        .await
+                    }
+                    None => Err(Error::auth(
+                        "google-gemini-cli OAuth credential missing projectId payload".to_string(),
+                    )),
+                },
+                "google-antigravity" => match decode_project_scoped_access_token(&access_token) {
+                    Some((_, project_id)) => {
+                        Box::pin(refresh_google_antigravity_oauth_token(
+                            client,
+                            &refresh_token,
+                            &project_id,
+                        ))
+                        .await
+                    }
+                    None => Err(Error::auth(
+                        "google-antigravity OAuth credential missing projectId payload".to_string(),
+                    )),
+                },
                 "kimi-for-coding" => {
                     let token_url = stored_token_url
                         .clone()
