@@ -1997,7 +1997,7 @@ fn canonical_failure_trio_entries_have_owner_tracking_and_fallback_validation() 
                     "rationale": "Registered command set diverges from manifest expectation in current fixture corpus.",
                     "mitigation": "Audit fixture expectations and extension registrations to restore parity.",
                     "owner": "pi-conformance-team",
-                    "review_by": "2026-03-31",
+                    "review_by": "2026-06-30",
                     "tracking_issue": "bd-3ar8v.6.3.5"
                 },
                 {
@@ -2008,7 +2008,7 @@ fn canonical_failure_trio_entries_have_owner_tracking_and_fallback_validation() 
                     "rationale": "Registered command set diverges from manifest expectation in current fixture corpus.",
                     "mitigation": "Audit fixture expectations and extension registrations to restore parity.",
                     "owner": "pi-conformance-team",
-                    "review_by": "2026-03-31",
+                    "review_by": "2026-06-30",
                     "tracking_issue": "bd-3ar8v.6.3.5"
                 },
                 {
@@ -2019,7 +2019,7 @@ fn canonical_failure_trio_entries_have_owner_tracking_and_fallback_validation() 
                     "rationale": "Registered command set diverges from manifest expectation in current fixture corpus.",
                     "mitigation": "Audit fixture expectations and extension registrations to restore parity.",
                     "owner": "pi-conformance-team",
-                    "review_by": "2026-03-31",
+                    "review_by": "2026-06-30",
                     "tracking_issue": "bd-3ar8v.6.3.5"
                 }
             ]

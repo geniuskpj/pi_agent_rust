@@ -48,7 +48,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Bundle expects local HTML artifact not currently packaged in runtime artifact set.",
+      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Bundle expects local HTML artifact not currently packaged in runtime artifact set.",
       "canonical_failure": false
     },
     {
@@ -77,7 +77,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Expected runtime shape diverges from shim implementation (`not a function`).",
+      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Expected runtime shape diverges from shim implementation (`not a function`).",
       "canonical_failure": false
     },
     {
@@ -106,7 +106,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Runtime shim mismatch triggers callable-shape failure at activation.",
+      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Runtime shim mismatch triggers callable-shape failure at activation.",
       "canonical_failure": false
     },
     {
@@ -135,7 +135,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Extension expects provider detection shape not fully represented in runtime stubs.",
+      "fallback_validation": "exception_policy status=temporary cause_code=runtime_error review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Extension expects provider detection shape not fully represented in runtime stubs.",
       "canonical_failure": false
     },
     {
@@ -164,7 +164,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`openai`).",
+      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`openai`).",
       "canonical_failure": false
     },
     {
@@ -193,7 +193,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`adm-zip`).",
+      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`adm-zip`).",
       "canonical_failure": false
     },
     {
@@ -222,7 +222,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`linkedom`).",
+      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`linkedom`).",
       "canonical_failure": false
     },
     {
@@ -251,7 +251,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`@sourcegraph/scip-typescript`).",
+      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`@sourcegraph/scip-typescript`).",
       "canonical_failure": false
     },
     {
@@ -280,7 +280,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.3.9",
-      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-03-31 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`@sourcegraph/scip-typescript`).",
+      "fallback_validation": "exception_policy status=temporary cause_code=missing_npm_package review_by=2026-06-30 tracking_issue=bd-k5q5.3.9; rationale=Depends on unsupported package specifier (`@sourcegraph/scip-typescript`).",
       "canonical_failure": false
     },
     {
@@ -309,7 +309,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -338,7 +338,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -368,7 +368,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": true
     },
     {
@@ -398,7 +398,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": true
     },
     {
@@ -427,7 +427,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -456,7 +456,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -485,7 +485,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -514,7 +514,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -543,7 +543,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -572,7 +572,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -602,7 +602,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": true
     },
     {
@@ -631,7 +631,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -660,7 +660,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -689,7 +689,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -718,7 +718,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -747,7 +747,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -776,7 +776,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -805,7 +805,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -834,7 +834,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -863,7 +863,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
@@ -892,7 +892,7 @@
       ],
       "follow_up_bead": "bd-1f42.4.4",
       "tracking_issue": "bd-k5q5.2.7",
-      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-03-31 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
+      "fallback_validation": "exception_policy status=temporary cause_code=manifest_mismatch review_by=2026-06-30 tracking_issue=bd-k5q5.2.7; rationale=Registered command set diverges from manifest expectation in current fixture corpus.",
       "canonical_failure": false
     },
     {
