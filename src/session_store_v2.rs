@@ -19,6 +19,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 fn secure_open_options() -> OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut opts = OpenOptions::new();
     #[cfg(unix)]
     {

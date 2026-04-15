@@ -617,6 +617,7 @@ fn check_dir(cat: CheckCategory, label: &str, dir: &Path, fix: bool, findings: &
 // ── Check: Auth ─────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn check_auth(fix: bool, findings: &mut Vec<Finding>) {
     let cat = CheckCategory::Auth;
     let auth_path = Config::auth_path();

@@ -12,6 +12,25 @@ Repository: <https://github.com/Dicklesworthstone/pi_agent_rust>
 
 ---
 
+## [v0.1.11] — 2026-04-15 — Release
+
+### Bug Fixes
+
+- **Fix Windows build**: Add `libsqlite3-sys` with `bundled-windows` as a direct
+  dependency. The published `sqlmodel-sqlite` crate was missing the
+  `[target.'cfg(windows)'.dependencies]` section, causing
+  `LINK : fatal error LNK1181: cannot open input file 'sqlite3.lib'` on MSVC.
+  Fixes [#48](https://github.com/Dicklesworthstone/pi_agent_rust/issues/48).
+- **Fix Windows compiler warnings**: Suppress platform-conditional unused
+  variable/mut warnings in `rpc.rs`, `tools.rs`, `doctor.rs`, and
+  `session_store_v2.rs` using targeted `#[cfg_attr(not(unix), ...)]` attributes.
+
+### Dependencies
+
+- Bump `sqlmodel-sqlite` and `sqlmodel-core` from 0.2.0 to 0.2.1.
+
+---
+
 ## [Unreleased] (after v0.1.9)
 
 Commits since v0.1.9 tag (2026-03-12) through 2026-03-21.

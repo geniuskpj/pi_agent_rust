@@ -3420,6 +3420,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsqlite3-sys"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
 name = "linked-hash-map"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4132,6 +4143,7 @@ dependencies = [
  "insta",
  "json5",
  "jsonschema",
+ "libsqlite3-sys",
  "loom",
  "md-5",
  "memchr",
@@ -5351,9 +5363,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-core"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70c9b2cdde79e76c1274b7f763f76e1de2f5afc1a2e4dee75a3dc55d97e9e0cd"
+checksum = "fb2f49b5c488c61beade44e35a8d94a457496cca24fa880229011a27650cc0ee"
 dependencies = [
  "asupersync",
  "regex",
@@ -5364,9 +5376,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-sqlite"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c81ce58c1c04644ce0a7f49e90a9f359f4b7edfa15ff3003a1b07b518558b674"
+checksum = "6c4ef11a2cf1875e0537b16b91768bb446f9cd620a1fd100ced7790a4b30d60e"
 dependencies = [
  "asupersync",
  "serde",
@@ -6387,6 +6399,12 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vergen"

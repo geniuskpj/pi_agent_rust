@@ -4210,6 +4210,7 @@ async fn ingest_bash_rpc_chunk(
                         }
                         #[cfg(not(unix))]
                         {
+                            drop(file);
                             Ok(None)
                         }
                     }
@@ -4231,6 +4232,7 @@ async fn ingest_bash_rpc_chunk(
             {
                 Ok(mut file) => {
                     // Validate identity to prevent TOCTOU/symlink attacks
+                    #[cfg_attr(not(unix), allow(unused_mut))]
                     let mut identity_match = true;
                     #[cfg(unix)]
                     if let Some(expected) = expected_inode {

@@ -4691,6 +4691,7 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
                         }
                         #[cfg(not(unix))]
                         {
+                            drop(file);
                             Ok(None)
                         }
                     }
@@ -4710,6 +4711,7 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
                 .await
             {
                 Ok(mut file) => {
+                    #[cfg_attr(not(unix), allow(unused_mut))]
                     let mut identity_match = true;
                     #[cfg(unix)]
                     if let Some(expected) = expected_inode {
