@@ -4305,11 +4305,8 @@ async fn ingest_bash_rpc_chunk(
             }
         }
     }
-    if abandon_spill_file {
+    if abandon_spill_file || close_spill_file {
         abandon_bash_rpc_spill_file(temp_file, temp_file_path, spill_failed);
-    }
-    if close_spill_file {
-        *temp_file = None;
     }
 
     // Update memory buffer

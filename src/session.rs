@@ -1826,6 +1826,15 @@ impl Session {
         if persisted_count == 0 {
             return true;
         }
+        // If the backing file disappeared between saves, recover by rewriting
+        // the full in-memory session instead of attempting an append.
+        if self
+            .path
+            .as_ref()
+            .is_some_and(|path| path.try_exists().is_ok_and(|exists| !exists))
+        {
+            return true;
+        }
         // Header was modified since last save.
         if self.header_dirty {
             return true;
@@ -2102,13 +2111,35 @@ impl Session {
     }
 
     pub fn effective_model_for_current_path(&self) -> Option<(String, String)> {
-        self.latest_model_change_for_current_path()
-            .or_else(|| self.header.branch_fallback_model_pair())
+        // If there's an explicit model change on the current path, use it
+        if let Some(model) = self.latest_model_change_for_current_path() {
+            return Some(model);
+        }
+        // If other branches have model changes but this one doesn't, return None
+        // so the header gets cleared (prevents stale metadata)
+        if self.has_any_model_change() {
+            return None;
+        }
+        // No model changes anywhere - use fallback or header values
+        self.header
+            .branch_fallback_model_pair()
+            .or_else(|| self.header.provider.clone().zip(self.header.model_id.clone()))
     }
 
     pub fn effective_thinking_level_for_current_path(&self) -> Option<String> {
-        self.latest_thinking_level_for_current_path()
-            .or_else(|| self.header.branch_fallback_thinking_level())
+        // If there's an explicit thinking level change on the current path, use it
+        if let Some(level) = self.latest_thinking_level_for_current_path() {
+            return Some(level);
+        }
+        // If other branches have thinking level changes but this one doesn't, return None
+        // so the header gets cleared (prevents stale metadata)
+        if self.has_any_thinking_level_change() {
+            return None;
+        }
+        // No thinking level changes anywhere - use fallback or header value
+        self.header
+            .branch_fallback_thinking_level()
+            .or_else(|| self.header.thinking_level.clone())
     }
 
     fn has_any_model_change(&self) -> bool {
@@ -5713,7 +5744,7 @@ mod tests {
                 if entry.get("type").and_then(Value::as_str) == Some("model_change") {
                     Some((
                         entry.get("provider").and_then(Value::as_str),
-                        entry.get("model_id").and_then(Value::as_str),
+                        entry.get("modelId").and_then(Value::as_str),
                     ))
                 } else {
                     None
@@ -7506,6 +7537,27 @@ mod tests {
         assert_eq!(session.header.provider.as_deref(), Some("anthropic"));
         assert_eq!(session.header.model_id.as_deref(), Some("claude-opus"));
         assert_eq!(session.header.thinking_level.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn test_effective_model_and_thinking_use_current_header_without_change_entries() {
+        let mut session = Session::in_memory();
+        session.set_model_header(
+            Some("openai".to_string()),
+            Some("gpt-5.4".to_string()),
+            Some("medium".to_string()),
+        );
+
+        assert_eq!(
+            session.effective_model_for_current_path(),
+            Some(("openai".to_string(), "gpt-5.4".to_string()))
+        );
+        assert_eq!(
+            session
+                .effective_thinking_level_for_current_path()
+                .as_deref(),
+            Some("medium")
+        );
     }
 
     #[test]
@@ -10245,6 +10297,29 @@ mod tests {
 
         run_async(async { session.save().await }).unwrap();
         assert_eq!(session.persisted_entry_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn crash_missing_session_file_forces_full_rewrite_recovery() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut session = Session::create();
+        session.session_dir = Some(temp_dir.path().to_path_buf());
+
+        session.append_message(make_test_message("msg A"));
+        run_async(async { session.save().await }).unwrap();
+
+        let path = session.path.clone().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(session.should_full_rewrite());
+
+        session.append_message(make_test_message("msg B"));
+        run_async(async { session.save().await }).unwrap();
+
+        let reloaded =
+            run_async(async { Session::open(path.to_string_lossy().as_ref()).await }).unwrap();
+        assert_eq!(reloaded.entries.len(), 2);
+        assert_eq!(session.persisted_entry_count.load(Ordering::SeqCst), 2);
+        assert_eq!(session.appends_since_checkpoint, 0);
     }
 
     #[test]

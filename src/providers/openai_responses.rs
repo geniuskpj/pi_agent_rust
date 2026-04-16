@@ -2480,7 +2480,7 @@ mod tests {
         );
         assert_eq!(
             captured.headers.get("accept").map(String::as_str),
-            Some("text/event-stream")
+            Some("text/event-stream, application/x-ndjson, application/ndjson")
         );
 
         let body: Value = serde_json::from_str(&captured.body).expect("request body json");

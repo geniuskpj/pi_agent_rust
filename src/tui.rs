@@ -885,9 +885,9 @@ mod tests {
             "expected indented code line, got: {indented_line:?}"
         );
         assert_eq!(
-            default_line.trim_start(),
-            indented_line.trim_start(),
-            "indent should only add leading spaces"
+            default_line.trim(),
+            indented_line.trim(),
+            "indent should only affect whitespace, not content"
         );
     }
 

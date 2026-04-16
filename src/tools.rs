@@ -792,6 +792,19 @@ pub fn fuzz_normalize_dot_segments(path: &Path) -> PathBuf {
     normalize_dot_segments(path)
 }
 
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 fn escape_file_tag_attribute(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -1499,17 +1512,18 @@ impl Tool for ReadTool {
                 ));
             }
 
-            // For images, we must read the whole file to resize/encode.
-            // We guard with metadata (when available) and enforce IMAGE_MAX_BYTES
-            // using take() to avoid reading more than necessary into memory.
+            // For images, allow a larger on-disk source as long as it stays
+            // within the read-tool input bound; resize/re-encode may still
+            // bring the API payload under IMAGE_MAX_BYTES.
+            let max_image_input_bytes = usize::try_from(READ_TOOL_MAX_BYTES).unwrap_or(usize::MAX);
             if let Some(meta) = &meta {
-                if meta.len() > IMAGE_MAX_BYTES as u64 {
+                if meta.len() > READ_TOOL_MAX_BYTES {
                     return Err(Error::tool(
                         "read",
                         format!(
                             "Image is too large ({} bytes). Max allowed is {} bytes.",
                             meta.len(),
-                            IMAGE_MAX_BYTES
+                            READ_TOOL_MAX_BYTES
                         ),
                     ));
                 }
@@ -1517,20 +1531,20 @@ impl Tool for ReadTool {
             let mut all_bytes = Vec::with_capacity(initial_read);
             all_bytes.extend_from_slice(initial_bytes);
 
-            let remaining_limit = IMAGE_MAX_BYTES.saturating_sub(initial_read);
+            let remaining_limit = max_image_input_bytes.saturating_sub(initial_read);
             let mut limiter = file.take((remaining_limit as u64).saturating_add(1));
             limiter
                 .read_to_end(&mut all_bytes)
                 .await
                 .map_err(|e| Error::tool("read", format!("Failed to read image: {e}")))?;
 
-            if all_bytes.len() > IMAGE_MAX_BYTES {
+            if all_bytes.len() > max_image_input_bytes {
                 return Err(Error::tool(
                     "read",
                     format!(
                         "Image is too large ({} bytes). Max allowed is {} bytes.",
                         all_bytes.len(),
-                        IMAGE_MAX_BYTES
+                        READ_TOOL_MAX_BYTES
                     ),
                 ));
             }
@@ -1540,6 +1554,23 @@ impl Tool for ReadTool {
             } else {
                 ResizedImage::original(all_bytes, mime_type)
             };
+
+            if resized.bytes.len() > IMAGE_MAX_BYTES {
+                let message = if resized.resized {
+                    format!(
+                        "Image is too large ({} bytes) after resizing. Max allowed is {} bytes.",
+                        resized.bytes.len(),
+                        IMAGE_MAX_BYTES
+                    )
+                } else {
+                    format!(
+                        "Image is too large ({} bytes). Max allowed is {} bytes.",
+                        resized.bytes.len(),
+                        IMAGE_MAX_BYTES
+                    )
+                };
+                return Err(Error::tool("read", message));
+            }
 
             let base64_data =
                 base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &resized.bytes);
@@ -3153,6 +3184,7 @@ impl Tool for EditTool {
             temp_file
                 .persist(&absolute_path_clone)
                 .map_err(|e| e.error)?;
+            sync_parent_dir(&absolute_path_clone)?;
             Ok(())
         })
         .await
@@ -3293,6 +3325,7 @@ impl Tool for WriteTool {
 
             // Persist (atomic rename)
             temp_file.persist(&path_clone).map_err(|e| e.error)?;
+            sync_parent_dir(&path_clone)?;
             Ok(())
         })
         .await
@@ -4069,14 +4102,17 @@ impl Tool for FindTool {
         let tick = Duration::from_millis(10);
         let start_time = std::time::Instant::now();
         let timeout_ms = 60_000; // 60 seconds
+        let mut timed_out = false;
 
         let status = loop {
             // Check if process is done
             match guard.try_wait_child() {
-                Ok(Some(status)) => break status,
+                Ok(Some(status)) => break Some(status),
                 Ok(None) => {
                     if start_time.elapsed().as_millis() > timeout_ms {
-                        return Err(Error::tool("find", "Command timed out after 60 seconds"));
+                        timed_out = true;
+                        let _ = guard.kill();
+                        break None;
                     }
                     let now = AgentCx::for_current_or_request()
                         .cx()
@@ -4096,6 +4132,11 @@ impl Tool for FindTool {
             .join()
             .map_err(|_| Error::tool("find", "fd stderr reader thread panicked"))?
             .map_err(|err| Error::tool("find", format!("Failed to read fd stderr: {err}")))?;
+
+        if timed_out {
+            return Err(Error::tool("find", "Command timed out after 60 seconds"));
+        }
+        let status = status.expect("fd exit status after successful completion");
 
         let mut stdout = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
         if stdout_bytes.len() as u64 > READ_TOOL_MAX_BYTES {
@@ -6396,6 +6437,71 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "image-resize")]
+    #[test]
+    fn test_read_resizes_large_source_image_before_api_limit_check() {
+        asupersync::test_utils::run_test(|| async {
+            use image::codecs::png::PngEncoder;
+            use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage};
+
+            let tmp = tempfile::tempdir().unwrap();
+            let image = RgbImage::from_fn(2600, 2600, |x, y| {
+                let seed = x.wrapping_mul(1_973)
+                    ^ y.wrapping_mul(9_277)
+                    ^ x.rotate_left(7)
+                    ^ y.rotate_left(13);
+                Rgb([seed as u8, (seed >> 8) as u8, (seed >> 16) as u8])
+            });
+
+            let mut png_bytes = Vec::new();
+            PngEncoder::new(&mut png_bytes)
+                .write_image(
+                    image.as_raw(),
+                    image.width(),
+                    image.height(),
+                    ExtendedColorType::Rgb8,
+                )
+                .unwrap();
+
+            assert!(
+                png_bytes.len() > IMAGE_MAX_BYTES,
+                "fixture must exceed API image limit to exercise resize path"
+            );
+            assert!(
+                png_bytes.len() < READ_TOOL_MAX_BYTES as usize,
+                "fixture must stay within read-tool input bound"
+            );
+
+            let image_path = tmp.path().join("large.png");
+            std::fs::write(&image_path, &png_bytes).unwrap();
+
+            let tool = ReadTool::new(tmp.path());
+            let out = tool
+                .execute(
+                    "t",
+                    serde_json::json!({ "path": image_path.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            assert!(!out.is_error, "resizable large images should succeed");
+            assert!(
+                out.content
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::Image(_))),
+                "expected an image attachment after resizing"
+            );
+
+            let text = get_text(&out.content);
+            assert!(text.contains("Read image file"));
+            assert!(
+                text.contains("displayed at"),
+                "expected resize note in read output, got: {text}"
+            );
+        });
+    }
+
     #[test]
     fn test_read_blocked_images() {
         asupersync::test_utils::run_test(|| async {
@@ -6675,21 +6781,7 @@ mod tests {
 
             let meta = std::fs::metadata(&path).unwrap();
             let mode = meta.permissions().mode();
-            // Check for rw-r--r-- (0o644)
-            // Note: umask might affect this, but 0o644 is the target baseline.
-            // Often umask is 0o022, resulting in 0o644.
-            // If umask is 0o077, it would be 0o600.
-            // However, the key fix was changing from tempfile's default 0o600 to 0o644 (subject to umask).
-            // So we strictly check that it is NOT 0o600 (unless umask forces it, which is unlikely in standard test envs).
-            // Better: we explicitly set 0o644 in the code.
-            // If we run this where umask is 0, we expect 0o644.
-            // We can just check that group/other read bits are set if umask permits.
-            // But we don't know umask.
-            // The fix was:
-            // temp_file.as_file().set_permissions(std::fs::Permissions::from_mode(0o644));
-            // This sets the mode on the file descriptor, ignoring umask? No, set_permissions usually ignores umask.
-            // Let's assert it is exactly 0o644.
-            assert_eq!(mode & 0o777, 0o644, "Expected 0o644 permissions");
+            assert_eq!(mode & 0o777, 0o600, "Expected private 0o600 permissions");
         });
     }
 
