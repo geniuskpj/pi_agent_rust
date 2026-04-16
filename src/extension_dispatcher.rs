@@ -14,7 +14,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use asupersync::Cx;
-use asupersync::channel::oneshot;
 use asupersync::time::{sleep, wall_now};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -2874,9 +2873,18 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
             }
         }
 
+        struct CancelGuard(Arc<AtomicBool>);
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                self.0.store(true, AtomicOrdering::SeqCst);
+            }
+        }
+
         let cmd = cmd.to_string();
         let args = args.clone();
-        let (tx, mut rx) = oneshot::channel();
+        let (tx, rx) = mpsc::sync_channel::<std::result::Result<serde_json::Value, String>>(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_worker = Arc::clone(&cancel);
         let call_id_for_error = call_id.to_string();
 
         thread::spawn(move || {
@@ -2977,6 +2985,13 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         break status;
                     }
 
+                    if !killed && cancel_worker.load(AtomicOrdering::SeqCst) {
+                        killed = true;
+                        crate::tools::kill_process_group_tree(Some(pid));
+                        let _ = child.kill();
+                        break child.wait().map_err(|err| err.to_string())?;
+                    }
+
                     if let Some(timeout_ms) = timeout_ms {
                         if !killed && start.elapsed() >= Duration::from_millis(timeout_ms) {
                             killed = true;
@@ -3027,8 +3042,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 }))
             })();
 
-            let cx = Cx::for_request();
-            if tx.send(&cx, result).is_err() {
+            if tx.send(result).is_err() {
                 tracing::trace!(
                     call_id = %call_id_for_error,
                     "Exec hostcall result dropped before completion"
@@ -3036,17 +3050,35 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
             }
         });
 
-        let cx = Cx::for_request();
-        match rx.recv(&cx).await {
-            Ok(Ok(value)) => HostcallOutcome::Success(value),
-            Ok(Err(err)) => HostcallOutcome::Error {
-                code: "io".to_string(),
-                message: err,
-            },
-            Err(_) => HostcallOutcome::Error {
-                code: "internal".to_string(),
-                message: "exec task cancelled".to_string(),
-            },
+        let _guard = CancelGuard(Arc::clone(&cancel));
+
+        loop {
+            if !self.js_runtime().is_hostcall_active(call_id) {
+                cancel.store(true, AtomicOrdering::SeqCst);
+                return HostcallOutcome::Error {
+                    code: "internal".to_string(),
+                    message: "exec task cancelled".to_string(),
+                };
+            }
+
+            match rx.try_recv() {
+                Ok(Ok(value)) => return HostcallOutcome::Success(value),
+                Ok(Err(err)) => {
+                    return HostcallOutcome::Error {
+                        code: "io".to_string(),
+                        message: err,
+                    };
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    extension_wait_sleep(Duration::from_millis(25)).await;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return HostcallOutcome::Error {
+                        code: "internal".to_string(),
+                        message: "exec task cancelled".to_string(),
+                    };
+                }
+            }
         }
     }
 

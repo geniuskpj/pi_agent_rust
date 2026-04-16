@@ -22794,8 +22794,17 @@ async fn dispatch_hostcall_exec_ref_with_limit(
         }
     }
 
+    struct CancelGuard(Arc<AtomicBool>);
+    impl Drop for CancelGuard {
+        fn drop(&mut self) {
+            self.0.store(true, AtomicOrdering::SeqCst);
+        }
+    }
+
     let cmd = cmd.to_string();
-    let (tx, mut rx) = oneshot::channel();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<Value, String>>(1);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_worker = Arc::clone(&cancel);
     thread::spawn(move || {
         let result: std::result::Result<Value, String> = (|| {
             let mut command = Command::new(&cmd);
@@ -22844,6 +22853,13 @@ async fn dispatch_hostcall_exec_ref_with_limit(
 
                 if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
                     break status;
+                }
+
+                if !killed && cancel_worker.load(AtomicOrdering::SeqCst) {
+                    killed = true;
+                    crate::tools::kill_process_group_tree(Some(pid));
+                    let _ = child.kill();
+                    break child.wait().map_err(|err| err.to_string())?;
                 }
 
                 if let Some(timeout_ms) = timeout_ms {
@@ -22895,21 +22911,40 @@ async fn dispatch_hostcall_exec_ref_with_limit(
             }))
         })();
 
-        let cx = Cx::for_request();
-        let _ = tx.send(&cx, result);
+        let _ = tx.send(result);
     });
 
-    let cx = Cx::for_request();
-    match rx.recv(&cx).await {
-        Ok(Ok(value)) => HostcallOutcome::Success(value),
-        Ok(Err(err)) => HostcallOutcome::Error {
-            code: "io".to_string(),
-            message: err,
-        },
-        Err(_) => HostcallOutcome::Error {
-            code: "internal".to_string(),
-            message: "exec task cancelled".to_string(),
-        },
+    let _guard = CancelGuard(Arc::clone(&cancel));
+
+    loop {
+        if let Some(runtime) = runtime {
+            if !runtime.is_hostcall_active(call_id) {
+                cancel.store(true, AtomicOrdering::SeqCst);
+                return HostcallOutcome::Error {
+                    code: "internal".to_string(),
+                    message: "exec task cancelled".to_string(),
+                };
+            }
+        }
+
+        match rx.try_recv() {
+            Ok(Ok(value)) => return HostcallOutcome::Success(value),
+            Ok(Err(err)) => {
+                return HostcallOutcome::Error {
+                    code: "io".to_string(),
+                    message: err,
+                };
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                extension_wait_sleep(Duration::from_millis(25)).await;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return HostcallOutcome::Error {
+                    code: "internal".to_string(),
+                    message: "exec task cancelled".to_string(),
+                };
+            }
+        }
     }
 }
 
