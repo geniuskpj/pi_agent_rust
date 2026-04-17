@@ -28584,10 +28584,20 @@ impl ExtensionManager {
 
         let results = futures::future::join_all(calls).await;
 
+        // Walk every result so each failing extension gets its own
+        // attributed warn! line before we bubble. The sequential code
+        // also short-circuited on the first error, but because it was
+        // sequential the later extensions never ran — here they did,
+        // and we want the operator to see which ones also failed.
         let mut response = None;
+        let mut first_err: Option<Error> = None;
         for (ext_name, result) in results {
             match result {
-                Ok(Some(value)) => response = Some(value),
+                Ok(Some(value)) => {
+                    if first_err.is_none() {
+                        response = Some(value);
+                    }
+                }
                 Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(
@@ -28597,9 +28607,14 @@ impl ExtensionManager {
                         error = %err,
                         "WASM extension event dispatch failed"
                     );
-                    return Err(err);
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
                 }
             }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
         }
         Ok(response)
     }
