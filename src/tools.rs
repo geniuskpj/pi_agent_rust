@@ -128,8 +128,8 @@ pub const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 
 const BASH_TERMINATE_GRACE_SECS: u64 = 5;
 
-/// Hard limit for bash output file size (100MB) to prevent disk exhaustion DoS.
-pub(crate) const BASH_FILE_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+/// Hard limit for bash output file size (1GB) to prevent disk exhaustion DoS.
+pub(crate) const BASH_FILE_LIMIT_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
 
 /// Result of truncation operation.
 #[derive(Debug, Clone, Serialize)]
@@ -2153,24 +2153,30 @@ pub(crate) async fn run_bash_command(
         let end_line = truncation.total_lines;
 
         let display_path = full_output_path.as_deref().unwrap_or("undefined");
+        let file_limit_hit = bash_output.total_bytes > BASH_FILE_LIMIT_BYTES;
+        let output_qualifier = if file_limit_hit {
+            format!("Partial output (capped at {})", format_size(BASH_FILE_LIMIT_BYTES))
+        } else {
+            "Full output".to_string()
+        };
 
         if truncation.last_line_partial {
             let last_line_size = format_size(full_output_last_line_len);
             let _ = write!(
                 output_text,
-                "\n\n[Showing last {} of line {end_line} (line is {last_line_size}). Full output: {display_path}]",
+                "\n\n[Showing last {} of line {end_line} (line is {last_line_size}). {output_qualifier}: {display_path}]",
                 format_size(truncation.output_bytes)
             );
         } else if truncation.truncated_by == Some(TruncatedBy::Lines) {
             let _ = write!(
                 output_text,
-                "\n\n[Showing lines {start_line}-{end_line} of {}. Full output: {display_path}]",
+                "\n\n[Showing lines {start_line}-{end_line} of {}. {output_qualifier}: {display_path}]",
                 truncation.total_lines
             );
         } else {
             let _ = write!(
                 output_text,
-                "\n\n[Showing lines {start_line}-{end_line} of {} ({} limit). Full output: {display_path}]",
+                "\n\n[Showing lines {start_line}-{end_line} of {} ({} limit). {output_qualifier}: {display_path}]",
                 truncation.total_lines,
                 format_size(DEFAULT_MAX_BYTES)
             );
