@@ -15289,7 +15289,8 @@ impl ExtensionEventName {
     /// **Actionable** events (not listed here) still use the longer
     /// budget so handlers have room to do meaningful work before a
     /// decision is made:
-    /// `BeforeAgentStart`, `Context`, `ToolCall`, `Input`,
+    /// `BeforeAgentStart`, `Context`, `ToolCall`, `ToolResult` (can
+    /// modify the tool's result payload), `Input`,
     /// `SessionBeforeSwitch`, `SessionBeforeFork`, `SessionBeforeCompact`,
     /// `SessionBeforeTree`, `ResourcesDiscover`.
     #[must_use]
@@ -15307,7 +15308,6 @@ impl ExtensionEventName {
                 | Self::ToolExecutionStart
                 | Self::ToolExecutionUpdate
                 | Self::ToolExecutionEnd
-                | Self::ToolResult
                 | Self::SessionStart
                 | Self::SessionSwitch
                 | Self::SessionFork
@@ -51066,7 +51066,6 @@ mod tests {
             ExtensionEventName::ToolExecutionStart,
             ExtensionEventName::ToolExecutionUpdate,
             ExtensionEventName::ToolExecutionEnd,
-            ExtensionEventName::ToolResult,
             ExtensionEventName::SessionStart,
             ExtensionEventName::SessionSwitch,
             ExtensionEventName::SessionFork,
@@ -51093,11 +51092,15 @@ mod tests {
     fn actionable_events_use_full_timeout() {
         // These events feed a decision (block/cancel/transform), so a
         // handler needs room to do real work before a verdict is expected.
+        // ToolResult belongs here per its ExtensionEvent docstring
+        // ("can modify result") — the dispatcher consumes handler-returned
+        // changes to the tool result content.
         let actionable_events = [
             ExtensionEventName::Input,
             ExtensionEventName::BeforeAgentStart,
             ExtensionEventName::Context,
             ExtensionEventName::ToolCall,
+            ExtensionEventName::ToolResult,
             ExtensionEventName::SessionBeforeSwitch,
             ExtensionEventName::SessionBeforeFork,
             ExtensionEventName::SessionBeforeCompact,

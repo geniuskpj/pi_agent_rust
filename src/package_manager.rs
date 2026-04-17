@@ -575,19 +575,28 @@ impl PackageManager {
     ///
     /// See [`Self::reconcile_lockfile_sync`] for semantics. Each pruned
     /// entry is recorded in `package-trust-audit.jsonl` with
-    /// `reason_codes: ["reconciled"]`.
+    /// `reason_codes: ["reconciled"]`. The two scopes are reconciled
+    /// independently — a failure in one (e.g. a corrupt lockfile) does
+    /// not block the other.
     pub async fn reconcile_all_lockfiles(&self) -> Result<Vec<PackageLockEntry>> {
         let this = self.clone();
         let (tx, mut rx) = oneshot::channel();
 
         let handle = thread::spawn(move || {
-            let res = (|| -> Result<Vec<PackageLockEntry>> {
-                let mut pruned = this.reconcile_lockfile_sync(PackageScope::User)?;
-                pruned.extend(this.reconcile_lockfile_sync(PackageScope::Project)?);
-                Ok(pruned)
-            })();
+            let mut pruned = Vec::new();
+            for scope in [PackageScope::User, PackageScope::Project] {
+                match this.reconcile_lockfile_sync(scope) {
+                    Ok(mut entries) => pruned.append(&mut entries),
+                    Err(err) => tracing::warn!(
+                        event = "pkg.lockfile.reconcile.scope_failed",
+                        scope = scope_label(scope),
+                        error = %err,
+                        "Lockfile reconciliation failed for this scope; other scopes will still be reconciled"
+                    ),
+                }
+            }
             let cx = AgentCx::for_request();
-            let _ = tx.send(cx.cx(), res);
+            let _ = tx.send(cx.cx(), Ok::<_, Error>(pruned));
         });
 
         let cx = AgentCx::for_request();
@@ -982,11 +991,16 @@ impl PackageManager {
         let live_sources: Vec<PackageEntry> = match scope {
             PackageScope::User => list_packages_in_settings(&roots.global_settings_path)?,
             PackageScope::Project => {
-                if roots.project_settings_enabled {
-                    list_packages_in_settings(&roots.project_settings_path)?
-                } else {
-                    Vec::new()
+                if !roots.project_settings_enabled {
+                    // A config override is active, so project-level
+                    // settings are intentionally bypassed. We don't
+                    // have an authoritative "live" set for the project
+                    // scope — pruning based on an empty set would wipe
+                    // the project lockfile, which is exactly the wrong
+                    // outcome. Skip reconciliation for this scope.
+                    return Ok(Vec::new());
                 }
+                list_packages_in_settings(&roots.project_settings_path)?
             }
             PackageScope::Temporary => return Ok(Vec::new()),
         };
