@@ -5145,9 +5145,25 @@ mod tests {
         let choice = provider_choice_from_token("10").expect("provider 10");
         assert_eq!(choice.provider, "openrouter");
         assert_eq!(choice.kind, SetupCredentialKind::ApiKey);
+        let choice = provider_choice_from_token("11").expect("provider 11");
+        assert_eq!(choice.provider, "cohere");
+        assert_eq!(choice.kind, SetupCredentialKind::ApiKey);
+
+        let choice = provider_choice_from_token("12").expect("provider 12");
+        assert_eq!(choice.provider, "groq");
+        assert_eq!(choice.kind, SetupCredentialKind::ApiKey);
+
+        let choice = provider_choice_from_token("13").expect("provider 13");
+        assert_eq!(choice.provider, "deepseek");
+        assert_eq!(choice.kind, SetupCredentialKind::ApiKey);
+
+        let choice = provider_choice_from_token("14").expect("provider 14");
+        assert_eq!(choice.provider, "mistral");
+        assert_eq!(choice.kind, SetupCredentialKind::ApiKey);
+
         // Out of range
         assert!(provider_choice_from_token("0").is_none());
-        assert!(provider_choice_from_token("11").is_none());
+        assert!(provider_choice_from_token("15").is_none());
     }
 
     #[test]
