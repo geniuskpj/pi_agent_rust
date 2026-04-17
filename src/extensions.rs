@@ -57,6 +57,13 @@ use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
 
+struct CancelGuard(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn extension_wait_now() -> asupersync::types::Time {
     Cx::current()
         .and_then(|current| current.timer_driver())
@@ -22797,17 +22804,11 @@ async fn dispatch_hostcall_exec_ref_with_limit(
         }
     }
 
-    struct CancelGuard(Arc<AtomicBool>);
-    impl Drop for CancelGuard {
-        fn drop(&mut self) {
-            self.0.store(true, AtomicOrdering::SeqCst);
-        }
-    }
-
     let cmd = cmd.to_string();
     let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<Value, String>>(1);
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_worker = Arc::clone(&cancel);
+
     thread::spawn(move || {
         let result: std::result::Result<Value, String> = (|| {
             let mut command = Command::new(&cmd);

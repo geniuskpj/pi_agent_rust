@@ -39,6 +39,13 @@ use crate::hostcall_io_uring_lane::{
 use crate::scheduler::{Clock as SchedulerClock, HostcallOutcome, WallClock};
 use crate::tools::ToolRegistry;
 
+struct CancelGuard(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn extension_wait_now() -> asupersync::types::Time {
     Cx::current()
         .and_then(|cx| cx.timer_driver())
@@ -2870,13 +2877,6 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         };
                     }
                 }
-            }
-        }
-
-        struct CancelGuard(Arc<AtomicBool>);
-        impl Drop for CancelGuard {
-            fn drop(&mut self) {
-                self.0.store(true, AtomicOrdering::SeqCst);
             }
         }
 
