@@ -8222,7 +8222,7 @@ mod tests {
         index.index_session(&session).expect("index session");
         let cwd_display = session.header.cwd.clone();
         let cwd = std::path::Path::new(&cwd_display);
-        let project_session_dir = temp.path().join(encode_cwd(&cwd));
+        let project_session_dir = temp.path().join(encode_cwd(cwd));
         let moved_project_dir = temp.path().join("moved-project-dir");
 
         std::fs::rename(&project_session_dir, &moved_project_dir)

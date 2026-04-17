@@ -473,7 +473,7 @@ async fn scenario_tool_call(
     let invoke_kind_js = js_literal(&invoke_kind)?;
     let invoke_name_js = js_literal(&invoke_name)?;
     let call_id = js_literal(&"bench-call-1")?;
-    let input = js_literal(&json!({}))?;
+    let input = js_literal(&json!({"name": "bench"}))?;
     let command_args = js_literal(&json!([]))?;
     let ctx = js_literal(&json!({"hasUI": false, "cwd": js_cwd}))?;
     let iterations_js = js_literal(&iterations)?;

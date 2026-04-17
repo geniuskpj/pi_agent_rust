@@ -284,19 +284,6 @@ pub fn truncate_head(
         let line_end_with_nl = next_newline.map_or(content.len(), |idx| current_offset + idx + 1);
 
         if line_end_without_nl > max_bytes {
-            let mut byte_limit = max_bytes.min(content.len());
-            if byte_limit < current_offset {
-                truncated_by = Some(TruncatedBy::Bytes);
-                break;
-            }
-            while byte_limit > current_offset && !content.is_char_boundary(byte_limit) {
-                byte_limit -= 1;
-            }
-            if byte_limit > current_offset {
-                byte_count = byte_limit;
-                line_count += 1;
-                last_line_partial = true;
-            }
             truncated_by = Some(TruncatedBy::Bytes);
             break;
         }
@@ -429,15 +416,13 @@ pub fn truncate_tail(
                 // Truncate!
                 // Try to take a partial line if we haven't collected any full lines yet.
                 let remaining = max_bytes.saturating_sub(byte_count);
-                if remaining > 0 {
+                if line_count == 0 && remaining > 0 {
                     let chunk = &content[line_start..start_idx];
                     let truncated_chunk = truncate_string_to_bytes_from_end(chunk, remaining);
                     if !truncated_chunk.is_empty() {
                         partial_output = Some(truncated_chunk);
                         partial_line_truncated = true;
-                        if line_count == 0 {
-                            last_line_partial = true;
-                        }
+                        last_line_partial = true;
                     }
                 }
                 truncated_by = Some(TruncatedBy::Bytes);
@@ -6474,7 +6459,7 @@ mod tests {
                     ^ y.wrapping_mul(9_277)
                     ^ x.rotate_left(7)
                     ^ y.rotate_left(13);
-                Rgb([seed as u8, (seed >> 8) as u8, (seed >> 16) as u8])
+                Rgb([u8::try_from(seed % 256).unwrap_or(0), u8::try_from((seed >> 8) % 256).unwrap_or(0), u8::try_from((seed >> 16) % 256).unwrap_or(0)])
             });
 
             let mut png_bytes = Vec::new();
@@ -6492,7 +6477,7 @@ mod tests {
                 "fixture must exceed API image limit to exercise resize path"
             );
             assert!(
-                png_bytes.len() < READ_TOOL_MAX_BYTES as usize,
+                png_bytes.len() < usize::try_from(READ_TOOL_MAX_BYTES).unwrap_or(usize::MAX),
                 "fixture must stay within read-tool input bound"
             );
 
