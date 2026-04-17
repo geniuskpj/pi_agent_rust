@@ -3685,8 +3685,16 @@ impl Tool for GrepTool {
         let mut stderr_bytes = Vec::new();
 
         let tick = Duration::from_millis(10);
+        let mut cx_cancelled = false;
 
         let exit_status = loop {
+            let agent_cx = AgentCx::for_current_or_request();
+            let cx = agent_cx.cx();
+            if cx.checkpoint().is_err() {
+                cx_cancelled = true;
+                break None;
+            }
+
             drain_rg_stdout(
                 &stdout_rx,
                 &mut matches,
@@ -3703,10 +3711,7 @@ impl Tool for GrepTool {
             match guard.try_wait_child() {
                 Ok(Some(status)) => break Some(status),
                 Ok(None) => {
-                    let now = AgentCx::for_current_or_request()
-                        .cx()
-                        .timer_driver()
-                        .map_or_else(wall_now, |timer| timer.now());
+                    let now = cx.timer_driver().map_or_else(wall_now, |timer| timer.now());
                     sleep(now, tick).await;
                 }
                 Err(e) => return Err(Error::tool("grep", e.to_string())),
@@ -3721,7 +3726,7 @@ impl Tool for GrepTool {
             scan_limit,
         );
 
-        let code = if match_scan_limit_reached {
+        let code = if match_scan_limit_reached || cx_cancelled {
             // Avoid buffering unbounded stdout/stderr once we've hit the match limit.
             // `kill()` terminates the process, and we reap it in a background thread
             // so the stdout reader threads can exit promptly without blocking this task.
@@ -3739,7 +3744,7 @@ impl Tool for GrepTool {
         // bounded channel can fill and block the sender thread, causing join()
         // to hang after ripgrep has already exited.
         while !stdout_thread.is_finished() || !stderr_thread.is_finished() {
-            if match_scan_limit_reached {
+            if match_scan_limit_reached || cx_cancelled {
                 while stdout_rx.try_recv().is_ok() {}
             } else {
                 drain_rg_stdout(
@@ -3752,6 +3757,10 @@ impl Tool for GrepTool {
             }
             drain_rg_stderr(&stderr_rx, &mut stderr_bytes)?;
             sleep(wall_now(), Duration::from_millis(1)).await;
+        }
+
+        if cx_cancelled {
+            return Err(Error::tool("grep", "Command cancelled"));
         }
 
         // Ensure stdout/stderr reader threads have fully drained the pipes before
@@ -4109,8 +4118,17 @@ impl Tool for FindTool {
         let start_time = std::time::Instant::now();
         let timeout_ms = 60_000; // 60 seconds
         let mut timed_out = false;
+        let mut cx_cancelled = false;
 
         let status = loop {
+            let agent_cx = AgentCx::for_current_or_request();
+            let cx = agent_cx.cx();
+            if cx.checkpoint().is_err() {
+                cx_cancelled = true;
+                let _ = guard.kill();
+                break None;
+            }
+
             // Check if process is done
             match guard.try_wait_child() {
                 Ok(Some(status)) => break Some(status),
@@ -4120,10 +4138,7 @@ impl Tool for FindTool {
                         let _ = guard.kill();
                         break None;
                     }
-                    let now = AgentCx::for_current_or_request()
-                        .cx()
-                        .timer_driver()
-                        .map_or_else(wall_now, |timer| timer.now());
+                    let now = cx.timer_driver().map_or_else(wall_now, |timer| timer.now());
                     sleep(now, tick).await;
                 }
                 Err(e) => return Err(Error::tool("find", e.to_string())),
@@ -4139,6 +4154,9 @@ impl Tool for FindTool {
             .map_err(|_| Error::tool("find", "fd stderr reader thread panicked"))?
             .map_err(|err| Error::tool("find", format!("Failed to read fd stderr: {err}")))?;
 
+        if cx_cancelled {
+            return Err(Error::tool("find", "Command cancelled"));
+        }
         if timed_out {
             return Err(Error::tool("find", "Command timed out after 60 seconds"));
         }
