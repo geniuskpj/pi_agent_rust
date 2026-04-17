@@ -18300,9 +18300,12 @@ function __pi_make_extension_ctx(ctx_payload) {
 	        try {
 	            value = await __pi_with_extension_async(entry.extensionId, () => handler(event_payload, ctx));
 	        } catch (e) {
-		            try { globalThis.console && globalThis.console.error && globalThis.console.error('Event handler error:', eventName, entry.extensionId, e); } catch (_e) {}
-		            continue;
-		        }
+	            try { globalThis.console && globalThis.console.error && globalThis.console.error('Event handler error:', eventName, entry.extensionId, e); } catch (_e) {}
+	            if (eventName === 'tool_call' || eventName.startsWith('session_before_')) {
+	                throw e;
+	            }
+	            continue;
+	        }
 	        if (value === undefined) continue;
 
         // First-result semantics (legacy parity)
