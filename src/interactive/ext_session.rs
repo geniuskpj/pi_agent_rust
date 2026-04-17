@@ -179,7 +179,7 @@ fn session_model_state_value(shared_model: &ModelEntry, session: &Session) -> Va
             "provider": provider,
             "id": model_id,
         }),
-        None => extension_model_from_entry(shared_model),
+        None => Value::Null,
     }
 }
 
