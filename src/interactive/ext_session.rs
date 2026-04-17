@@ -159,18 +159,7 @@ fn current_path_model_fields(session: &Session) -> (Option<String>, Option<Strin
     if let Some((provider, model_id)) = current_path_model_pair(session) {
         (Some(provider), Some(model_id))
     } else {
-        (
-            session
-                .header
-                .fallback_provider
-                .clone()
-                .or_else(|| session.header.provider.clone()),
-            session
-                .header
-                .fallback_model_id
-                .clone()
-                .or_else(|| session.header.model_id.clone()),
-        )
+        (None, None)
     }
 }
 

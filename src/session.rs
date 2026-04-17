@@ -2115,19 +2115,16 @@ impl Session {
         if let Some(model) = self.latest_model_change_for_current_path() {
             return Some(model);
         }
-        
-        // If a fallback is explicitly stored in the header, use it to prevent
-        // historyless branches from losing context.
-        if let Some(fallback) = self.header.branch_fallback_model_pair() {
-            return Some(fallback);
+
+        // If other branches have model changes, we only inherit EXPLICIT fallbacks.
+        // We do NOT inherit `self.header.provider` because that reflects another branch's tip.
+        if self.has_any_model_change() {
+            return self.header
+                .fallback_provider
+                .clone()
+                .zip(self.header.fallback_model_id.clone());
         }
 
-        // If other branches have model changes but this one doesn't, return None
-        // so the header gets cleared (prevents stale metadata)
-        if self.has_any_model_change() {
-            return None;
-        }
-        
         self.header.provider.clone().zip(self.header.model_id.clone())
     }
 
@@ -2136,19 +2133,13 @@ impl Session {
         if let Some(level) = self.latest_thinking_level_for_current_path() {
             return Some(level);
         }
-        
-        // If a fallback is explicitly stored in the header, use it to prevent
-        // historyless branches from losing context.
-        if let Some(fallback) = self.header.branch_fallback_thinking_level() {
-            return Some(fallback);
+
+        // If other branches have thinking level changes, we only inherit EXPLICIT fallbacks.
+        // We do NOT inherit `self.header.thinking_level` because that reflects another branch's tip.
+        if self.has_any_thinking_level_change() {
+            return self.header.fallback_thinking_level.clone();
         }
 
-        // If other branches have thinking level changes but this one doesn't, return None
-        // so the header gets cleared (prevents stale metadata)
-        if self.has_any_thinking_level_change() {
-            return None;
-        }
-        
         self.header.thinking_level.clone()
     }
 
@@ -8120,6 +8111,10 @@ mod tests {
 
     #[test]
     fn test_continue_recent_in_dir_prunes_corrupt_stale_index_entry() {
+        let _lock = current_dir_lock();
+        let process_cwd = tempfile::tempdir().unwrap();
+        let _guard = CurrentDirGuard::new(process_cwd.path());
+
         let temp = tempfile::tempdir().unwrap();
         let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
         session.append_message(make_test_message("first"));
@@ -8130,10 +8125,7 @@ mod tests {
 
         let index = SessionIndex::for_sessions_root(temp.path());
         index.index_session(&session).expect("index session");
-        let cwd_display = std::env::current_dir()
-            .expect("current dir")
-            .display()
-            .to_string();
+        let cwd_display = session.header.cwd.clone();
         let has_indexed_path = index
             .list_sessions(Some(&cwd_display))
             .expect("list indexed sessions")
@@ -8167,6 +8159,10 @@ mod tests {
 
     #[test]
     fn test_continue_recent_in_dir_prunes_missing_stale_index_entry() {
+        let _lock = current_dir_lock();
+        let process_cwd = tempfile::tempdir().unwrap();
+        let _guard = CurrentDirGuard::new(process_cwd.path());
+
         let temp = tempfile::tempdir().unwrap();
         let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
         session.append_message(make_test_message("first"));
@@ -8176,10 +8172,7 @@ mod tests {
 
         let index = SessionIndex::for_sessions_root(temp.path());
         index.index_session(&session).expect("index session");
-        let cwd_display = std::env::current_dir()
-            .expect("current dir")
-            .display()
-            .to_string();
+        let cwd_display = session.header.cwd.clone();
         let has_indexed_path = index
             .list_sessions(Some(&cwd_display))
             .expect("list indexed sessions")
@@ -8214,6 +8207,10 @@ mod tests {
 
     #[test]
     fn test_continue_recent_in_dir_prunes_index_when_project_dir_is_missing() {
+        let _lock = current_dir_lock();
+        let process_cwd = tempfile::tempdir().unwrap();
+        let _guard = CurrentDirGuard::new(process_cwd.path());
+
         let temp = tempfile::tempdir().unwrap();
         let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
         session.append_message(make_test_message("first"));
@@ -8223,8 +8220,8 @@ mod tests {
 
         let index = SessionIndex::for_sessions_root(temp.path());
         index.index_session(&session).expect("index session");
-        let cwd = std::env::current_dir().expect("current dir");
-        let cwd_display = cwd.display().to_string();
+        let cwd_display = session.header.cwd.clone();
+        let cwd = std::path::Path::new(&cwd_display);
         let project_session_dir = temp.path().join(encode_cwd(&cwd));
         let moved_project_dir = temp.path().join("moved-project-dir");
 
@@ -8390,6 +8387,10 @@ mod tests {
 
     #[test]
     fn test_resume_with_picker_refreshes_index_after_changed_disk_session() {
+        let _lock = current_dir_lock();
+        let process_cwd = tempfile::tempdir().unwrap();
+        let _guard = CurrentDirGuard::new(process_cwd.path());
+
         let temp = tempfile::tempdir().expect("tempdir");
         let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
         session.append_message(make_test_message("first"));
@@ -8399,10 +8400,7 @@ mod tests {
 
         let index = SessionIndex::for_sessions_root(temp.path());
         index.index_session(&session).expect("index session");
-        let cwd_display = std::env::current_dir()
-            .expect("current dir")
-            .display()
-            .to_string();
+        let cwd_display = session.header.cwd.clone();
 
         std::fs::write(
             &path,
