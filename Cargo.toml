@@ -170,6 +170,14 @@ tikv-jemallocator = { version = "0.6", optional = true }
 [target.'cfg(windows)'.dependencies]
 libsqlite3-sys = { version = "0.37", features = ["bundled-windows"] }
 
+# FreeBSD: third-party libs live under /usr/local and rquickjs-sys doesn't
+# ship pre-generated bindings for this target, so regenerate at build time
+# via the `bindgen` feature (uses /usr/bin/clang from the base system).
+# Bundled sqlite mirrors the Windows workaround.
+[target.'cfg(target_os = "freebsd")'.dependencies]
+libsqlite3-sys = { version = "0.37", features = ["bundled"] }
+rquickjs = { version = "0.11", features = ["futures", "loader", "bindgen"] }
+
 [features]
 default = ["image-resize", "jemalloc", "clipboard", "wasm-host", "sqlite-sessions"]
 image-resize = ["image"]
