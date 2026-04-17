@@ -415,18 +415,26 @@ impl Provider for GeminiProvider {
                                 }
                             }
                             Some(Err(e)) => {
-                                const MAX_CONSECUTIVE_WRITE_ZERO: usize = 5;
-                                if e.kind() == std::io::ErrorKind::WriteZero {
+                                // WriteZero, WouldBlock, and TimedOut errors are treated as transient.
+                                // Skip them and keep reading the stream, but cap
+                                // consecutive occurrences to avoid infinite loops.
+                                const MAX_CONSECUTIVE_TRANSIENT_ERRORS: usize = 5;
+                                if e.kind() == std::io::ErrorKind::WriteZero
+                                    || e.kind() == std::io::ErrorKind::WouldBlock
+                                    || e.kind() == std::io::ErrorKind::TimedOut
+                                {
                                     state.write_zero_count += 1;
-                                    if state.write_zero_count <= MAX_CONSECUTIVE_WRITE_ZERO {
+                                    if state.write_zero_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
                                         tracing::warn!(
+                                            kind = ?e.kind(),
                                             count = state.write_zero_count,
-                                            "Transient WriteZero error in SSE stream, continuing"
+                                            "Transient error in SSE stream, continuing"
                                         );
                                         continue;
                                     }
                                     tracing::warn!(
-                                        "WriteZero error persisted after {MAX_CONSECUTIVE_WRITE_ZERO} \
+                                        kind = ?e.kind(),
+                                        "Error persisted after {MAX_CONSECUTIVE_TRANSIENT_ERRORS} \
                                          consecutive attempts, treating as fatal"
                                     );
                                 }
