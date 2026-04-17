@@ -555,7 +555,44 @@ impl PackageManager {
     /// Returns the list of packages that were newly installed.
     pub async fn ensure_packages_installed(&self) -> Result<Vec<PackageEntry>> {
         let packages = self.list_packages().await?;
-        self.ensure_package_entries_installed(packages).await
+        let installed = self.ensure_package_entries_installed(packages).await?;
+
+        // Prune lockfile entries whose settings.json source is gone.
+        // Reconciliation failure is logged but never blocks startup or
+        // installation — stale entries are inert.
+        if let Err(err) = self.reconcile_all_lockfiles().await {
+            tracing::warn!(
+                event = "pkg.lockfile.reconcile.failed",
+                error = %err,
+                "Lockfile reconciliation failed during ensure_packages_installed"
+            );
+        }
+
+        Ok(installed)
+    }
+
+    /// Prune stale lockfile entries across the user and project scopes.
+    ///
+    /// See [`Self::reconcile_lockfile_sync`] for semantics. Each pruned
+    /// entry is recorded in `package-trust-audit.jsonl` with
+    /// `reason_codes: ["reconciled"]`.
+    pub async fn reconcile_all_lockfiles(&self) -> Result<Vec<PackageLockEntry>> {
+        let this = self.clone();
+        let (tx, mut rx) = oneshot::channel();
+
+        let handle = thread::spawn(move || {
+            let res = (|| -> Result<Vec<PackageLockEntry>> {
+                let mut pruned = this.reconcile_lockfile_sync(PackageScope::User)?;
+                pruned.extend(this.reconcile_lockfile_sync(PackageScope::Project)?);
+                Ok(pruned)
+            })();
+            let cx = AgentCx::for_request();
+            let _ = tx.send(cx.cx(), res);
+        });
+
+        let cx = AgentCx::for_request();
+        let recv_result = rx.recv(cx.cx()).await;
+        finish_package_task(handle, recv_result, "Lockfile reconcile task cancelled")
     }
 
     async fn ensure_package_entries_installed(
@@ -913,6 +950,97 @@ impl PackageManager {
                 ))
             }
         }
+    }
+
+    /// Prune lockfile entries whose identity no longer appears in the
+    /// current `settings.json` package list for the given scope.
+    ///
+    /// Stale entries are inert for resolution (`resolve_package_sources()`
+    /// reads settings, not the lockfile), but they accumulate over time
+    /// and confuse operators inspecting the file. This method runs on
+    /// startup as an implicit reconciliation so `remove_lock_entry` is
+    /// effectively called whenever an extension is removed from
+    /// `settings.json`, not only during an explicit `remove_sync()`.
+    ///
+    /// Each pruned entry is recorded as a `remove` trust-audit event with
+    /// `reason_codes: ["reconciled"]` so the prune is auditable.
+    ///
+    /// Failures are intentionally non-fatal: if the reconcile cannot
+    /// succeed (corrupt lockfile, trust-audit write failure, etc.) we
+    /// log and return `Ok(vec![])` so the startup path is not blocked.
+    /// The stale-entry fallback is always safe — entries never cause
+    /// resolution errors.
+    fn reconcile_lockfile_sync(&self, scope: PackageScope) -> Result<Vec<PackageLockEntry>> {
+        let Some(lockfile_path) = self.lockfile_path_for_scope(scope) else {
+            return Ok(Vec::new());
+        };
+        if !lockfile_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let roots = ResolveRoots::from_env(&self.cwd);
+        let live_sources: Vec<PackageEntry> = match scope {
+            PackageScope::User => list_packages_in_settings(&roots.global_settings_path)?,
+            PackageScope::Project => {
+                if roots.project_settings_enabled {
+                    list_packages_in_settings(&roots.project_settings_path)?
+                } else {
+                    Vec::new()
+                }
+            }
+            PackageScope::Temporary => return Ok(Vec::new()),
+        };
+
+        let live_identities: std::collections::HashSet<String> = live_sources
+            .iter()
+            .map(|entry| self.package_identity(&entry.source))
+            .collect();
+
+        let mut lockfile = read_package_lockfile(&lockfile_path)?;
+        let mut pruned = Vec::new();
+        lockfile.entries.retain(|entry| {
+            if live_identities.contains(&entry.identity) {
+                true
+            } else {
+                pruned.push(entry.clone());
+                false
+            }
+        });
+
+        if pruned.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        sort_lock_entries(&mut lockfile.entries);
+        write_package_lockfile_atomic(&lockfile_path, &lockfile)?;
+
+        for removed in &pruned {
+            let event = PackageTrustAuditEvent {
+                schema: PACKAGE_TRUST_AUDIT_SCHEMA,
+                timestamp: chrono::Utc::now()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                action: "remove".to_string(),
+                scope: scope_label(scope).to_string(),
+                source: removed.source.clone(),
+                identity: removed.identity.clone(),
+                from_state: trust_state_label(removed.trust_state).to_string(),
+                to_state: "removed".to_string(),
+                reason_codes: vec!["reconciled".to_string()],
+                remediation: None,
+                details: serde_json::to_value(removed).unwrap_or_else(|_| serde_json::json!({})),
+            };
+            if let Err(err) = self.append_trust_audit_event(scope, &event) {
+                tracing::warn!(
+                    event = "pkg.lockfile.reconcile.audit_failed",
+                    scope = scope_label(scope),
+                    identity = %removed.identity,
+                    error = %err,
+                    "Failed to append trust-audit event for reconciled lockfile entry"
+                );
+            }
+        }
+
+        Ok(pruned)
     }
 
     fn remove_lock_entry(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -7104,6 +7232,91 @@ mod tests {
             first, second,
             "same inputs should produce identical lockfile artifacts"
         );
+    }
+
+    #[test]
+    fn reconcile_lockfile_prunes_entries_missing_from_settings() {
+        // #49: a lockfile entry whose source was removed from settings.json
+        // should be pruned on reconcile, and the prune should be recorded
+        // in the trust-audit log with reason_codes=["reconciled"].
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path().to_path_buf();
+
+        // Two local packages. Both get locked; then we drop pkg2 from
+        // settings to simulate the user removing it.
+        for name in ["pkg1", "pkg2"] {
+            let pkg = cwd.join(name);
+            fs::create_dir_all(&pkg).expect("create pkg dir");
+            fs::write(pkg.join("index.js"), "export const ok = true;\n").expect("write entry");
+        }
+
+        let settings_path = cwd.join(".pi").join("settings.json");
+        fs::create_dir_all(settings_path.parent().unwrap()).expect("mkdir .pi");
+        fs::write(
+            &settings_path,
+            json!({ "packages": ["./pkg1", "./pkg2"] }).to_string(),
+        )
+        .expect("seed settings");
+
+        let manager = PackageManager::new(cwd.clone());
+        manager
+            .verify_and_record_lock("./pkg1", PackageScope::Project, PackageLockAction::Install)
+            .expect("lock pkg1");
+        manager
+            .verify_and_record_lock("./pkg2", PackageScope::Project, PackageLockAction::Install)
+            .expect("lock pkg2");
+
+        let lockfile_path = cwd.join(".pi").join("packages.lock.json");
+        let before = read_package_lockfile(&lockfile_path).expect("read pre-reconcile lockfile");
+        assert_eq!(before.entries.len(), 2, "both pkgs should be locked initially");
+
+        // Drop pkg2 from settings — this is the scenario where
+        // `remove_lock_entry` was never called because the user edited
+        // settings.json directly or via another tool.
+        fs::write(&settings_path, json!({ "packages": ["./pkg1"] }).to_string())
+            .expect("rewrite settings");
+
+        let pruned = manager
+            .reconcile_lockfile_sync(PackageScope::Project)
+            .expect("reconcile");
+
+        assert_eq!(pruned.len(), 1, "exactly one entry should be pruned");
+        assert!(
+            pruned[0].identity.starts_with("local:"),
+            "pruned identity should be the local pkg2 path, got {:?}",
+            pruned[0].identity
+        );
+
+        let after = read_package_lockfile(&lockfile_path).expect("read post-reconcile lockfile");
+        assert_eq!(after.entries.len(), 1, "lockfile should have one remaining entry");
+        assert!(
+            after.entries.iter().any(|e| e.source == "./pkg1"),
+            "pkg1 should remain after reconcile"
+        );
+
+        // Re-running reconcile is a no-op: nothing to prune.
+        let again = manager
+            .reconcile_lockfile_sync(PackageScope::Project)
+            .expect("reconcile idempotent");
+        assert!(again.is_empty(), "second reconcile should prune nothing");
+
+        // Audit event should record the reconciled prune.
+        let audit_path = cwd.join(".pi").join("package-trust-audit.jsonl");
+        let audit = fs::read_to_string(&audit_path).expect("read audit log");
+        assert!(
+            audit.lines().any(|line| line.contains("\"reconciled\"")),
+            "trust-audit log should contain a reconciled remove event, got:\n{audit}"
+        );
+    }
+
+    #[test]
+    fn reconcile_lockfile_noop_when_lockfile_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = PackageManager::new(dir.path().to_path_buf());
+        let pruned = manager
+            .reconcile_lockfile_sync(PackageScope::Project)
+            .expect("reconcile should not error on missing lockfile");
+        assert!(pruned.is_empty());
     }
 
     mod proptest_package_manager {

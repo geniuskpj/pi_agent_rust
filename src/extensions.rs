@@ -15137,6 +15137,12 @@ impl WasmExtensionHost {
 /// Default cancellation budget for extension event handlers (ms).
 pub const EXTENSION_EVENT_TIMEOUT_MS: u64 = 5_000;
 
+/// Tight cancellation budget for informational (fire-and-forget) event
+/// handlers — lifecycle notifications, telemetry pokes, post-hoc updates.
+/// A misbehaving or deadlocked extension on an info-only event shouldn't
+/// stall the agent for the full general budget. See [`ExtensionEventName::is_informational`].
+pub const EXTENSION_INFO_EVENT_TIMEOUT_MS: u64 = 500;
+
 /// Default cancellation budget for extension tool execution (ms).
 pub const EXTENSION_TOOL_BUDGET_MS: u64 = 30_000;
 
@@ -15267,6 +15273,61 @@ impl std::fmt::Display for ExtensionEventName {
             Self::SessionShutdown => "session_shutdown",
         };
         write!(f, "{name}")
+    }
+}
+
+impl ExtensionEventName {
+    /// Returns `true` for fire-and-forget lifecycle/telemetry events where
+    /// the dispatcher doesn't consume the handler's response to block,
+    /// cancel, or transform anything.
+    ///
+    /// The per-extension deadline for these events is
+    /// [`EXTENSION_INFO_EVENT_TIMEOUT_MS`] so one deadlocked extension on
+    /// an info-only hook can't stall the agent for the full
+    /// [`EXTENSION_EVENT_TIMEOUT_MS`].
+    ///
+    /// **Actionable** events (not listed here) still use the longer
+    /// budget so handlers have room to do meaningful work before a
+    /// decision is made:
+    /// `BeforeAgentStart`, `Context`, `ToolCall`, `Input`,
+    /// `SessionBeforeSwitch`, `SessionBeforeFork`, `SessionBeforeCompact`,
+    /// `SessionBeforeTree`, `ResourcesDiscover`.
+    #[must_use]
+    pub const fn is_informational(self) -> bool {
+        matches!(
+            self,
+            Self::Startup
+                | Self::AgentStart
+                | Self::AgentEnd
+                | Self::TurnStart
+                | Self::TurnEnd
+                | Self::MessageStart
+                | Self::MessageUpdate
+                | Self::MessageEnd
+                | Self::ToolExecutionStart
+                | Self::ToolExecutionUpdate
+                | Self::ToolExecutionEnd
+                | Self::ToolResult
+                | Self::SessionStart
+                | Self::SessionSwitch
+                | Self::SessionFork
+                | Self::SessionCompact
+                | Self::SessionTree
+                | Self::SessionShutdown
+                | Self::ModelSelect
+                | Self::UserBash
+        )
+    }
+
+    /// Deadline this event should be dispatched with when no explicit
+    /// caller-provided timeout is in play. See [`Self::is_informational`].
+    #[must_use]
+    pub const fn default_timeout_ms(self) -> u64 {
+        if self.is_informational() {
+            EXTENSION_INFO_EVENT_TIMEOUT_MS
+        } else {
+            EXTENSION_EVENT_TIMEOUT_MS
+        }
     }
 }
 
@@ -28497,26 +28558,67 @@ impl ExtensionManager {
         event_payload: &Value,
         timeout_ms: u64,
     ) -> Result<Option<Value>> {
+        // Fan out across subscribed extensions concurrently. A single
+        // slow or deadlocked extension bounds to its own per-instance
+        // timeout and cannot block its peers — each `WasmExtensionHandle`
+        // carries its own `Arc<AsyncMutex<Instance>>`, so these futures
+        // don't share a lock.
+        //
+        // Results are still aggregated with "last-wins" semantics (in
+        // stable iteration order over the filtered extension list), so
+        // behavior matches the prior sequential loop when extensions
+        // return a response deterministically.
+        let calls = extensions
+            .iter()
+            .filter(|ext| ext.event_hooks().iter().any(|hook| hook == event_name))
+            .map(|ext| async move {
+                let ext_name = ext.registration().name.clone();
+                let result = ext.handle_event_value(event_payload, timeout_ms).await;
+                (ext_name, result)
+            })
+            .collect::<Vec<_>>();
+
+        if calls.is_empty() {
+            return Ok(None);
+        }
+
+        let results = futures::future::join_all(calls).await;
+
         let mut response = None;
-        for ext in extensions {
-            if !ext.event_hooks().iter().any(|hook| hook == event_name) {
-                continue;
-            }
-            if let Some(value) = ext.handle_event_value(event_payload, timeout_ms).await? {
-                response = Some(value);
+        for (ext_name, result) in results {
+            match result {
+                Ok(Some(value)) => response = Some(value),
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        event = "ext.wasm.dispatch.failed",
+                        extension_name = %ext_name,
+                        event_name = %event_name,
+                        error = %err,
+                        "WASM extension event dispatch failed"
+                    );
+                    return Err(err);
+                }
             }
         }
         Ok(response)
     }
 
     /// Dispatch an event to all registered extensions.
+    ///
+    /// Uses the per-event default deadline (see
+    /// [`ExtensionEventName::default_timeout_ms`]): informational
+    /// fire-and-forget events like `turn_start` get
+    /// [`EXTENSION_INFO_EVENT_TIMEOUT_MS`], while actionable events
+    /// (`tool_call`, `session_before_*`, etc.) keep the full
+    /// [`EXTENSION_EVENT_TIMEOUT_MS`].
     pub async fn dispatch_event(
         &self,
         event: ExtensionEventName,
         data: Option<Value>,
     ) -> Result<()> {
         let _ = self
-            .dispatch_event_value(event, data, EXTENSION_EVENT_TIMEOUT_MS)
+            .dispatch_event_value(event, data, event.default_timeout_ms())
             .await?;
         Ok(())
     }
@@ -50943,5 +51045,83 @@ mod tests {
                 Value::Null
             );
         });
+    }
+
+    // ===================================================================
+    // #50: informational-vs-actionable event classification drives the
+    // per-event default timeout.
+    // ===================================================================
+
+    #[test]
+    fn informational_events_use_short_timeout() {
+        let info_events = [
+            ExtensionEventName::Startup,
+            ExtensionEventName::AgentStart,
+            ExtensionEventName::AgentEnd,
+            ExtensionEventName::TurnStart,
+            ExtensionEventName::TurnEnd,
+            ExtensionEventName::MessageStart,
+            ExtensionEventName::MessageUpdate,
+            ExtensionEventName::MessageEnd,
+            ExtensionEventName::ToolExecutionStart,
+            ExtensionEventName::ToolExecutionUpdate,
+            ExtensionEventName::ToolExecutionEnd,
+            ExtensionEventName::ToolResult,
+            ExtensionEventName::SessionStart,
+            ExtensionEventName::SessionSwitch,
+            ExtensionEventName::SessionFork,
+            ExtensionEventName::SessionCompact,
+            ExtensionEventName::SessionTree,
+            ExtensionEventName::SessionShutdown,
+            ExtensionEventName::ModelSelect,
+            ExtensionEventName::UserBash,
+        ];
+        for event in info_events {
+            assert!(
+                event.is_informational(),
+                "{event} should be classified as informational"
+            );
+            assert_eq!(
+                event.default_timeout_ms(),
+                EXTENSION_INFO_EVENT_TIMEOUT_MS,
+                "{event} should use the short default timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn actionable_events_use_full_timeout() {
+        // These events feed a decision (block/cancel/transform), so a
+        // handler needs room to do real work before a verdict is expected.
+        let actionable_events = [
+            ExtensionEventName::Input,
+            ExtensionEventName::BeforeAgentStart,
+            ExtensionEventName::Context,
+            ExtensionEventName::ToolCall,
+            ExtensionEventName::SessionBeforeSwitch,
+            ExtensionEventName::SessionBeforeFork,
+            ExtensionEventName::SessionBeforeCompact,
+            ExtensionEventName::SessionBeforeTree,
+            ExtensionEventName::ResourcesDiscover,
+        ];
+        for event in actionable_events {
+            assert!(
+                !event.is_informational(),
+                "{event} should NOT be classified as informational"
+            );
+            assert_eq!(
+                event.default_timeout_ms(),
+                EXTENSION_EVENT_TIMEOUT_MS,
+                "{event} should use the full default timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn info_timeout_is_strictly_shorter_than_general_timeout() {
+        assert!(
+            EXTENSION_INFO_EVENT_TIMEOUT_MS < EXTENSION_EVENT_TIMEOUT_MS,
+            "info timeout ({EXTENSION_INFO_EVENT_TIMEOUT_MS}ms) must be strictly shorter than general timeout ({EXTENSION_EVENT_TIMEOUT_MS}ms)"
+        );
     }
 }
