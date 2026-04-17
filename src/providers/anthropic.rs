@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::pin::Pin;
 
@@ -638,15 +639,19 @@ impl Provider for AnthropicProvider {
 // Stream State
 // ============================================================================
 
+struct ToolAccum {
+    id: String,
+    name: String,
+    json: String,
+}
+
 struct StreamState<S>
 where
     S: Stream<Item = std::result::Result<Vec<u8>, std::io::Error>> + Unpin,
 {
     event_source: SseStream<S>,
     partial: AssistantMessage,
-    current_tool_json: String,
-    current_tool_id: Option<String>,
-    current_tool_name: Option<String>,
+    tool_accums: HashMap<u32, ToolAccum>,
     done: bool,
     /// Consecutive WriteZero errors seen without a successful event in between.
     write_zero_count: usize,
@@ -679,9 +684,7 @@ where
                 error_message: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
             },
-            current_tool_json: String::new(),
-            current_tool_id: None,
-            current_tool_name: None,
+            tool_accums: HashMap::new(),
             done: false,
             write_zero_count: 0,
         }
@@ -765,12 +768,19 @@ where
                 StreamEvent::ThinkingStart { content_index }
             }
             AnthropicContentBlock::ToolUse { id, name } => {
-                self.current_tool_json.clear();
-                self.current_tool_id = id;
-                self.current_tool_name = name;
+                let id = id.unwrap_or_default();
+                let name = name.unwrap_or_default();
+                self.tool_accums.insert(
+                    index,
+                    ToolAccum {
+                        id: id.clone(),
+                        name: name.clone(),
+                        json: String::new(),
+                    },
+                );
                 self.partial.content.push(ContentBlock::ToolCall(ToolCall {
-                    id: self.current_tool_id.clone().unwrap_or_default(),
-                    name: self.current_tool_name.clone().unwrap_or_default(),
+                    id,
+                    name,
                     arguments: serde_json::Value::Null,
                     thought_signature: None,
                 }));
@@ -815,7 +825,9 @@ where
             }
             AnthropicDelta::InputJsonDelta { partial_json } => {
                 if let Some(partial_json) = partial_json {
-                    self.current_tool_json.push_str(&partial_json);
+                    if let Some(accum) = self.tool_accums.get_mut(&index) {
+                        accum.json.push_str(&partial_json);
+                    }
                     Some(StreamEvent::ToolCallDelta {
                         content_index: idx,
                         delta: partial_json,
@@ -861,31 +873,33 @@ where
                 })
             }
             Some(ContentBlock::ToolCall(tc)) => {
-                let arguments: serde_json::Value =
-                    match serde_json::from_str(&self.current_tool_json) {
+                if let Some(accum) = self.tool_accums.remove(&index) {
+                    let arguments: serde_json::Value = match serde_json::from_str(&accum.json) {
                         Ok(args) => args,
                         Err(e) => {
                             tracing::warn!(
                                 error = %e,
-                                raw = %self.current_tool_json,
+                                raw = %accum.json,
                                 "Failed to parse tool arguments as JSON"
                             );
                             serde_json::Value::Null
                         }
                     };
-                let tool_call = ToolCall {
-                    id: self.current_tool_id.take().unwrap_or_default(),
-                    name: self.current_tool_name.take().unwrap_or_default(),
-                    arguments: arguments.clone(),
-                    thought_signature: None,
-                };
-                tc.arguments = arguments;
-                self.current_tool_json.clear();
+                    let tool_call = ToolCall {
+                        id: accum.id,
+                        name: accum.name,
+                        arguments: arguments.clone(),
+                        thought_signature: None,
+                    };
+                    tc.arguments = arguments;
 
-                Some(StreamEvent::ToolCallEnd {
-                    content_index: idx,
-                    tool_call,
-                })
+                    Some(StreamEvent::ToolCallEnd {
+                        content_index: idx,
+                        tool_call,
+                    })
+                } else {
+                    None
+                }
             }
             _ => None,
         }
