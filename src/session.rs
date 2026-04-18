@@ -1940,7 +1940,9 @@ impl Session {
             .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
 
         let session_dir_clone = self.session_dir.clone();
-        let path = self.path.clone().unwrap();
+        let path = self.path.clone().ok_or_else(|| {
+            Error::session("Session path not set - cannot save session".to_string())
+        })?;
         let path_clone = path.clone();
 
         match store_kind {
@@ -2119,13 +2121,17 @@ impl Session {
         // If other branches have model changes, we only inherit EXPLICIT fallbacks.
         // We do NOT inherit `self.header.provider` because that reflects another branch's tip.
         if self.has_any_model_change() {
-            return self.header
+            return self
+                .header
                 .fallback_provider
                 .clone()
                 .zip(self.header.fallback_model_id.clone());
         }
 
-        self.header.provider.clone().zip(self.header.model_id.clone())
+        self.header
+            .provider
+            .clone()
+            .zip(self.header.model_id.clone())
     }
 
     pub fn effective_thinking_level_for_current_path(&self) -> Option<String> {
