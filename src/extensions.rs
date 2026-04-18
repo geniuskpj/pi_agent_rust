@@ -22811,6 +22811,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
             });
 
             let mut sequence = 0_u64;
+            let mut processed_in_turn = 0_u32;
             let call_id_owned = call_id.to_string();
             loop {
                 if !runtime.is_hostcall_active(call_id) {
@@ -22835,6 +22836,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             },
                         );
                         sequence = sequence.saturating_add(1);
+                        processed_in_turn += 1;
                     }
                     Ok(ExecStreamFrame::Stderr(chunk)) => {
                         let mut m = serde_json::Map::with_capacity(1);
@@ -22848,6 +22850,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             },
                         );
                         sequence = sequence.saturating_add(1);
+                        processed_in_turn += 1;
                     }
                     Ok(ExecStreamFrame::Final { code, killed }) => {
                         return HostcallOutcome::StreamChunk {
@@ -22866,6 +22869,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                         };
                     }
                     Err(mpsc::TryRecvError::Empty) => {
+                        processed_in_turn = 0;
                         extension_wait_sleep(Duration::from_millis(25)).await;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -22874,6 +22878,11 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             message: "exec stream channel closed".to_string(),
                         };
                     }
+                }
+
+                if processed_in_turn >= 64 {
+                    processed_in_turn = 0;
+                    asupersync::runtime::yield_now().await;
                 }
             }
         }
