@@ -125,6 +125,8 @@ parse_*.py
 tests.log
 # Root-level scratch test files (agent-generated debug/repro harnesses)
 /test_*.rs
+/run_test.rs
+/run_*.rs
 
 # Agent debug diff/log files
 _ext_log.diff
