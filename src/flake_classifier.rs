@@ -87,15 +87,29 @@ pub struct FlakeEvent {
     pub timestamp: String,
 }
 
+/// Maximum input size for failure classification to prevent DoS.
+const MAX_CLASSIFY_INPUT_SIZE: usize = 1024 * 1024; // 1MB
+
 /// Classify a test failure based on its output text.
 ///
 /// Scans the output for known transient failure patterns and returns
 /// the first match, or `Deterministic` if no patterns match.
+///
+/// For security, input is bounded to prevent DoS through excessive
+/// memory allocation or processing time on malicious test outputs.
 #[must_use]
 pub fn classify_failure(output: &str) -> FlakeClassification {
+    // Bound input size to prevent DoS through excessive memory/CPU usage.
+    // Legitimate test failure output should be well under 1MB.
+    let bounded_output = if output.len() > MAX_CLASSIFY_INPUT_SIZE {
+        &output[..MAX_CLASSIFY_INPUT_SIZE]
+    } else {
+        output
+    };
+
     // Check each line for known patterns.  We use simple substring
     // matching to avoid regex dependency for this module.
-    let lower = output.to_lowercase();
+    let lower = bounded_output.to_lowercase();
 
     for line in lower.lines() {
         let trimmed = line.trim();
@@ -184,15 +198,18 @@ impl Default for RetryPolicy {
         Self {
             max_retries: std::env::var("PI_CONFORMANCE_MAX_RETRIES")
                 .ok()
-                .and_then(|v| v.parse().ok())
+                .and_then(|v| v.parse::<u32>().ok())
+                .map(|v| v.min(100)) // Cap at 100 retries to prevent DoS
                 .unwrap_or(1),
             retry_delay_secs: std::env::var("PI_CONFORMANCE_RETRY_DELAY")
                 .ok()
                 .and_then(|v| v.parse().ok())
+                .map(|v| v.min(3600)) // Cap at 1 hour to prevent DoS
                 .unwrap_or(5),
             flake_budget: std::env::var("PI_CONFORMANCE_FLAKE_BUDGET")
                 .ok()
                 .and_then(|v| v.parse().ok())
+                .map(|v| v.min(1000)) // Cap at 1000 to prevent DoS
                 .unwrap_or(3),
         }
     }
@@ -374,6 +391,26 @@ mod tests {
     }
 
     #[test]
+    fn retry_policy_bounds_environment_variables() {
+        // Test that environment variables are bounded to prevent DoS.
+        std::env::set_var("PI_CONFORMANCE_MAX_RETRIES", "999999999");
+        std::env::set_var("PI_CONFORMANCE_RETRY_DELAY", "999999999");
+        std::env::set_var("PI_CONFORMANCE_FLAKE_BUDGET", "999999999");
+
+        let policy = RetryPolicy::default();
+
+        // Values should be capped at reasonable limits.
+        assert_eq!(policy.max_retries, 100);
+        assert_eq!(policy.retry_delay_secs, 3600);
+        assert_eq!(policy.flake_budget, 1000);
+
+        // Clean up environment.
+        std::env::remove_var("PI_CONFORMANCE_MAX_RETRIES");
+        std::env::remove_var("PI_CONFORMANCE_RETRY_DELAY");
+        std::env::remove_var("PI_CONFORMANCE_FLAKE_BUDGET");
+    }
+
+    #[test]
     fn flake_category_all_covered() {
         assert_eq!(FlakeCategory::all().len(), 6);
         for cat in FlakeCategory::all() {
@@ -400,6 +437,33 @@ mod tests {
         let output = "ERROR: OUT OF MEMORY";
         let result = classify_failure(output);
         assert!(result.is_retriable());
+    }
+
+    #[test]
+    fn bounded_input_prevents_dos() {
+        // Test that extremely large input is bounded to prevent DoS.
+        // Create input larger than MAX_CLASSIFY_INPUT_SIZE with a flake pattern at the end.
+        let large_prefix = "x".repeat(MAX_CLASSIFY_INPUT_SIZE + 1000);
+        let pattern = "oracle timed out";
+        let large_input = format!("{large_prefix}\n{pattern}");
+
+        // Should still classify correctly but not process the oversized portion.
+        // This would timeout or OOM without bounds checking.
+        let result = classify_failure(&large_input);
+
+        // The pattern is beyond the bound, so it won't be found.
+        assert_eq!(result, FlakeClassification::Deterministic);
+
+        // Test with pattern within bounds.
+        let bounded_input = format!("{pattern}\n{}", "y".repeat(MAX_CLASSIFY_INPUT_SIZE));
+        let result = classify_failure(&bounded_input);
+        assert!(matches!(
+            result,
+            FlakeClassification::Transient {
+                category: FlakeCategory::OracleTimeout,
+                ..
+            }
+        ));
     }
 
     mod proptest_flake_classifier {
