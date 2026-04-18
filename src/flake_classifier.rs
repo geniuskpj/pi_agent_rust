@@ -195,27 +195,31 @@ pub struct RetryPolicy {
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self {
-            max_retries: std::env::var("PI_CONFORMANCE_MAX_RETRIES")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-                .map(|v| v.min(100)) // Cap at 100 retries to prevent DoS
-                .unwrap_or(1),
-            retry_delay_secs: std::env::var("PI_CONFORMANCE_RETRY_DELAY")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-                .map(|v| v.min(3600)) // Cap at 1 hour to prevent DoS
-                .unwrap_or(5),
-            flake_budget: std::env::var("PI_CONFORMANCE_FLAKE_BUDGET")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-                .map(|v| v.min(1000)) // Cap at 1000 to prevent DoS
-                .unwrap_or(3),
-        }
+        Self::from_env(|key| std::env::var(key))
     }
 }
 
 impl RetryPolicy {
+    fn from_env<F>(get_env: F) -> Self
+    where
+        F: Fn(&str) -> std::result::Result<String, std::env::VarError>,
+    {
+        Self {
+            max_retries: get_env("PI_CONFORMANCE_MAX_RETRIES")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .map_or(1, |v| v.min(100)), // Cap at 100 retries to prevent DoS
+            retry_delay_secs: get_env("PI_CONFORMANCE_RETRY_DELAY")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .map_or(5, |v| v.min(3600)), // Cap at 1 hour to prevent DoS
+            flake_budget: get_env("PI_CONFORMANCE_FLAKE_BUDGET")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .map_or(3, |v| v.min(1000)), // Cap at 1000 to prevent DoS
+        }
+    }
+
     /// Whether we should retry after this classification.
     #[must_use]
     pub const fn should_retry(&self, classification: &FlakeClassification, attempt: u32) -> bool {
@@ -392,22 +396,17 @@ mod tests {
 
     #[test]
     fn retry_policy_bounds_environment_variables() {
-        // Test that environment variables are bounded to prevent DoS.
-        std::env::set_var("PI_CONFORMANCE_MAX_RETRIES", "999999999");
-        std::env::set_var("PI_CONFORMANCE_RETRY_DELAY", "999999999");
-        std::env::set_var("PI_CONFORMANCE_FLAKE_BUDGET", "999999999");
-
-        let policy = RetryPolicy::default();
+        let policy = RetryPolicy::from_env(|key| match key {
+            "PI_CONFORMANCE_MAX_RETRIES"
+            | "PI_CONFORMANCE_RETRY_DELAY"
+            | "PI_CONFORMANCE_FLAKE_BUDGET" => Ok("999999999".to_string()),
+            _ => Err(std::env::VarError::NotPresent),
+        });
 
         // Values should be capped at reasonable limits.
         assert_eq!(policy.max_retries, 100);
         assert_eq!(policy.retry_delay_secs, 3600);
         assert_eq!(policy.flake_budget, 1000);
-
-        // Clean up environment.
-        std::env::remove_var("PI_CONFORMANCE_MAX_RETRIES");
-        std::env::remove_var("PI_CONFORMANCE_RETRY_DELAY");
-        std::env::remove_var("PI_CONFORMANCE_FLAKE_BUDGET");
     }
 
     #[test]
