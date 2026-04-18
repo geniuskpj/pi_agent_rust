@@ -988,8 +988,8 @@ impl PackageManager {
         }
 
         let roots = ResolveRoots::from_env(&self.cwd);
-        let live_sources: Vec<PackageEntry> = match scope {
-            PackageScope::User => list_packages_in_settings(&roots.global_settings_path)?,
+        let settings_path = match scope {
+            PackageScope::User => &roots.global_settings_path,
             PackageScope::Project => {
                 if !roots.project_settings_enabled {
                     // A config override is active, so project-level
@@ -1000,10 +1000,19 @@ impl PackageManager {
                     // outcome. Skip reconciliation for this scope.
                     return Ok(Vec::new());
                 }
-                list_packages_in_settings(&roots.project_settings_path)?
+                &roots.project_settings_path
             }
             PackageScope::Temporary => return Ok(Vec::new()),
         };
+        // `read_settings_json` returns `Ok({})` for missing files, which would
+        // otherwise make this function prune every entry in the lockfile.
+        // Treat a missing settings file as "no authoritative info" and skip
+        // reconciliation for the scope — the user hasn't told us yet what
+        // should be live, so leave the lockfile intact.
+        if !settings_path.exists() {
+            return Ok(Vec::new());
+        }
+        let live_sources: Vec<PackageEntry> = list_packages_in_settings(settings_path)?;
 
         let live_identities: std::collections::HashSet<String> = live_sources
             .iter()
@@ -7331,6 +7340,65 @@ mod tests {
             .reconcile_lockfile_sync(PackageScope::Project)
             .expect("reconcile should not error on missing lockfile");
         assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn reconcile_lockfile_preserves_entries_when_settings_file_is_missing() {
+        // Regression: read_settings_json returns Ok({}) for a missing file,
+        // which would otherwise make reconcile interpret "no settings file"
+        // as "zero live packages" and wipe the lockfile. A missing settings
+        // file must be treated as "no authoritative info" — preserve the
+        // existing lockfile rather than pruning it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path().to_path_buf();
+
+        // Create a local package and lock it while settings.json exists,
+        // so we have a real non-trivial lockfile to protect.
+        let pkg = cwd.join("keep-me");
+        fs::create_dir_all(&pkg).expect("mkdir keep-me");
+        fs::write(pkg.join("index.js"), "export const ok = true;\n").expect("write entry");
+
+        let settings_path = cwd.join(".pi").join("settings.json");
+        fs::create_dir_all(settings_path.parent().unwrap()).expect("mkdir .pi");
+        fs::write(
+            &settings_path,
+            json!({ "packages": ["./keep-me"] }).to_string(),
+        )
+        .expect("seed settings");
+
+        let manager = PackageManager::new(cwd.clone());
+        manager
+            .verify_and_record_lock("./keep-me", PackageScope::Project, PackageLockAction::Install)
+            .expect("lock keep-me");
+
+        let lockfile_path = cwd.join(".pi").join("packages.lock.json");
+        let before_len = read_package_lockfile(&lockfile_path)
+            .expect("read lockfile")
+            .entries
+            .len();
+        assert_eq!(before_len, 1, "precondition: one locked entry");
+
+        // Simulate the "settings file went missing" case (manual edit,
+        // accidental delete, fresh clone without settings yet) and
+        // reconcile.
+        fs::remove_file(&settings_path).expect("delete settings");
+
+        let pruned = manager
+            .reconcile_lockfile_sync(PackageScope::Project)
+            .expect("reconcile should not error on missing settings file");
+        assert!(
+            pruned.is_empty(),
+            "reconcile must NOT prune entries when settings.json is missing — we have no authoritative live set to compare against"
+        );
+
+        let after_len = read_package_lockfile(&lockfile_path)
+            .expect("read lockfile post-reconcile")
+            .entries
+            .len();
+        assert_eq!(
+            after_len, before_len,
+            "lockfile must be preserved when settings file is missing"
+        );
     }
 
     mod proptest_package_manager {
