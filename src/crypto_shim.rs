@@ -987,7 +987,8 @@ mod tests {
     #[test]
     fn hmac_sha256_secret_hello() {
         use hmac::Mac;
-        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"secret").expect("create HMAC with test key");
+        let mut mac =
+            hmac::Hmac::<Sha256>::new_from_slice(b"secret").expect("create HMAC with test key");
         mac.update(b"hello");
         let result = hex_lower(&mac.finalize().into_bytes());
         assert_eq!(
@@ -1001,7 +1002,8 @@ mod tests {
     #[test]
     fn hmac_sha1_key_data() {
         use hmac::Mac;
-        let mut mac = hmac::Hmac::<sha1::Sha1>::new_from_slice(b"key").expect("create HMAC with test key");
+        let mut mac =
+            hmac::Hmac::<sha1::Sha1>::new_from_slice(b"key").expect("create HMAC with test key");
         mac.update(b"data");
         let result = hex_lower(&mac.finalize().into_bytes());
         assert_eq!(result, "104152c5bfdca07bc633eebd46199f0255c9f49d");
@@ -1084,29 +1086,31 @@ mod tests {
     #[test]
     fn random_int_validates_finite_inputs() {
         // Test that NaN/Inf inputs are properly rejected (security vulnerability fix)
-        use rquickjs::{Runtime, Context};
+        use rquickjs::{Context, Runtime};
 
         let runtime = Runtime::new().expect("create runtime");
         let context = Context::full(&runtime).expect("create context");
 
-        context.with(|ctx| -> rquickjs::Result<()> {
-            let global = ctx.globals();
-            register_random_int_hostcall(&global)?;
-            let hostcall: rquickjs::Function = global.get("__pi_crypto_random_int_native")?;
+        context
+            .with(|ctx| -> rquickjs::Result<()> {
+                let global = ctx.globals();
+                register_random_int_hostcall(&global)?;
+                let hostcall: rquickjs::Function = global.get("__pi_crypto_random_int_native")?;
 
-            // All NaN/Inf inputs should be rejected with proper error messages
-            assert!(hostcall.call::<_, f64>((f64::NAN, 10.0)).is_err());
-            assert!(hostcall.call::<_, f64>((0.0, f64::NAN)).is_err());
-            assert!(hostcall.call::<_, f64>((f64::INFINITY, 10.0)).is_err());
-            assert!(hostcall.call::<_, f64>((0.0, f64::INFINITY)).is_err());
-            assert!(hostcall.call::<_, f64>((f64::NEG_INFINITY, 10.0)).is_err());
+                // All NaN/Inf inputs should be rejected with proper error messages
+                assert!(hostcall.call::<_, f64>((f64::NAN, 10.0)).is_err());
+                assert!(hostcall.call::<_, f64>((0.0, f64::NAN)).is_err());
+                assert!(hostcall.call::<_, f64>((f64::INFINITY, 10.0)).is_err());
+                assert!(hostcall.call::<_, f64>((0.0, f64::INFINITY)).is_err());
+                assert!(hostcall.call::<_, f64>((f64::NEG_INFINITY, 10.0)).is_err());
 
-            // Valid finite inputs should work
-            let result = hostcall.call::<_, f64>((0.0, 100.0))?;
-            assert!(result >= 0.0 && result < 100.0);
+                // Valid finite inputs should work
+                let result = hostcall.call::<_, f64>((0.0, 100.0))?;
+                assert!((0.0..100.0).contains(&result));
 
-            Ok(())
-        }).expect("test NaN/Inf validation");
+                Ok(())
+            })
+            .expect("test NaN/Inf validation");
     }
 
     // ─── NODE_CRYPTO_JS constant is non-empty ────────────────────────────

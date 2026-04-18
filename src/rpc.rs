@@ -7129,12 +7129,16 @@ export default function init(pi) {
                     response["success"], true,
                     "prompt should succeed under inherited deadline: {response}"
                 );
-                
+
                 // Wait for the agent_end event to ensure the provider is actually called
                 // before we drop the connection. Use timeout to prevent hanging.
                 let mut saw_agent_end = false;
                 for _ in 0..50 {
-                    let Ok(msg) = client_out_rx.lock().expect("lock rx").recv_timeout(Duration::from_secs(5)) else {
+                    let Ok(msg) = client_out_rx
+                        .lock()
+                        .expect("lock rx")
+                        .recv_timeout(Duration::from_secs(5))
+                    else {
                         break;
                     };
                     if let Ok(json) = serde_json::from_str::<Value>(&msg) {

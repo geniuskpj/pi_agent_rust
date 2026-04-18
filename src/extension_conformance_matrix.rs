@@ -202,12 +202,15 @@ fn build_behaviors(
 
     // Registration behaviors (universal for all categories)
     if matches!(capability, HostCapability::Log) {
-        push_behavior_bounded(&mut behaviors, ExpectedBehavior {
-            description: "Extension load emits structured log".into(),
-            protocol_surface: "pi.ext.log.v1".into(),
-            pass_criteria: "Load event logged with correct extension_id and schema".into(),
-            fail_criteria: "Missing load log or wrong extension_id".into(),
-        });
+        push_behavior_bounded(
+            &mut behaviors,
+            ExpectedBehavior {
+                description: "Extension load emits structured log".into(),
+                protocol_surface: "pi.ext.log.v1".into(),
+                pass_criteria: "Load event logged with correct extension_id and schema".into(),
+                fail_criteria: "Missing load log or wrong extension_id".into(),
+            },
+        );
         return behaviors;
     }
 
@@ -315,12 +318,15 @@ fn build_behaviors(
         },
         ExtensionCategory::UiComponent => {
             if matches!(capability, HostCapability::Ui) {
-                push_behavior_bounded(&mut behaviors, ExpectedBehavior {
-                    description: "UI component registers message renderer".into(),
-                    protocol_surface: "registerMessageRenderer in register payload".into(),
-                    pass_criteria: "Renderer registered and callable".into(),
-                    fail_criteria: "Renderer not found in registration snapshot".into(),
-                });
+                push_behavior_bounded(
+                    &mut behaviors,
+                    ExpectedBehavior {
+                        description: "UI component registers message renderer".into(),
+                        protocol_surface: "registerMessageRenderer in register payload".into(),
+                        pass_criteria: "Renderer registered and callable".into(),
+                        fail_criteria: "Renderer not found in registration snapshot".into(),
+                    },
+                );
             }
         }
         ExtensionCategory::Configuration => match capability {
@@ -341,28 +347,36 @@ fn build_behaviors(
         ExtensionCategory::Multi => {
             // Multi-category extensions: behaviors are the union of their constituent types.
             // We add a cross-cutting behavior.
-            push_behavior_bounded(&mut behaviors, ExpectedBehavior {
-                description: format!(
-                    "Multi-type extension uses {capability:?} across registrations"
-                ),
-                protocol_surface: format!(
-                    "Multiple register types + host_call using {capability:?}"
-                ),
-                pass_criteria: "All registration types load; capability dispatched correctly"
-                    .into(),
-                fail_criteria: "Any registration type fails or capability mismatch".into(),
-            });
+            push_behavior_bounded(
+                &mut behaviors,
+                ExpectedBehavior {
+                    description: format!(
+                        "Multi-type extension uses {capability:?} across registrations"
+                    ),
+                    protocol_surface: format!(
+                        "Multiple register types + host_call using {capability:?}"
+                    ),
+                    pass_criteria: "All registration types load; capability dispatched correctly"
+                        .into(),
+                    fail_criteria: "Any registration type fails or capability mismatch".into(),
+                },
+            );
         }
         ExtensionCategory::General => {
             if matches!(capability, HostCapability::Session | HostCapability::Ui) {
-                push_behavior_bounded(&mut behaviors, ExpectedBehavior {
-                    description: format!(
-                        "General extension uses {capability:?} via export default"
-                    ),
-                    protocol_surface: format!("export default + host_call(method={capability:?})"),
-                    pass_criteria: "Extension loads; hostcall dispatched and returns".into(),
-                    fail_criteria: "Load failure or hostcall error".into(),
-                });
+                push_behavior_bounded(
+                    &mut behaviors,
+                    ExpectedBehavior {
+                        description: format!(
+                            "General extension uses {capability:?} via export default"
+                        ),
+                        protocol_surface: format!(
+                            "export default + host_call(method={capability:?})"
+                        ),
+                        pass_criteria: "Extension loads; hostcall dispatched and returns".into(),
+                        fail_criteria: "Load failure or hostcall error".into(),
+                    },
+                );
             }
         }
     }
@@ -370,12 +384,15 @@ fn build_behaviors(
     // Universal registration behavior for all categories
     if matches!(capability, HostCapability::Tool) && !matches!(category, ExtensionCategory::Tool) {
         // Non-tool extensions that still call tools
-        push_behavior_bounded(&mut behaviors, ExpectedBehavior {
-            description: "Extension calls non-core tool via pi.tool()".into(),
-            protocol_surface: "host_call(method=tool, name=<non-core>)".into(),
-            pass_criteria: "Tool capability check applied; prompt/deny in strict mode".into(),
-            fail_criteria: "Tool call bypasses capability check".into(),
-        });
+        push_behavior_bounded(
+            &mut behaviors,
+            ExpectedBehavior {
+                description: "Extension calls non-core tool via pi.tool()".into(),
+                protocol_surface: "host_call(method=tool, name=<non-core>)".into(),
+                pass_criteria: "Tool capability check applied; prompt/deny in strict mode".into(),
+                fail_criteria: "Tool call bypasses capability check".into(),
+            },
+        );
     }
 
     behaviors
@@ -1040,7 +1057,8 @@ mod tests {
             exemplar_extensions: vec!["hello".into()],
         };
         let json = serde_json::to_string(&cell).expect("serialize ConformanceCell");
-        let back: ConformanceCell = serde_json::from_str(&json).expect("deserialize ConformanceCell");
+        let back: ConformanceCell =
+            serde_json::from_str(&json).expect("deserialize ConformanceCell");
         assert_eq!(back.category, ExtensionCategory::Tool);
         assert!(back.required);
     }

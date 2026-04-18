@@ -2140,7 +2140,10 @@ pub(crate) async fn run_bash_command(
         let display_path = full_output_path.as_deref().unwrap_or("undefined");
         let file_limit_hit = bash_output.total_bytes > BASH_FILE_LIMIT_BYTES;
         let output_qualifier = if file_limit_hit {
-            format!("Partial output (capped at {})", format_size(BASH_FILE_LIMIT_BYTES))
+            format!(
+                "Partial output (capped at {})",
+                format_size(BASH_FILE_LIMIT_BYTES)
+            )
         } else {
             "Full output".to_string()
         };
@@ -6459,7 +6462,11 @@ mod tests {
                     ^ y.wrapping_mul(9_277)
                     ^ x.rotate_left(7)
                     ^ y.rotate_left(13);
-                Rgb([u8::try_from(seed % 256).unwrap_or(0), u8::try_from((seed >> 8) % 256).unwrap_or(0), u8::try_from((seed >> 16) % 256).unwrap_or(0)])
+                Rgb([
+                    u8::try_from(seed % 256).unwrap_or(0),
+                    u8::try_from((seed >> 8) % 256).unwrap_or(0),
+                    u8::try_from((seed >> 16) % 256).unwrap_or(0),
+                ])
             });
 
             let mut png_bytes = Vec::new();
@@ -6790,7 +6797,11 @@ mod tests {
 
             let meta = std::fs::metadata(&path).unwrap();
             let mode = meta.permissions().mode();
-            assert_eq!(mode & 0o777, 0o644, "Expected default 0o644 permissions for new files");
+            assert_eq!(
+                mode & 0o777,
+                0o644,
+                "Expected default 0o644 permissions for new files"
+            );
         });
     }
 

@@ -2123,7 +2123,9 @@ pub fn start_oauth_callback_server(redirect_uri: &str) -> Result<OAuthCallbackSe
 
         // Deliver the callback URL to the waiting caller.
         if tx.send(request_path).is_err() {
-            tracing::debug!("OAuth callback receiver was dropped before callback URL could be delivered");
+            tracing::debug!(
+                "OAuth callback receiver was dropped before callback URL could be delivered"
+            );
         }
     });
 
@@ -2232,7 +2234,9 @@ pub fn start_oauth_callback_server_random_port() -> Result<(OAuthCallbackServer,
         }
 
         if tx.send(request_path).is_err() {
-            tracing::debug!("OAuth callback receiver was dropped before callback URL could be delivered");
+            tracing::debug!(
+                "OAuth callback receiver was dropped before callback URL could be delivered"
+            );
         }
     });
 

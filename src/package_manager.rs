@@ -1040,8 +1040,7 @@ impl PackageManager {
         for removed in &pruned {
             let event = PackageTrustAuditEvent {
                 schema: PACKAGE_TRUST_AUDIT_SCHEMA,
-                timestamp: chrono::Utc::now()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 action: "remove".to_string(),
                 scope: scope_label(scope).to_string(),
                 source: removed.source.clone(),
@@ -7291,13 +7290,20 @@ mod tests {
 
         let lockfile_path = cwd.join(".pi").join("packages.lock.json");
         let before = read_package_lockfile(&lockfile_path).expect("read pre-reconcile lockfile");
-        assert_eq!(before.entries.len(), 2, "both pkgs should be locked initially");
+        assert_eq!(
+            before.entries.len(),
+            2,
+            "both pkgs should be locked initially"
+        );
 
         // Drop pkg2 from settings — this is the scenario where
         // `remove_lock_entry` was never called because the user edited
         // settings.json directly or via another tool.
-        fs::write(&settings_path, json!({ "packages": ["./pkg1"] }).to_string())
-            .expect("rewrite settings");
+        fs::write(
+            &settings_path,
+            json!({ "packages": ["./pkg1"] }).to_string(),
+        )
+        .expect("rewrite settings");
 
         let pruned = manager
             .reconcile_lockfile_sync(PackageScope::Project)
@@ -7311,7 +7317,11 @@ mod tests {
         );
 
         let after = read_package_lockfile(&lockfile_path).expect("read post-reconcile lockfile");
-        assert_eq!(after.entries.len(), 1, "lockfile should have one remaining entry");
+        assert_eq!(
+            after.entries.len(),
+            1,
+            "lockfile should have one remaining entry"
+        );
         assert!(
             after.entries.iter().any(|e| e.source == "./pkg1"),
             "pkg1 should remain after reconcile"
@@ -7368,7 +7378,11 @@ mod tests {
 
         let manager = PackageManager::new(cwd.clone());
         manager
-            .verify_and_record_lock("./keep-me", PackageScope::Project, PackageLockAction::Install)
+            .verify_and_record_lock(
+                "./keep-me",
+                PackageScope::Project,
+                PackageLockAction::Install,
+            )
             .expect("lock keep-me");
 
         let lockfile_path = cwd.join(".pi").join("packages.lock.json");
