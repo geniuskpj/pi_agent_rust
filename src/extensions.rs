@@ -15295,28 +15295,42 @@ impl ExtensionEventName {
     /// `SessionBeforeTree`, `ResourcesDiscover`.
     #[must_use]
     pub const fn is_informational(self) -> bool {
-        matches!(
-            self,
+        // Exhaustive match (no `_ => …` fallthrough) so that adding a
+        // new `ExtensionEventName` variant forces the author to
+        // classify it here. Without this, a new variant would silently
+        // fall into the "actionable" default and get a 5s timeout —
+        // probably harmless, but easy to miss.
+        match self {
             Self::Startup
-                | Self::AgentStart
-                | Self::AgentEnd
-                | Self::TurnStart
-                | Self::TurnEnd
-                | Self::MessageStart
-                | Self::MessageUpdate
-                | Self::MessageEnd
-                | Self::ToolExecutionStart
-                | Self::ToolExecutionUpdate
-                | Self::ToolExecutionEnd
-                | Self::SessionStart
-                | Self::SessionSwitch
-                | Self::SessionFork
-                | Self::SessionCompact
-                | Self::SessionTree
-                | Self::SessionShutdown
-                | Self::ModelSelect
-                | Self::UserBash
-        )
+            | Self::AgentStart
+            | Self::AgentEnd
+            | Self::TurnStart
+            | Self::TurnEnd
+            | Self::MessageStart
+            | Self::MessageUpdate
+            | Self::MessageEnd
+            | Self::ToolExecutionStart
+            | Self::ToolExecutionUpdate
+            | Self::ToolExecutionEnd
+            | Self::SessionStart
+            | Self::SessionSwitch
+            | Self::SessionFork
+            | Self::SessionCompact
+            | Self::SessionTree
+            | Self::SessionShutdown
+            | Self::ModelSelect
+            | Self::UserBash => true,
+            Self::Input
+            | Self::BeforeAgentStart
+            | Self::Context
+            | Self::ToolCall
+            | Self::ToolResult
+            | Self::SessionBeforeSwitch
+            | Self::SessionBeforeFork
+            | Self::SessionBeforeCompact
+            | Self::SessionBeforeTree
+            | Self::ResourcesDiscover => false,
+        }
     }
 
     /// Deadline this event should be dispatched with when no explicit
