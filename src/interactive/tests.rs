@@ -263,8 +263,7 @@ fn read_vcs_info_falls_back_to_git_when_no_jj() {
     let dir = tempdir();
     let dot_git = dir.path().join(".git");
     std::fs::create_dir(&dot_git).expect("mkdir .git");
-    std::fs::write(dot_git.join("HEAD"), "ref: refs/heads/feature/jj-demo\n")
-        .expect("seed HEAD");
+    std::fs::write(dot_git.join("HEAD"), "ref: refs/heads/feature/jj-demo\n").expect("seed HEAD");
 
     let vcs = super::read_vcs_info(dir.path());
     assert_eq!(vcs.as_deref(), Some("feature/jj-demo"));

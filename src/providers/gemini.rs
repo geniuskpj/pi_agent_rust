@@ -424,7 +424,9 @@ impl Provider for GeminiProvider {
                                     || e.kind() == std::io::ErrorKind::TimedOut
                                 {
                                     state.transient_error_count += 1;
-                                    if state.transient_error_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
+                                    if state.transient_error_count
+                                        <= MAX_CONSECUTIVE_TRANSIENT_ERRORS
+                                    {
                                         tracing::warn!(
                                             kind = ?e.kind(),
                                             count = state.transient_error_count,
