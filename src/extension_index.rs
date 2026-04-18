@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
@@ -76,7 +77,7 @@ impl ExtensionIndex {
         let parsed = parsed.with_timezone(&Utc);
         now.signed_duration_since(parsed)
             .to_std()
-            .map_or(true, |age| age > max_age)
+            .map_or(true, |age| age >= max_age)
     }
 
     /// Resolve a unique `installSource` for an id/name, if present.
@@ -416,10 +417,18 @@ impl ExtensionIndexStore {
 }
 
 fn persist_tempfile_for_cache(tmp: NamedTempFile, path: &Path) -> std::io::Result<()> {
+    let _persist_guard = extension_index_persist_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match tmp.persist(path) {
         Ok(_) => Ok(()),
         Err(err) => persist_tempfile_for_cache_after_conflict(err, path),
     }
+}
+
+fn extension_index_persist_lock() -> &'static Mutex<()> {
+    static PERSIST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    PERSIST_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[cfg(windows)]
@@ -1078,6 +1087,14 @@ mod tests {
         let old = Utc::now() - ChronoDuration::hours(2);
         index.last_refreshed_at = Some(old.to_rfc3339());
         assert!(index.is_stale(Utc::now(), Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn is_stale_true_at_exact_max_age_boundary() {
+        let now = Utc::now();
+        let mut index = ExtensionIndex::new_empty();
+        index.last_refreshed_at = Some((now - ChronoDuration::hours(1)).to_rfc3339());
+        assert!(index.is_stale(now, Duration::from_secs(3600)));
     }
 
     // ── search ─────────────────────────────────────────────────────────

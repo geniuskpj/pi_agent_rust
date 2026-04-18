@@ -2,10 +2,14 @@
 
 use crate::agent::QueueMode;
 use crate::error::{Error, Result};
+use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
 
 /// Main configuration structure.
@@ -1276,15 +1280,109 @@ fn write_settings_json_atomic(path: &Path, value: &Value) -> Result<()> {
             err.error
         ))
     })?;
+    sync_settings_parent_dir(path)?;
 
     Ok(())
 }
 
 fn patch_settings_file(path: &Path, patch: Value) -> Result<Value> {
+    let _process_guard = settings_persist_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lock_handle = open_settings_lock_file(path)?;
+    let _file_guard = lock_settings_file(lock_handle, Duration::from_secs(30))?;
     let mut settings = load_settings_json_object(path)?;
     deep_merge_settings_value(&mut settings, patch)?;
     write_settings_json_atomic(path, &settings)?;
     Ok(settings)
+}
+
+fn settings_persist_lock() -> &'static Mutex<()> {
+    static PERSIST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    PERSIST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn settings_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.to_path_buf();
+    let mut file_name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("settings"),
+        std::ffi::OsString::from,
+    );
+    file_name.push(".lock");
+    lock_path.set_file_name(file_name);
+    lock_path
+}
+
+fn open_settings_lock_file(path: &Path) -> Result<File> {
+    let lock_path = settings_lock_path(path);
+    if let Some(parent) = lock_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut options = File::options();
+    options.read(true).write(true).create(true).truncate(false);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+
+    options.open(&lock_path).map_err(|err| {
+        Error::config(format!(
+            "Failed to open settings lock file {}: {err}",
+            lock_path.display()
+        ))
+    })
+}
+
+fn lock_settings_file(file: File, timeout: Duration) -> Result<SettingsLockGuard> {
+    let start = Instant::now();
+    loop {
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(true) => return Ok(SettingsLockGuard { file }),
+            Ok(false) => {}
+            Err(err) => {
+                return Err(Error::config(format!(
+                    "Failed to lock settings file: {err}"
+                )));
+            }
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(Error::config("Timed out waiting for settings lock"));
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+struct SettingsLockGuard {
+    file: File,
+}
+
+impl Drop for SettingsLockGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+#[cfg(unix)]
+fn sync_settings_parent_dir(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_settings_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1304,6 +1402,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::{Arc, Barrier};
     use tempfile::TempDir;
 
     fn write_file(path: &std::path::Path, contents: &str) {
@@ -1554,6 +1653,52 @@ mod tests {
         assert_eq!(stored["theme"], json!("dark"));
         assert_eq!(stored["compaction"]["reserve_tokens"], json!(111));
         assert_eq!(stored["compaction"]["enabled"], json!(false));
+    }
+
+    #[test]
+    fn patch_settings_serializes_concurrent_updates() {
+        let temp = TempDir::new().expect("create tempdir");
+        let cwd = temp.path().join("cwd");
+        let global_dir = temp.path().join("global");
+        let settings_path =
+            Config::settings_path_with_roots(SettingsScope::Project, &global_dir, &cwd);
+
+        write_file(&settings_path, r#"{ "theme": "dark" }"#);
+
+        let barrier = Arc::new(Barrier::new(12));
+        let mut handles = Vec::new();
+
+        for idx in 0..12 {
+            let barrier = Arc::clone(&barrier);
+            let cwd = cwd.clone();
+            let global_dir = global_dir.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut patch = serde_json::Map::new();
+                patch.insert(format!("concurrent_{idx}"), json!(idx));
+                barrier.wait();
+                Config::patch_settings_with_roots(
+                    SettingsScope::Project,
+                    &global_dir,
+                    &cwd,
+                    Value::Object(patch),
+                )
+                .expect("patch settings")
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("join patch thread");
+        }
+
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).expect("read settings"))
+                .expect("parse settings");
+        assert_eq!(stored["theme"], json!("dark"));
+        for idx in 0..12 {
+            let key = format!("concurrent_{idx}");
+            let expected = json!(idx);
+            assert_eq!(stored.get(&key), Some(&expected));
+        }
     }
 
     #[test]
