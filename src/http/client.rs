@@ -27,6 +27,8 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
 const MAX_BUFFERED_BYTES: usize = 256 * 1024;
 const MAX_TEXT_BODY_BYTES: usize = 50 * 1024 * 1024;
+/// Maximum number of outbound request headers to prevent DoS.
+const MAX_REQUEST_HEADERS: usize = 100;
 
 /// Maximum number of consecutive `Ok(0)` returns from `poll_write` before we
 /// give up and surface `ErrorKind::WriteZero`.  TLS transports can temporarily
@@ -163,9 +165,10 @@ impl<'a> RequestBuilder<'a> {
         {
             *existing_key = key;
             *existing_value = value;
-        } else {
+        } else if self.headers.len() < MAX_REQUEST_HEADERS {
             self.headers.push((key, value));
         }
+        // Silently drop headers beyond the limit to prevent DoS
         self
     }
 
@@ -1645,6 +1648,30 @@ mod tests {
         assert_eq!(builder.headers.len(), 1);
         assert!(builder.headers[0].0.eq_ignore_ascii_case("authorization"));
         assert_eq!(builder.headers[0].1, "Bearer second");
+    }
+
+    #[test]
+    fn request_builder_header_bounds_prevent_dos() {
+        // Test that header count is bounded to prevent DoS attacks.
+        let client = Client::new();
+        let mut builder = client.post("https://api.example.com");
+
+        // Add headers up to the limit
+        for i in 0..MAX_REQUEST_HEADERS {
+            builder = builder.header(format!("X-Header-{i}"), "value");
+        }
+        assert_eq!(builder.headers.len(), MAX_REQUEST_HEADERS);
+
+        // Additional headers should be silently dropped
+        builder = builder
+            .header("X-Over-Limit-1", "dropped")
+            .header("X-Over-Limit-2", "also-dropped");
+        assert_eq!(builder.headers.len(), MAX_REQUEST_HEADERS);
+
+        // But replacing existing headers should still work
+        builder = builder.header("X-Header-0", "replaced-value");
+        assert_eq!(builder.headers.len(), MAX_REQUEST_HEADERS);
+        assert_eq!(builder.headers[0].1, "replaced-value");
     }
 
     #[test]
