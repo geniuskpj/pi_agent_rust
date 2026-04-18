@@ -48,7 +48,9 @@ impl PendingCompaction {
 
     fn abort(&mut self) {
         if let Some(abort_tx) = self.abort_tx.take() {
-            let _ = abort_tx.send(());
+            if abort_tx.send(()).is_err() {
+                tracing::debug!("abort signal receiver was already dropped");
+            }
         }
     }
 }
@@ -170,7 +172,9 @@ async fn run_compaction_task(
     abort_rx: oneshot::Receiver<()>,
 ) -> CompactionOutcome {
     let abort_fut = async move {
-        let _ = abort_rx.await;
+        if abort_rx.await.is_err() {
+            tracing::debug!("abort signal sender was dropped before sending abort");
+        }
         Err(Error::session("Background compaction aborted".to_string()))
     }
     .fuse();
