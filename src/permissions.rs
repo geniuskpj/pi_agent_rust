@@ -8,10 +8,14 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
+use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
 
 /// On-disk schema version.
@@ -88,41 +92,7 @@ impl PermissionStore {
 
     /// Open (or create) the permissions store at a specific path.
     pub fn open(path: &Path) -> Result<Self> {
-        let decisions = if path.exists() {
-            let raw = std::fs::read_to_string(path).map_err(|e| {
-                Error::config(format!(
-                    "Failed to read permissions file {}: {e}",
-                    path.display()
-                ))
-            })?;
-            let file: PermissionsFile = serde_json::from_str(&raw).map_err(|e| {
-                Error::config(format!(
-                    "Failed to parse permissions file {}: {e}",
-                    path.display()
-                ))
-            })?;
-            if file.version != CURRENT_VERSION {
-                return Err(Error::config(format!(
-                    "Unsupported permissions file schema version {} in {} (expected {})",
-                    file.version,
-                    path.display(),
-                    CURRENT_VERSION
-                )));
-            }
-            // Convert Vec<PersistedDecision> → HashMap keyed by capability.
-            file.decisions
-                .into_iter()
-                .map(|(ext_id, decs)| {
-                    let by_cap: HashMap<String, PersistedDecision> = decs
-                        .into_iter()
-                        .map(|d| (d.capability.clone(), d))
-                        .collect();
-                    (ext_id, by_cap)
-                })
-                .collect()
-        } else {
-            HashMap::new()
-        };
+        let decisions = load_permissions_decisions(path)?;
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -155,12 +125,12 @@ impl PermissionStore {
             version_range: None,
         };
 
-        self.decisions
-            .entry(extension_id.to_string())
-            .or_default()
-            .insert(capability.to_string(), decision);
-
-        self.save()
+        self.update_persisted_decisions(|decisions| {
+            decisions
+                .entry(extension_id.to_string())
+                .or_default()
+                .insert(capability.to_string(), decision);
+        })
     }
 
     /// Record a decision with a version range constraint.
@@ -179,24 +149,24 @@ impl PermissionStore {
             version_range: Some(version_range.to_string()),
         };
 
-        self.decisions
-            .entry(extension_id.to_string())
-            .or_default()
-            .insert(capability.to_string(), decision);
-
-        self.save()
+        self.update_persisted_decisions(|decisions| {
+            decisions
+                .entry(extension_id.to_string())
+                .or_default()
+                .insert(capability.to_string(), decision);
+        })
     }
 
     /// Remove all decisions for a specific extension.
     pub fn revoke_extension(&mut self, extension_id: &str) -> Result<()> {
-        self.decisions.remove(extension_id);
-        self.save()
+        self.update_persisted_decisions(|decisions| {
+            decisions.remove(extension_id);
+        })
     }
 
     /// Remove all persisted decisions.
     pub fn reset(&mut self) -> Result<()> {
-        self.decisions.clear();
-        self.save()
+        self.update_persisted_decisions(HashMap::clear)
     }
 
     /// List all persisted decisions grouped by extension.
@@ -246,8 +216,23 @@ impl PermissionStore {
     // Internal
     // -----------------------------------------------------------------------
 
+    fn update_persisted_decisions(
+        &mut self,
+        update: impl FnOnce(&mut HashMap<String, HashMap<String, PersistedDecision>>),
+    ) -> Result<()> {
+        let _process_guard = permissions_persist_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lock_handle = open_permissions_lock_file(&self.path)?;
+        let _file_guard = lock_permissions_file(lock_handle, Duration::from_secs(30))?;
+
+        self.decisions = load_permissions_decisions(&self.path)?;
+        update(&mut self.decisions);
+        self.save_unlocked()
+    }
+
     /// Atomic write to disk following the same pattern as `config.rs`.
-    fn save(&self) -> Result<()> {
+    fn save_unlocked(&self) -> Result<()> {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -296,6 +281,7 @@ impl PermissionStore {
                 err.error
             ))
         })?;
+        sync_permissions_parent_dir(&self.path)?;
 
         Ok(())
     }
@@ -304,6 +290,135 @@ impl PermissionStore {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn load_permissions_decisions(
+    path: &Path,
+) -> Result<HashMap<String, HashMap<String, PersistedDecision>>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        Error::config(format!(
+            "Failed to read permissions file {}: {e}",
+            path.display()
+        ))
+    })?;
+    let file: PermissionsFile = serde_json::from_str(&raw).map_err(|e| {
+        Error::config(format!(
+            "Failed to parse permissions file {}: {e}",
+            path.display()
+        ))
+    })?;
+    if file.version != CURRENT_VERSION {
+        return Err(Error::config(format!(
+            "Unsupported permissions file schema version {} in {} (expected {})",
+            file.version,
+            path.display(),
+            CURRENT_VERSION
+        )));
+    }
+
+    Ok(file
+        .decisions
+        .into_iter()
+        .map(|(ext_id, decs)| {
+            let by_cap: HashMap<String, PersistedDecision> = decs
+                .into_iter()
+                .map(|d| (d.capability.clone(), d))
+                .collect();
+            (ext_id, by_cap)
+        })
+        .collect())
+}
+
+fn permissions_persist_lock() -> &'static Mutex<()> {
+    static PERSIST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    PERSIST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn permissions_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.to_path_buf();
+    let mut file_name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("permissions"),
+        std::ffi::OsString::from,
+    );
+    file_name.push(".lock");
+    lock_path.set_file_name(file_name);
+    lock_path
+}
+
+fn open_permissions_lock_file(path: &Path) -> Result<File> {
+    let lock_path = permissions_lock_path(path);
+    if let Some(parent) = lock_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut options = File::options();
+    options.read(true).write(true).create(true).truncate(false);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+
+    options.open(&lock_path).map_err(|err| {
+        Error::config(format!(
+            "Failed to open permissions lock file {}: {err}",
+            lock_path.display()
+        ))
+    })
+}
+
+fn lock_permissions_file(file: File, timeout: Duration) -> Result<PermissionsLockGuard> {
+    let start = Instant::now();
+    loop {
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(true) => return Ok(PermissionsLockGuard { file }),
+            Ok(false) => {}
+            Err(err) => {
+                return Err(Error::config(format!(
+                    "Failed to lock permissions file: {err}"
+                )));
+            }
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(Error::config("Timed out waiting for permissions lock"));
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+struct PermissionsLockGuard {
+    file: File,
+}
+
+impl Drop for PermissionsLockGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+#[cfg(unix)]
+fn sync_permissions_parent_dir(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_permissions_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 fn now_iso8601() -> String {
     // Use wall-clock time.  We don't need sub-second precision for expiry
@@ -388,6 +503,7 @@ const fn days_to_ymd(days: u64) -> (u64, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn roundtrip_empty() {
@@ -1182,6 +1298,39 @@ mod tests {
         // decided_at should be a recent timestamp (year >= 2024)
         let year: u32 = dec.decided_at[0..4].parse().unwrap();
         assert!(year >= 2024);
+    }
+
+    #[test]
+    fn concurrent_records_preserve_all_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("permissions.json");
+        let workers = 12;
+        let barrier = Arc::new(Barrier::new(workers));
+        let mut handles = Vec::new();
+
+        for idx in 0..workers {
+            let barrier = Arc::clone(&barrier);
+            let path = path.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut store = PermissionStore::open(&path).unwrap();
+                barrier.wait();
+                store
+                    .record(&format!("ext-{idx}"), "exec", idx % 2 == 0)
+                    .unwrap();
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let store = PermissionStore::open(&path).unwrap();
+        for idx in 0..workers {
+            assert_eq!(
+                store.lookup(&format!("ext-{idx}"), "exec"),
+                Some(idx % 2 == 0)
+            );
+        }
     }
 
     mod proptest_permissions {
