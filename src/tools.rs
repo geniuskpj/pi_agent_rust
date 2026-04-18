@@ -271,7 +271,7 @@ pub fn truncate_head(
     let mut byte_count = 0;
     let mut truncated_by = None;
     let mut current_offset = 0;
-    let mut last_line_partial = false;
+    let last_line_partial = false;
 
     while current_offset < content.len() {
         if line_count >= max_lines {

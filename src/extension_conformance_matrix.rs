@@ -9,7 +9,7 @@
 //! has an explicit test target.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::extension_inclusion::{ExtensionCategory, InclusionEntry, InclusionList};
 
@@ -162,6 +162,17 @@ pub struct CoverageSummary {
 // Matrix builder
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Maximum behaviors per conformance cell to prevent unbounded growth.
+const MAX_BEHAVIORS_PER_CELL: usize = 16;
+
+/// Safely push a behavior with bounds checking.
+fn push_behavior_bounded(behaviors: &mut Vec<ExpectedBehavior>, behavior: ExpectedBehavior) {
+    if behaviors.len() < MAX_BEHAVIORS_PER_CELL {
+        behaviors.push(behavior);
+    }
+    // Silently ignore if at capacity - this prevents DoS but maintains functionality
+}
+
 /// API matrix entry from `docs/extension-api-matrix.json`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiMatrixEntry {
@@ -177,7 +188,7 @@ pub struct ApiMatrixEntry {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiMatrix {
     pub schema: String,
-    pub extensions: HashMap<String, ApiMatrixEntry>,
+    pub extensions: BTreeMap<String, ApiMatrixEntry>,
 }
 
 /// Build the canonical expected behaviors for a category × capability pair.
@@ -191,7 +202,7 @@ fn build_behaviors(
 
     // Registration behaviors (universal for all categories)
     if matches!(capability, HostCapability::Log) {
-        behaviors.push(ExpectedBehavior {
+        push_behavior_bounded(&mut behaviors, ExpectedBehavior {
             description: "Extension load emits structured log".into(),
             protocol_surface: "pi.ext.log.v1".into(),
             pass_criteria: "Load event logged with correct extension_id and schema".into(),
@@ -304,7 +315,7 @@ fn build_behaviors(
         },
         ExtensionCategory::UiComponent => {
             if matches!(capability, HostCapability::Ui) {
-                behaviors.push(ExpectedBehavior {
+                push_behavior_bounded(&mut behaviors, ExpectedBehavior {
                     description: "UI component registers message renderer".into(),
                     protocol_surface: "registerMessageRenderer in register payload".into(),
                     pass_criteria: "Renderer registered and callable".into(),
@@ -330,7 +341,7 @@ fn build_behaviors(
         ExtensionCategory::Multi => {
             // Multi-category extensions: behaviors are the union of their constituent types.
             // We add a cross-cutting behavior.
-            behaviors.push(ExpectedBehavior {
+            push_behavior_bounded(&mut behaviors, ExpectedBehavior {
                 description: format!(
                     "Multi-type extension uses {capability:?} across registrations"
                 ),
@@ -344,7 +355,7 @@ fn build_behaviors(
         }
         ExtensionCategory::General => {
             if matches!(capability, HostCapability::Session | HostCapability::Ui) {
-                behaviors.push(ExpectedBehavior {
+                push_behavior_bounded(&mut behaviors, ExpectedBehavior {
                     description: format!(
                         "General extension uses {capability:?} via export default"
                     ),
@@ -359,7 +370,7 @@ fn build_behaviors(
     // Universal registration behavior for all categories
     if matches!(capability, HostCapability::Tool) && !matches!(category, ExtensionCategory::Tool) {
         // Non-tool extensions that still call tools
-        behaviors.push(ExpectedBehavior {
+        push_behavior_bounded(&mut behaviors, ExpectedBehavior {
             description: "Extension calls non-core tool via pi.tool()".into(),
             protocol_surface: "host_call(method=tool, name=<non-core>)".into(),
             pass_criteria: "Tool capability check applied; prompt/deny in strict mode".into(),
@@ -1008,9 +1019,9 @@ mod tests {
     #[test]
     fn serde_roundtrip_host_capability() {
         let cap = HostCapability::Http;
-        let json = serde_json::to_string(&cap).unwrap();
+        let json = serde_json::to_string(&cap).expect("serialize HostCapability");
         assert_eq!(json, "\"http\"");
-        let back: HostCapability = serde_json::from_str(&json).unwrap();
+        let back: HostCapability = serde_json::from_str(&json).expect("deserialize HostCapability");
         assert_eq!(back, cap);
     }
 
@@ -1028,8 +1039,8 @@ mod tests {
             }],
             exemplar_extensions: vec!["hello".into()],
         };
-        let json = serde_json::to_string(&cell).unwrap();
-        let back: ConformanceCell = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cell).expect("serialize ConformanceCell");
+        let back: ConformanceCell = serde_json::from_str(&json).expect("deserialize ConformanceCell");
         assert_eq!(back.category, ExtensionCategory::Tool);
         assert!(back.required);
     }
@@ -1139,7 +1150,7 @@ mod tests {
                     };
                     (id, entry)
                 })
-                .collect::<std::collections::HashMap<_, _>>();
+                .collect::<BTreeMap<_, _>>();
 
             let api_matrix = ApiMatrix {
                 schema: "pi.ext.api-matrix.v1".to_string(),
@@ -1198,8 +1209,8 @@ mod tests {
             #[test]
             fn capability_serde_roundtrip(idx in 0..9usize) {
                 let cap = HostCapability::all()[idx];
-                let json = serde_json::to_string(&cap).unwrap();
-                let back: HostCapability = serde_json::from_str(&json).unwrap();
+                let json = serde_json::to_string(&cap).expect("serialize HostCapability in proptest");
+                let back: HostCapability = serde_json::from_str(&json).expect("deserialize HostCapability in proptest");
                 assert_eq!(cap, back);
             }
 
@@ -1239,7 +1250,7 @@ mod tests {
             #[test]
             fn capitalize_first_works(s in "[a-z]{1,20}") {
                 let result = capitalize_first(&s);
-                let first = result.chars().next().unwrap();
+                let first = result.chars().next().expect("capitalize_first should return non-empty string");
                 assert!(first.is_uppercase());
                 assert_eq!(&result[first.len_utf8()..], &s[1..]);
             }

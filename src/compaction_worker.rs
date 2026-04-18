@@ -246,7 +246,9 @@ mod tests {
     ) -> PendingCompaction {
         let (abort_tx, abort_rx) = oneshot::channel();
         let join = runtime_handle.spawn(async move {
-            let _ = abort_rx.await;
+            if abort_rx.await.is_err() {
+                tracing::debug!("abort signal sender was dropped before sending abort");
+            }
             if let Some(flag) = aborted {
                 flag.store(true, Ordering::SeqCst);
             }
