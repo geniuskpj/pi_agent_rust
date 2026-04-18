@@ -341,7 +341,14 @@ impl AuthStorage {
                 Ok(file) => file,
                 Err(e) => {
                     let backup_path = path.with_extension("json.corrupt");
-                    let _ = fs::copy(&path, &backup_path);
+                    if let Err(backup_err) = fs::copy(&path, &backup_path) {
+                        tracing::error!(
+                            event = "pi.auth.backup_failed",
+                            error = %backup_err,
+                            backup = %backup_path.display(),
+                            "Failed to backup corrupted auth.json"
+                        );
+                    }
                     tracing::warn!(
                         event = "pi.auth.parse_error",
                         error = %e,
@@ -2107,11 +2114,17 @@ pub fn start_oauth_callback_server(redirect_uri: &str) -> Result<OAuthCallbackSe
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
             html.len()
         );
-        let _ = stream.write_all(response.as_bytes());
-        let _ = stream.flush();
+        if let Err(e) = stream.write_all(response.as_bytes()) {
+            tracing::debug!("Failed to write HTTP response: {e}");
+        }
+        if let Err(e) = stream.flush() {
+            tracing::debug!("Failed to flush HTTP response: {e}");
+        }
 
         // Deliver the callback URL to the waiting caller.
-        let _ = tx.send(request_path);
+        if tx.send(request_path).is_err() {
+            tracing::debug!("OAuth callback receiver was dropped before callback URL could be delivered");
+        }
     });
 
     Ok(OAuthCallbackServer {
@@ -2211,10 +2224,16 @@ pub fn start_oauth_callback_server_random_port() -> Result<(OAuthCallbackServer,
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
             html.len()
         );
-        let _ = stream.write_all(response.as_bytes());
-        let _ = stream.flush();
+        if let Err(e) = stream.write_all(response.as_bytes()) {
+            tracing::debug!("Failed to write HTTP response: {e}");
+        }
+        if let Err(e) = stream.flush() {
+            tracing::debug!("Failed to flush HTTP response: {e}");
+        }
 
-        let _ = tx.send(request_path);
+        if tx.send(request_path).is_err() {
+            tracing::debug!("OAuth callback receiver was dropped before callback URL could be delivered");
+        }
     });
 
     Ok((
@@ -2499,7 +2518,13 @@ fn kimi_device_id() -> String {
     }
 
     if let Some(parent) = primary.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(err) = fs::create_dir_all(parent) {
+            tracing::debug!(
+                path = ?parent,
+                error = %err,
+                "Failed to create directory for generated credential file"
+            );
+        }
     }
 
     let mut options = std::fs::OpenOptions::new();
@@ -2512,7 +2537,13 @@ fn kimi_device_id() -> String {
     }
 
     if let Ok(mut file) = options.open(&primary) {
-        let _ = file.write_all(generated.as_bytes());
+        if let Err(err) = file.write_all(generated.as_bytes()) {
+            tracing::debug!(
+                path = ?primary,
+                error = %err,
+                "Failed to write generated credential data to file"
+            );
+        }
     }
 
     generated

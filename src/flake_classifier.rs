@@ -203,12 +203,12 @@ impl Default for RetryPolicy {
                 .unwrap_or(1),
             retry_delay_secs: std::env::var("PI_CONFORMANCE_RETRY_DELAY")
                 .ok()
-                .and_then(|v| v.parse().ok())
+                .and_then(|v| v.parse::<u32>().ok())
                 .map(|v| v.min(3600)) // Cap at 1 hour to prevent DoS
                 .unwrap_or(5),
             flake_budget: std::env::var("PI_CONFORMANCE_FLAKE_BUDGET")
                 .ok()
-                .and_then(|v| v.parse().ok())
+                .and_then(|v| v.parse::<u32>().ok())
                 .map(|v| v.min(1000)) // Cap at 1000 to prevent DoS
                 .unwrap_or(3),
         }
