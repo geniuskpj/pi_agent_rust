@@ -399,7 +399,7 @@ impl Provider for GeminiProvider {
 
                         match state.event_source.next().await {
                             Some(Ok(msg)) => {
-                                state.write_zero_count = 0;
+                                state.transient_error_count = 0;
                                 if msg.event == "ping" {
                                     continue;
                                 }
@@ -423,11 +423,11 @@ impl Provider for GeminiProvider {
                                     || e.kind() == std::io::ErrorKind::WouldBlock
                                     || e.kind() == std::io::ErrorKind::TimedOut
                                 {
-                                    state.write_zero_count += 1;
-                                    if state.write_zero_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
+                                    state.transient_error_count += 1;
+                                    if state.transient_error_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
                                         tracing::warn!(
                                             kind = ?e.kind(),
-                                            count = state.write_zero_count,
+                                            count = state.transient_error_count,
                                             "Transient error in SSE stream, continuing"
                                         );
                                         continue;
@@ -537,7 +537,7 @@ impl Provider for GeminiProvider {
 
                     match state.event_source.next().await {
                         Some(Ok(msg)) => {
-                            state.write_zero_count = 0;
+                            state.transient_error_count = 0;
                             if msg.event == "ping" {
                                 continue;
                             }
@@ -555,10 +555,10 @@ impl Provider for GeminiProvider {
                         Some(Err(e)) => {
                             const MAX_CONSECUTIVE_WRITE_ZERO: usize = 5;
                             if e.kind() == std::io::ErrorKind::WriteZero {
-                                state.write_zero_count += 1;
-                                if state.write_zero_count <= MAX_CONSECUTIVE_WRITE_ZERO {
+                                state.transient_error_count += 1;
+                                if state.transient_error_count <= MAX_CONSECUTIVE_WRITE_ZERO {
                                     tracing::warn!(
-                                        count = state.write_zero_count,
+                                        count = state.transient_error_count,
                                         "Transient WriteZero error in SSE stream, continuing"
                                     );
                                     continue;
@@ -602,7 +602,7 @@ where
     started: bool,
     finished: bool,
     /// Consecutive WriteZero errors seen without a successful event in between.
-    write_zero_count: usize,
+    transient_error_count: usize,
 }
 
 impl<S> StreamState<S>
@@ -625,7 +625,7 @@ where
             pending_events: VecDeque::new(),
             started: false,
             finished: false,
-            write_zero_count: 0,
+            transient_error_count: 0,
         }
     }
 

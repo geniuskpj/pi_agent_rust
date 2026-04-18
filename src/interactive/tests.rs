@@ -215,6 +215,62 @@ fn extract_file_references_preserves_newline_before_trailing_punctuation() {
 }
 
 #[test]
+fn is_inside_jj_repo_detects_root_directly() {
+    let dir = tempdir();
+    std::fs::create_dir(dir.path().join(".jj")).expect("mkdir .jj");
+    assert!(super::is_inside_jj_repo(dir.path()));
+}
+
+#[test]
+fn is_inside_jj_repo_walks_up_to_ancestor() {
+    let dir = tempdir();
+    let root = dir.path();
+    std::fs::create_dir(root.join(".jj")).expect("mkdir .jj");
+    let nested = root.join("a").join("b").join("c");
+    std::fs::create_dir_all(&nested).expect("mkdir nested");
+    assert!(super::is_inside_jj_repo(&nested));
+}
+
+#[test]
+fn is_inside_jj_repo_false_when_no_dot_jj_anywhere() {
+    let dir = tempdir();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).expect("mkdir nested");
+    assert!(!super::is_inside_jj_repo(&nested));
+}
+
+#[test]
+fn is_inside_jj_repo_requires_dot_jj_to_be_a_directory() {
+    // A file named `.jj` is a gitlink-like stub in some tooling; only a
+    // real `.jj/` directory counts as a jj repo for display purposes.
+    let dir = tempdir();
+    std::fs::write(dir.path().join(".jj"), "not a dir").expect("write stub");
+    assert!(!super::is_inside_jj_repo(dir.path()));
+}
+
+#[test]
+fn read_jj_change_returns_none_outside_jj_repo() {
+    // No `.jj` anywhere -> must short-circuit without forking a
+    // subprocess and without touching $PATH for the `jj` binary.
+    let dir = tempdir();
+    assert!(super::read_jj_change(dir.path()).is_none());
+}
+
+#[test]
+fn read_vcs_info_falls_back_to_git_when_no_jj() {
+    // Seed a minimal `.git/HEAD` pointing at a branch. With no `.jj`
+    // anywhere, read_vcs_info must return the git branch name unchanged.
+    let dir = tempdir();
+    let dot_git = dir.path().join(".git");
+    std::fs::create_dir(&dot_git).expect("mkdir .git");
+    std::fs::write(dot_git.join("HEAD"), "ref: refs/heads/feature/jj-demo\n")
+        .expect("seed HEAD");
+
+    let vcs = super::read_vcs_info(dir.path());
+    assert_eq!(vcs.as_deref(), Some("feature/jj-demo"));
+}
+
+#[test]
 fn render_header_uses_cycle_thinking_binding_hint() {
     let dir = tempdir();
     let mut app = build_test_app(dir.path().to_path_buf());

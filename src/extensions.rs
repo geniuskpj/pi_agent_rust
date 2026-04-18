@@ -15137,9 +15137,9 @@ impl WasmExtensionHost {
 /// Default cancellation budget for extension event handlers (ms).
 pub const EXTENSION_EVENT_TIMEOUT_MS: u64 = 5_000;
 
-/// Tight cancellation budget for informational (fire-and-forget) event
-/// handlers — lifecycle notifications, telemetry pokes, post-hoc updates.
+/// Tight cancellation budget for informational (fire-and-forget) event handlers.
 ///
+/// This covers lifecycle notifications, telemetry pokes, and post-hoc updates.
 /// A misbehaving or deadlocked extension on an info-only event shouldn't
 /// stall the agent for the full general budget. See [`ExtensionEventName::is_informational`].
 pub const EXTENSION_INFO_EVENT_TIMEOUT_MS: u64 = 500;
@@ -15296,28 +15296,42 @@ impl ExtensionEventName {
     /// `SessionBeforeTree`, `ResourcesDiscover`.
     #[must_use]
     pub const fn is_informational(self) -> bool {
-        matches!(
-            self,
+        // Exhaustive match (no `_ => …` fallthrough) so that adding a
+        // new `ExtensionEventName` variant forces the author to
+        // classify it here. Without this, a new variant would silently
+        // fall into the "actionable" default and get a 5s timeout —
+        // probably harmless, but easy to miss.
+        match self {
             Self::Startup
-                | Self::AgentStart
-                | Self::AgentEnd
-                | Self::TurnStart
-                | Self::TurnEnd
-                | Self::MessageStart
-                | Self::MessageUpdate
-                | Self::MessageEnd
-                | Self::ToolExecutionStart
-                | Self::ToolExecutionUpdate
-                | Self::ToolExecutionEnd
-                | Self::SessionStart
-                | Self::SessionSwitch
-                | Self::SessionFork
-                | Self::SessionCompact
-                | Self::SessionTree
-                | Self::SessionShutdown
-                | Self::ModelSelect
-                | Self::UserBash
-        )
+            | Self::AgentStart
+            | Self::AgentEnd
+            | Self::TurnStart
+            | Self::TurnEnd
+            | Self::MessageStart
+            | Self::MessageUpdate
+            | Self::MessageEnd
+            | Self::ToolExecutionStart
+            | Self::ToolExecutionUpdate
+            | Self::ToolExecutionEnd
+            | Self::SessionStart
+            | Self::SessionSwitch
+            | Self::SessionFork
+            | Self::SessionCompact
+            | Self::SessionTree
+            | Self::SessionShutdown
+            | Self::ModelSelect
+            | Self::UserBash => true,
+            Self::Input
+            | Self::BeforeAgentStart
+            | Self::Context
+            | Self::ToolCall
+            | Self::ToolResult
+            | Self::SessionBeforeSwitch
+            | Self::SessionBeforeFork
+            | Self::SessionBeforeCompact
+            | Self::SessionBeforeTree
+            | Self::ResourcesDiscover => false,
+        }
     }
 
     /// Deadline this event should be dispatched with when no explicit
@@ -22798,6 +22812,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
             });
 
             let mut sequence = 0_u64;
+            let mut processed_in_turn = 0_u32;
             let call_id_owned = call_id.to_string();
             loop {
                 if !runtime.is_hostcall_active(call_id) {
@@ -22822,6 +22837,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             },
                         );
                         sequence = sequence.saturating_add(1);
+                        processed_in_turn += 1;
                     }
                     Ok(ExecStreamFrame::Stderr(chunk)) => {
                         let mut m = serde_json::Map::with_capacity(1);
@@ -22835,6 +22851,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             },
                         );
                         sequence = sequence.saturating_add(1);
+                        processed_in_turn += 1;
                     }
                     Ok(ExecStreamFrame::Final { code, killed }) => {
                         return HostcallOutcome::StreamChunk {
@@ -22853,6 +22870,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                         };
                     }
                     Err(mpsc::TryRecvError::Empty) => {
+                        processed_in_turn = 0;
                         extension_wait_sleep(Duration::from_millis(25)).await;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -22861,6 +22879,11 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                             message: "exec stream channel closed".to_string(),
                         };
                     }
+                }
+
+                if processed_in_turn >= 64 {
+                    processed_in_turn = 0;
+                    asupersync::runtime::yield_now().await;
                 }
             }
         }

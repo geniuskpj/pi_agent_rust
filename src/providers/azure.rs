@@ -319,7 +319,7 @@ impl Provider for AzureOpenAIProvider {
 
                     match state.event_source.next().await {
                         Some(Ok(msg)) => {
-                            state.write_zero_count = 0;
+                            state.transient_error_count = 0;
                             // Azure also sends "[DONE]" as final message
                             if msg.data == "[DONE]" {
                                 state.done = true;
@@ -334,18 +334,26 @@ impl Provider for AzureOpenAIProvider {
                             }
                         }
                         Some(Err(e)) => {
-                            const MAX_CONSECUTIVE_WRITE_ZERO: usize = 5;
-                            if e.kind() == std::io::ErrorKind::WriteZero {
-                                state.write_zero_count += 1;
-                                if state.write_zero_count <= MAX_CONSECUTIVE_WRITE_ZERO {
+                            // WriteZero, WouldBlock, and TimedOut errors are treated as transient.
+                            // Skip them and keep reading the stream, but cap
+                            // consecutive occurrences to avoid infinite loops.
+                            const MAX_CONSECUTIVE_TRANSIENT_ERRORS: usize = 5;
+                            if e.kind() == std::io::ErrorKind::WriteZero
+                                || e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::TimedOut
+                            {
+                                state.transient_error_count += 1;
+                                if state.transient_error_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
                                     tracing::warn!(
-                                        count = state.write_zero_count,
-                                        "Transient WriteZero error in SSE stream, continuing"
+                                        kind = ?e.kind(),
+                                        count = state.transient_error_count,
+                                        "Transient error in SSE stream, continuing"
                                     );
                                     continue;
                                 }
                                 tracing::warn!(
-                                    "WriteZero error persisted after {MAX_CONSECUTIVE_WRITE_ZERO} \
+                                    kind = ?e.kind(),
+                                    "Error persisted after {MAX_CONSECUTIVE_TRANSIENT_ERRORS} \
                                      consecutive attempts, treating as fatal"
                                 );
                             }
@@ -387,7 +395,7 @@ where
     started: bool,
     done: bool,
     /// Consecutive WriteZero errors seen without a successful event in between.
-    write_zero_count: usize,
+    transient_error_count: usize,
 }
 
 struct ToolCallState {
@@ -419,7 +427,7 @@ where
             pending_events: VecDeque::new(),
             started: false,
             done: false,
-            write_zero_count: 0,
+            transient_error_count: 0,
         }
     }
 

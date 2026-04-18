@@ -235,7 +235,7 @@ impl Provider for CohereProvider {
 
                     match state.event_source.next().await {
                         Some(Ok(msg)) => {
-                            state.write_zero_count = 0;
+                            state.transient_error_count = 0;
                             if msg.data == "[DONE]" {
                                 state.finish();
                                 continue;
@@ -255,11 +255,11 @@ impl Provider for CohereProvider {
                                 || e.kind() == std::io::ErrorKind::WouldBlock
                                 || e.kind() == std::io::ErrorKind::TimedOut
                             {
-                                state.write_zero_count += 1;
-                                if state.write_zero_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
+                                state.transient_error_count += 1;
+                                if state.transient_error_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
                                     tracing::warn!(
                                         kind = ?e.kind(),
-                                        count = state.write_zero_count,
+                                        count = state.transient_error_count,
                                         "Transient error in SSE stream, continuing"
                                     );
                                     continue;
@@ -313,7 +313,7 @@ where
     content_index_map: HashMap<u32, usize>,
     active_tool_call: Option<ToolCallAccum>,
     /// Consecutive WriteZero errors seen without a successful event in between.
-    write_zero_count: usize,
+    transient_error_count: usize,
 }
 
 impl<S> StreamState<S>
@@ -338,7 +338,7 @@ where
             finished: false,
             content_index_map: HashMap::new(),
             active_tool_call: None,
-            write_zero_count: 0,
+            transient_error_count: 0,
         }
     }
 
