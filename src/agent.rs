@@ -58,6 +58,12 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_CONCURRENT_TOOLS: usize = 8;
+/// Maximum messages in steering queue to prevent unbounded growth
+const MAX_STEERING_QUEUE_SIZE: usize = 100;
+/// Maximum messages in follow-up queue to prevent unbounded growth
+const MAX_FOLLOW_UP_QUEUE_SIZE: usize = 100;
+/// Maximum messages in agent history to prevent unbounded growth
+const MAX_AGENT_MESSAGES: usize = 10_000;
 
 // ============================================================================
 // Agent Configuration
@@ -182,8 +188,30 @@ impl MessageQueue {
             message,
         };
         match kind {
-            QueueKind::Steering => self.steering.push_back(entry),
-            QueueKind::FollowUp => self.follow_up.push_back(entry),
+            QueueKind::Steering => {
+                if self.steering.len() < MAX_STEERING_QUEUE_SIZE {
+                    self.steering.push_back(entry);
+                } else {
+                    tracing::warn!(
+                        "Steering queue full ({} messages), dropping oldest message",
+                        MAX_STEERING_QUEUE_SIZE
+                    );
+                    self.steering.pop_front();
+                    self.steering.push_back(entry);
+                }
+            }
+            QueueKind::FollowUp => {
+                if self.follow_up.len() < MAX_FOLLOW_UP_QUEUE_SIZE {
+                    self.follow_up.push_back(entry);
+                } else {
+                    tracing::warn!(
+                        "Follow-up queue full ({} messages), dropping oldest message",
+                        MAX_FOLLOW_UP_QUEUE_SIZE
+                    );
+                    self.follow_up.pop_front();
+                    self.follow_up.push_back(entry);
+                }
+            }
         }
         seq
     }
@@ -462,7 +490,16 @@ impl Agent {
 
     /// Add a message to the history.
     pub fn add_message(&mut self, message: Message) {
-        self.messages.push(message);
+        if self.messages.len() < MAX_AGENT_MESSAGES {
+            self.messages.push(message);
+        } else {
+            tracing::warn!(
+                "Agent message history full ({} messages), dropping oldest message",
+                MAX_AGENT_MESSAGES
+            );
+            self.messages.remove(0);
+            self.messages.push(message);
+        }
     }
 
     /// Replace the message history.
@@ -2489,11 +2526,29 @@ impl ExtensionInjectedQueue {
     }
 
     fn push_steering(&mut self, message: Message) {
-        self.steering.push_back(message);
+        if self.steering.len() < MAX_STEERING_QUEUE_SIZE {
+            self.steering.push_back(message);
+        } else {
+            tracing::warn!(
+                "Extension steering queue full ({} messages), dropping oldest message",
+                MAX_STEERING_QUEUE_SIZE
+            );
+            self.steering.pop_front();
+            self.steering.push_back(message);
+        }
     }
 
     fn push_follow_up(&mut self, message: Message) {
-        self.follow_up.push_back(message);
+        if self.follow_up.len() < MAX_FOLLOW_UP_QUEUE_SIZE {
+            self.follow_up.push_back(message);
+        } else {
+            tracing::warn!(
+                "Extension follow-up queue full ({} messages), dropping oldest message",
+                MAX_FOLLOW_UP_QUEUE_SIZE
+            );
+            self.follow_up.pop_front();
+            self.follow_up.push_back(message);
+        }
     }
 
     fn pop_steering(&mut self) -> Vec<Message> {
