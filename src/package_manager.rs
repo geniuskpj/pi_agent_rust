@@ -7304,9 +7304,13 @@ mod tests {
             .expect("reconcile");
 
         assert_eq!(pruned.len(), 1, "exactly one entry should be pruned");
+        assert_eq!(
+            pruned[0].source, "./pkg2",
+            "pruned entry must be pkg2 (the one removed from settings), not pkg1"
+        );
         assert!(
-            pruned[0].identity.starts_with("local:"),
-            "pruned identity should be the local pkg2 path, got {:?}",
+            pruned[0].identity.ends_with("pkg2"),
+            "pruned identity should be the pkg2 absolute path, got {:?}",
             pruned[0].identity
         );
 
