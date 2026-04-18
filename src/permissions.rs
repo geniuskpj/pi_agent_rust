@@ -309,9 +309,11 @@ fn now_iso8601() -> String {
     // Use wall-clock time.  We don't need sub-second precision for expiry
     // comparisons, but include it for diagnostics.
     let now = std::time::SystemTime::now();
-    let duration = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or({
+        // Clock is before UNIX_EPOCH - use epoch as fallback to prevent
+        // timestamp manipulation attacks on permission expiry
+        std::time::Duration::ZERO
+    });
     let secs = duration.as_secs();
     // Simple ISO-8601 without pulling in chrono: YYYY-MM-DDThh:mm:ssZ
     // (good enough for lexicographic comparison).
@@ -339,18 +341,43 @@ fn decision_is_active(decision: &PersistedDecision, now: DateTime<Utc>) -> bool 
 }
 
 /// Convert days since Unix epoch to (year, month, day).
+/// Uses saturating arithmetic to prevent overflow attacks.
 const fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     // Algorithm from Howard Hinnant's `chrono`-compatible date library.
-    let z = days + 719_468;
+    // Use saturating arithmetic to prevent overflow with malicious inputs.
+    let z = days.saturating_add(719_468);
     let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
+    let era_days = era.saturating_mul(146_097);
+    let doe = z.saturating_sub(era_days);
+    let doe_div_1460 = doe / 1460;
+    let doe_div_36524 = doe / 36524;
+    let doe_div_146096 = doe / 146_096;
+    let yoe = doe
+        .saturating_sub(doe_div_1460)
+        .saturating_add(doe_div_36524)
+        .saturating_sub(doe_div_146096)
+        / 365;
+    let era_years = era.saturating_mul(400);
+    let y = yoe.saturating_add(era_years);
+    let yoe_times_365 = yoe.saturating_mul(365);
+    let yoe_div_4 = yoe / 4;
+    let yoe_div_100 = yoe / 100;
+    let days_in_year = yoe_times_365
+        .saturating_add(yoe_div_4)
+        .saturating_sub(yoe_div_100);
+    let doy = doe.saturating_sub(days_in_year);
+    let doy_times_5 = doy.saturating_mul(5);
+    let mp = doy_times_5.saturating_add(2) / 153;
+    let mp_times_153 = mp.saturating_mul(153);
+    let d = doy
+        .saturating_sub((mp_times_153.saturating_add(2)) / 5)
+        .saturating_add(1);
+    let m = if mp < 10 {
+        mp.saturating_add(3)
+    } else {
+        mp.saturating_sub(9)
+    };
+    let y = if m <= 2 { y.saturating_add(1) } else { y };
     (y, m, d)
 }
 

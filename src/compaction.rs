@@ -40,7 +40,7 @@ fn json_byte_len(value: &Value) -> usize {
     struct Counter(usize);
     impl std::io::Write for Counter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0 += buf.len();
+            self.0 = self.0.saturating_add(buf.len());
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -358,7 +358,10 @@ fn estimate_context_tokens(messages: &[SessionMessage]) -> ContextUsageEstimate 
     }
 
     let Some((usage, usage_index)) = last_usage else {
-        let total = messages.iter().map(estimate_tokens).sum();
+        let total = messages
+            .iter()
+            .map(estimate_tokens)
+            .fold(0u64, u64::saturating_add);
         return ContextUsageEstimate {
             tokens: total,
             last_usage_index: None,
@@ -369,7 +372,10 @@ fn estimate_context_tokens(messages: &[SessionMessage]) -> ContextUsageEstimate 
 
     // Fall back to heuristic estimation if the provider didn't return usage metrics
     if usage_tokens == 0 {
-        let total = messages.iter().map(estimate_tokens).sum();
+        let total = messages
+            .iter()
+            .map(estimate_tokens)
+            .fold(0u64, u64::saturating_add);
         return ContextUsageEstimate {
             tokens: total,
             last_usage_index: None,
@@ -396,7 +402,7 @@ fn should_compact(
     }
     let reserve = u64::from(settings.reserve_tokens);
     let window = u64::from(context_window);
-    context_tokens > window.saturating_sub(reserve)
+    context_tokens >= window.saturating_sub(reserve)
 }
 
 fn estimate_tokens(message: &SessionMessage) -> u64 {
@@ -408,12 +414,18 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
             UserContent::Blocks(blocks) => {
                 for block in blocks {
                     match block {
-                        ContentBlock::Text(text) => chars += text.text.len(),
-                        ContentBlock::Image(_) => chars += IMAGE_CHAR_ESTIMATE,
-                        ContentBlock::Thinking(thinking) => chars += thinking.thinking.len(),
+                        ContentBlock::Text(text) => {
+                            chars = chars.saturating_add(text.text.len());
+                        }
+                        ContentBlock::Image(_) => {
+                            chars = chars.saturating_add(IMAGE_CHAR_ESTIMATE);
+                        }
+                        ContentBlock::Thinking(thinking) => {
+                            chars = chars.saturating_add(thinking.thinking.len());
+                        }
                         ContentBlock::ToolCall(call) => {
-                            chars += call.name.len();
-                            chars += json_byte_len(&call.arguments);
+                            chars = chars.saturating_add(call.name.len());
+                            chars = chars.saturating_add(json_byte_len(&call.arguments));
                         }
                     }
                 }
@@ -422,12 +434,18 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
         SessionMessage::Assistant { message } => {
             for block in &message.content {
                 match block {
-                    ContentBlock::Text(text) => chars += text.text.len(),
-                    ContentBlock::Thinking(thinking) => chars += thinking.thinking.len(),
-                    ContentBlock::Image(_) => chars += IMAGE_CHAR_ESTIMATE,
+                    ContentBlock::Text(text) => {
+                        chars = chars.saturating_add(text.text.len());
+                    }
+                    ContentBlock::Thinking(thinking) => {
+                        chars = chars.saturating_add(thinking.thinking.len());
+                    }
+                    ContentBlock::Image(_) => {
+                        chars = chars.saturating_add(IMAGE_CHAR_ESTIMATE);
+                    }
                     ContentBlock::ToolCall(call) => {
-                        chars += call.name.len();
-                        chars += json_byte_len(&call.arguments);
+                        chars = chars.saturating_add(call.name.len());
+                        chars = chars.saturating_add(json_byte_len(&call.arguments));
                     }
                 }
             }
@@ -435,12 +453,18 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
         SessionMessage::ToolResult { content, .. } => {
             for block in content {
                 match block {
-                    ContentBlock::Text(text) => chars += text.text.len(),
-                    ContentBlock::Thinking(thinking) => chars += thinking.thinking.len(),
-                    ContentBlock::Image(_) => chars += IMAGE_CHAR_ESTIMATE,
+                    ContentBlock::Text(text) => {
+                        chars = chars.saturating_add(text.text.len());
+                    }
+                    ContentBlock::Thinking(thinking) => {
+                        chars = chars.saturating_add(thinking.thinking.len());
+                    }
+                    ContentBlock::Image(_) => {
+                        chars = chars.saturating_add(IMAGE_CHAR_ESTIMATE);
+                    }
                     ContentBlock::ToolCall(call) => {
-                        chars += call.name.len();
-                        chars += json_byte_len(&call.arguments);
+                        chars = chars.saturating_add(call.name.len());
+                        chars = chars.saturating_add(json_byte_len(&call.arguments));
                     }
                 }
             }
@@ -448,7 +472,7 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
         SessionMessage::Custom { content, .. } => chars = content.len(),
         SessionMessage::BashExecution {
             command, output, ..
-        } => chars = command.len() + output.len(),
+        } => chars = command.len().saturating_add(output.len()),
         SessionMessage::BranchSummary { summary, .. }
         | SessionMessage::CompactionSummary { summary, .. } => chars = summary.len(),
     }
@@ -1349,9 +1373,11 @@ mod tests {
             keep_recent_tokens: 5_000,
             ..Default::default()
         };
-        // window=100k, reserve=10k => threshold=90k, context=90k => NOT compacting (not >)
-        assert!(!should_compact(90_000, 100_000, &settings));
-        // 90001 should trigger
+        // window=100k, reserve=10k => threshold=90k, context=90k => compact
+        assert!(should_compact(90_000, 100_000, &settings));
+        // 89999 should not trigger
+        assert!(!should_compact(89_999, 100_000, &settings));
+        // 90001 should also trigger
         assert!(should_compact(90_001, 100_000, &settings));
     }
 
@@ -2365,7 +2391,7 @@ mod tests {
                 assert!(!should_compact(ctx_tokens, window, &settings));
             }
 
-            /// `should_compact` threshold: tokens > window - reserve.
+            /// `should_compact` threshold: tokens >= window - reserve.
             #[test]
             fn should_compact_threshold(
                 ctx_tokens in 0..500_000u64,
@@ -2380,7 +2406,7 @@ mod tests {
                 };
                 let threshold = u64::from(window).saturating_sub(u64::from(reserve));
                 let result = should_compact(ctx_tokens, window, &settings);
-                assert_eq!(result, ctx_tokens > threshold);
+                assert_eq!(result, ctx_tokens >= threshold);
             }
 
             /// `format_file_operations`: empty lists produce empty string.
