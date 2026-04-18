@@ -430,7 +430,7 @@ impl Provider for OpenAIProvider {
                     match state.event_source.next().await {
                         Some(Ok(msg)) => {
                             // A successful chunk resets the consecutive error counter.
-                            state.write_zero_count = 0;
+                            state.transient_error_count = 0;
                             // OpenAI sends "[DONE]" as final message
                             if msg.data == "[DONE]" {
                                 state.done = true;
@@ -453,11 +453,11 @@ impl Provider for OpenAIProvider {
                                 || e.kind() == std::io::ErrorKind::WouldBlock
                                 || e.kind() == std::io::ErrorKind::TimedOut
                             {
-                                state.write_zero_count += 1;
-                                if state.write_zero_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
+                                state.transient_error_count += 1;
+                                if state.transient_error_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
                                     tracing::warn!(
                                         kind = ?e.kind(),
-                                        count = state.write_zero_count,
+                                        count = state.transient_error_count,
                                         "Transient error in SSE stream, continuing"
                                     );
                                     continue;
@@ -506,7 +506,7 @@ where
     started: bool,
     done: bool,
     /// Consecutive WriteZero errors seen without a successful event in between.
-    write_zero_count: usize,
+    transient_error_count: usize,
 }
 
 struct ToolCallState {
@@ -538,7 +538,7 @@ where
             pending_events: VecDeque::new(),
             started: false,
             done: false,
-            write_zero_count: 0,
+            transient_error_count: 0,
         }
     }
 

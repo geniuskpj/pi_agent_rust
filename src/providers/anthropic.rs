@@ -571,7 +571,7 @@ impl Provider for AnthropicProvider {
                 loop {
                     match state.event_source.next().await {
                         Some(Ok(msg)) => {
-                            state.write_zero_count = 0;
+                            state.transient_error_count = 0;
                             if msg.event == "ping" {
                                 // Skip ping events
                             } else {
@@ -594,22 +594,27 @@ impl Provider for AnthropicProvider {
                             }
                         }
                         Some(Err(e)) => {
-                            // WriteZero errors are transient (e.g. empty SSE
+                            // WriteZero, WouldBlock, and TimedOut errors are transient (e.g. empty SSE
                             // frames when TLS buffers are full). Skip them and
                             // keep reading, but cap consecutive occurrences to
                             // avoid infinite loops.
-                            const MAX_CONSECUTIVE_WRITE_ZERO: usize = 5;
-                            if e.kind() == std::io::ErrorKind::WriteZero {
-                                state.write_zero_count += 1;
-                                if state.write_zero_count <= MAX_CONSECUTIVE_WRITE_ZERO {
+                            const MAX_CONSECUTIVE_TRANSIENT_ERRORS: usize = 5;
+                            if e.kind() == std::io::ErrorKind::WriteZero
+                                || e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::TimedOut
+                            {
+                                state.transient_error_count += 1;
+                                if state.transient_error_count <= MAX_CONSECUTIVE_TRANSIENT_ERRORS {
                                     tracing::warn!(
-                                        count = state.write_zero_count,
-                                        "Transient WriteZero error in SSE stream, continuing"
+                                        kind = ?e.kind(),
+                                        count = state.transient_error_count,
+                                        "Transient error in SSE stream, continuing"
                                     );
                                     continue;
                                 }
                                 tracing::warn!(
-                                    "WriteZero error persisted after {MAX_CONSECUTIVE_WRITE_ZERO} \
+                                    kind = ?e.kind(),
+                                    "Error persisted after {MAX_CONSECUTIVE_TRANSIENT_ERRORS} \
                                      consecutive attempts, treating as fatal"
                                 );
                             }
@@ -654,7 +659,7 @@ where
     tool_accums: HashMap<u32, ToolAccum>,
     done: bool,
     /// Consecutive WriteZero errors seen without a successful event in between.
-    write_zero_count: usize,
+    transient_error_count: usize,
 }
 
 impl<S> StreamState<S>
@@ -686,7 +691,7 @@ where
             },
             tool_accums: HashMap::new(),
             done: false,
-            write_zero_count: 0,
+            transient_error_count: 0,
         }
     }
 
