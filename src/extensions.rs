@@ -15137,8 +15137,9 @@ impl WasmExtensionHost {
 /// Default cancellation budget for extension event handlers (ms).
 pub const EXTENSION_EVENT_TIMEOUT_MS: u64 = 5_000;
 
-/// Tight cancellation budget for informational (fire-and-forget) event
-/// handlers — lifecycle notifications, telemetry pokes, post-hoc updates.
+/// Tight cancellation budget for informational (fire-and-forget) event handlers.
+///
+/// This covers lifecycle notifications, telemetry pokes, and post-hoc updates.
 /// A misbehaving or deadlocked extension on an info-only event shouldn't
 /// stall the agent for the full general budget. See [`ExtensionEventName::is_informational`].
 pub const EXTENSION_INFO_EVENT_TIMEOUT_MS: u64 = 500;
