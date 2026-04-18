@@ -189,28 +189,24 @@ impl MessageQueue {
         };
         match kind {
             QueueKind::Steering => {
-                if self.steering.len() < MAX_STEERING_QUEUE_SIZE {
-                    self.steering.push_back(entry);
-                } else {
+                if self.steering.len() >= MAX_STEERING_QUEUE_SIZE {
                     tracing::warn!(
                         "Steering queue full ({} messages), dropping oldest message",
                         MAX_STEERING_QUEUE_SIZE
                     );
                     self.steering.pop_front();
-                    self.steering.push_back(entry);
                 }
+                self.steering.push_back(entry);
             }
             QueueKind::FollowUp => {
-                if self.follow_up.len() < MAX_FOLLOW_UP_QUEUE_SIZE {
-                    self.follow_up.push_back(entry);
-                } else {
+                if self.follow_up.len() >= MAX_FOLLOW_UP_QUEUE_SIZE {
                     tracing::warn!(
                         "Follow-up queue full ({} messages), dropping oldest message",
                         MAX_FOLLOW_UP_QUEUE_SIZE
                     );
                     self.follow_up.pop_front();
-                    self.follow_up.push_back(entry);
                 }
+                self.follow_up.push_back(entry);
             }
         }
         seq
@@ -490,16 +486,14 @@ impl Agent {
 
     /// Add a message to the history.
     pub fn add_message(&mut self, message: Message) {
-        if self.messages.len() < MAX_AGENT_MESSAGES {
-            self.messages.push(message);
-        } else {
+        if self.messages.len() >= MAX_AGENT_MESSAGES {
             tracing::warn!(
                 "Agent message history full ({} messages), dropping oldest message",
                 MAX_AGENT_MESSAGES
             );
             self.messages.remove(0);
-            self.messages.push(message);
         }
+        self.messages.push(message);
     }
 
     /// Replace the message history.
@@ -2526,29 +2520,25 @@ impl ExtensionInjectedQueue {
     }
 
     fn push_steering(&mut self, message: Message) {
-        if self.steering.len() < MAX_STEERING_QUEUE_SIZE {
-            self.steering.push_back(message);
-        } else {
+        if self.steering.len() >= MAX_STEERING_QUEUE_SIZE {
             tracing::warn!(
                 "Extension steering queue full ({} messages), dropping oldest message",
                 MAX_STEERING_QUEUE_SIZE
             );
             self.steering.pop_front();
-            self.steering.push_back(message);
         }
+        self.steering.push_back(message);
     }
 
     fn push_follow_up(&mut self, message: Message) {
-        if self.follow_up.len() < MAX_FOLLOW_UP_QUEUE_SIZE {
-            self.follow_up.push_back(message);
-        } else {
+        if self.follow_up.len() >= MAX_FOLLOW_UP_QUEUE_SIZE {
             tracing::warn!(
                 "Extension follow-up queue full ({} messages), dropping oldest message",
                 MAX_FOLLOW_UP_QUEUE_SIZE
             );
             self.follow_up.pop_front();
-            self.follow_up.push_back(message);
         }
+        self.follow_up.push_back(message);
     }
 
     fn pop_steering(&mut self) -> Vec<Message> {
