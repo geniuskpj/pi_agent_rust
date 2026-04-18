@@ -2818,6 +2818,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
             let _guard = CancelGuard(Arc::clone(&cancel));
 
             let mut sequence = 0_u64;
+            let mut processed_in_turn = 0_u32;
             loop {
                 if !self.js_runtime().is_hostcall_active(call_id) {
                     cancel.store(true, AtomicOrdering::SeqCst);
@@ -2839,6 +2840,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                             },
                         );
                         sequence = sequence.saturating_add(1);
+                        processed_in_turn += 1;
                     }
                     Ok(ExecStreamFrame::Stderr(chunk)) => {
                         self.js_runtime().complete_hostcall(
@@ -2850,6 +2852,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                             },
                         );
                         sequence = sequence.saturating_add(1);
+                        processed_in_turn += 1;
                     }
                     Ok(ExecStreamFrame::Final { code, killed }) => {
                         return HostcallOutcome::StreamChunk {
@@ -2868,6 +2871,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         };
                     }
                     Err(mpsc::TryRecvError::Empty) => {
+                        processed_in_turn = 0;
                         extension_wait_sleep(Duration::from_millis(25)).await;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -2876,6 +2880,11 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                             message: "exec stream channel closed".to_string(),
                         };
                     }
+                }
+
+                if processed_in_turn >= 64 {
+                    processed_in_turn = 0;
+                    asupersync::runtime::yield_now().await;
                 }
             }
         }
