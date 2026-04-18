@@ -156,6 +156,13 @@ fn register_random_int_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Resu
     global.set(
         "__pi_crypto_random_int_native",
         Func::from(|min: f64, max: f64| -> rquickjs::Result<f64> {
+            // Guard against NaN/Inf inputs - critical security vulnerability
+            if !min.is_finite() || !max.is_finite() {
+                return Err(rquickjs::Error::new_from_js(
+                    "number",
+                    "min and max must be finite numbers",
+                ));
+            }
             if min >= max {
                 return Err(rquickjs::Error::new_from_js(
                     "number",
@@ -980,7 +987,7 @@ mod tests {
     #[test]
     fn hmac_sha256_secret_hello() {
         use hmac::Mac;
-        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
+        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"secret").expect("create HMAC with test key");
         mac.update(b"hello");
         let result = hex_lower(&mac.finalize().into_bytes());
         assert_eq!(
@@ -994,7 +1001,7 @@ mod tests {
     #[test]
     fn hmac_sha1_key_data() {
         use hmac::Mac;
-        let mut mac = hmac::Hmac::<sha1::Sha1>::new_from_slice(b"key").unwrap();
+        let mut mac = hmac::Hmac::<sha1::Sha1>::new_from_slice(b"key").expect("create HMAC with test key");
         mac.update(b"data");
         let result = hex_lower(&mac.finalize().into_bytes());
         assert_eq!(result, "104152c5bfdca07bc633eebd46199f0255c9f49d");
@@ -1008,7 +1015,7 @@ mod tests {
         let re = regex::Regex::new(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
         )
-        .unwrap();
+        .expect("compile UUID v4 regex pattern");
         assert!(re.is_match(&id), "UUID should be v4 format: {id}");
     }
 
@@ -1070,6 +1077,36 @@ mod tests {
             let decoded = hex_decode(&hex);
             assert_eq!(decoded.len(), len, "decoded length should match original");
         }
+    }
+
+    // ─── random_int NaN/Inf protection tests ─────────────────────────────
+
+    #[test]
+    fn random_int_validates_finite_inputs() {
+        // Test that NaN/Inf inputs are properly rejected (security vulnerability fix)
+        use rquickjs::{Runtime, Context};
+
+        let runtime = Runtime::new().expect("create runtime");
+        let context = Context::full(&runtime).expect("create context");
+
+        context.with(|ctx| -> rquickjs::Result<()> {
+            let global = ctx.globals();
+            register_random_int_hostcall(&global)?;
+            let hostcall: rquickjs::Function = global.get("__pi_crypto_random_int_native")?;
+
+            // All NaN/Inf inputs should be rejected with proper error messages
+            assert!(hostcall.call::<_, f64>((f64::NAN, 10.0)).is_err());
+            assert!(hostcall.call::<_, f64>((0.0, f64::NAN)).is_err());
+            assert!(hostcall.call::<_, f64>((f64::INFINITY, 10.0)).is_err());
+            assert!(hostcall.call::<_, f64>((0.0, f64::INFINITY)).is_err());
+            assert!(hostcall.call::<_, f64>((f64::NEG_INFINITY, 10.0)).is_err());
+
+            // Valid finite inputs should work
+            let result = hostcall.call::<_, f64>((0.0, 100.0))?;
+            assert!(result >= 0.0 && result < 100.0);
+
+            Ok(())
+        }).expect("test NaN/Inf validation");
     }
 
     // ─── NODE_CRYPTO_JS constant is non-empty ────────────────────────────
