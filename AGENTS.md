@@ -568,6 +568,42 @@ Parse: `file:line:col` → location | 💡 → how to fix | Exit 0/1 → pass/fa
 
 ---
 
+## Beads Ledger Reconciliation — Invariant
+
+**CRITICAL INVARIANT:** The beads ledger reconciliation script MUST pass before any commit. This prevents "completion illusion" where all beads appear closed but critical gaps remain untracked.
+
+```bash
+./scripts/reconcile_beads_ledger.sh
+```
+
+**Exit 0 = safe to commit.** **Exit 1 = orphan gaps found.**
+
+### What It Checks
+
+The script cross-references:
+- **Open beads** (from `br list --status=open --json`)
+- **Open critical/high gaps** (from `docs/dropin-parity-gap-ledger.json`)
+
+If any critical or high-severity gaps lack corresponding open beads, the script fails and lists the orphan gaps.
+
+### Fix Workflow
+
+1. **Run the script:** `./scripts/reconcile_beads_ledger.sh`
+2. **If it passes:** Proceed with commit
+3. **If it fails:** Create beads for each orphan gap:
+   ```bash
+   br create --title="Address gap-<id>" --type=task --priority=1
+   ```
+4. **Re-run until it passes:** The script must exit 0 before commit
+
+### CI Integration
+
+This check runs automatically in CI as the "Beads ledger reconciliation check" step. It will fail the build if orphan gaps are detected.
+
+**Why This Matters:** Without this invariant, teams can falsely believe all work is complete when critical gaps remain untracked, leading to incomplete drop-in certification or missed functionality gaps.
+
+---
+
 ## RCH — Remote Compilation Helper
 
 RCH offloads `cargo build`, `cargo test`, `cargo clippy`, and other compilation commands to a fleet of 8 remote Contabo VPS workers instead of building locally. This prevents compilation storms from overwhelming csd when many agents run simultaneously.
