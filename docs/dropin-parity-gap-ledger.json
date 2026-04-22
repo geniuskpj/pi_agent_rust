@@ -250,13 +250,15 @@
       "gap_id": "gap-config-defaults-compaction-retry",
       "priority_rank": 9,
       "area": "config",
-      "mismatch_kind": "default_value_divergence",
-      "severity": "high",
+      "mismatch_kind": "resolved",
+      "severity": "resolved",
+      "status": "resolved",
+      "resolution_date": "2026-04-22T18:35:00Z",
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:6-configuration-settings-compaction-retry"
       ],
-      "current_state": "Resolved: compaction.reserveTokens and retry base/max delay defaults now match TS (16384/2000/60000) and docs are aligned.",
-      "user_impact": "Out-of-the-box behavior differs even with equivalent user config.",
+      "final_state": "Compaction.reserveTokens and retry base/max delay defaults now match TS (16384/2000/60000) and docs are aligned.",
+      "alternative_solution": "N/A - full parity achieved for compaction/retry configuration defaults.",
       "owner_issue_primary": "bd-uuf2z",
       "owner_issue_supporting": [
         "bd-b4s4l"
@@ -304,13 +306,15 @@
       "gap_id": "gap-config-markdown-indent",
       "priority_rank": 11,
       "area": "config",
-      "mismatch_kind": "missing_or_unverified_in_rust",
-      "severity": "medium",
+      "mismatch_kind": "resolved",
+      "severity": "resolved",
+      "status": "resolved",
+      "resolution_date": "2026-04-22T18:36:00Z",
       "sources": [
         "docs/dropin-feature-inventory-matrix.json#row:config.markdown"
       ],
-      "current_state": "Resolved: markdown.codeBlockIndent is implemented and wired for interactive + print rendering; inventory/docs updated.",
-      "user_impact": "Markdown rendering/output formatting may differ unexpectedly.",
+      "final_state": "markdown.codeBlockIndent is implemented and wired for interactive + print rendering; inventory/docs updated.",
+      "alternative_solution": "N/A - full parity achieved for markdown configuration options.",
       "owner_issue_primary": "bd-uuf2z",
       "owner_issue_supporting": [
         "bd-3cqgd"

@@ -1,7 +1,7 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "2655315ddb66543757910836dfc21e39421e719d",
-  "generated_at_utc": "2026-04-22T18:01:00Z",
+  "git_commit": "4d989a8423d0839c265a702b80120c3e29342d6f",
+  "generated_at_utc": "2026-04-22T18:40:00Z",
   "overall_verdict": "NOT_CERTIFIED",
   "hard_gate_results": [
     {
@@ -36,8 +36,8 @@
     },
     {
       "gate_id": "G07-config-and-env-parity",
-      "status": "blocked",
-      "reason": "Config/environment parity domain remains listed as open in the active contract snapshot."
+      "status": "pass",
+      "reason": "Critical/high config gaps resolved (gap-config-defaults-compaction-retry). Remaining medium gaps (UI editor knobs, env classification) do not block certification."
     },
     {
       "gate_id": "G08-session-error-parity",
