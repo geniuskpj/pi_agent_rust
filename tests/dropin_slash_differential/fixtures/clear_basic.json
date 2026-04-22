@@ -1,0 +1,30 @@
+{
+  "scenario": "clear_basic",
+  "description": "/clear command should reset conversation history",
+  "setup": [
+    {
+      "type": "prompt",
+      "message": "Hello, this is a test message"
+    },
+    {
+      "type": "prompt",
+      "message": "This is another test message"
+    }
+  ],
+  "command": "/clear",
+  "expected_fields": [
+    "status"
+  ],
+  "should_contain": [
+    "cleared",
+    "success"
+  ],
+  "should_not_contain": [
+    "error",
+    "failed"
+  ],
+  "post_verification": {
+    "type": "session_check",
+    "expected_message_count": 0
+  }
+}

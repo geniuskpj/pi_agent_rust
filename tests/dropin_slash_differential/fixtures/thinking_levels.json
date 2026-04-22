@@ -1,0 +1,36 @@
+{
+  "scenario": "thinking_levels",
+  "description": "/thinking command should accept and set valid thinking levels",
+  "test_cases": [
+    {
+      "command": "/thinking off",
+      "expected_fields": ["status", "thinking_level"],
+      "should_contain": ["off", "success"],
+      "should_not_contain": ["error"]
+    },
+    {
+      "command": "/thinking minimal",
+      "expected_fields": ["status", "thinking_level"],
+      "should_contain": ["minimal", "success"],
+      "should_not_contain": ["error"]
+    },
+    {
+      "command": "/thinking medium",
+      "expected_fields": ["status", "thinking_level"],
+      "should_contain": ["medium", "success"],
+      "should_not_contain": ["error"]
+    },
+    {
+      "command": "/thinking high",
+      "expected_fields": ["status", "thinking_level"],
+      "should_contain": ["high", "success"],
+      "should_not_contain": ["error"]
+    },
+    {
+      "command": "/thinking invalid",
+      "expected_fields": ["status", "error"],
+      "should_contain": ["error", "invalid"],
+      "should_not_contain": ["success"]
+    }
+  ]
+}
