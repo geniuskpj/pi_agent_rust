@@ -4527,11 +4527,7 @@ fn finish_print_text_response(
 
             if !markdown.is_empty() {
                 let console = PiConsole::new();
-                let code_block_indent = config
-                    .markdown
-                    .as_ref()
-                    .and_then(|m| m.code_block_indent)
-                    .map(|indent| indent as usize);
+                let code_block_indent = Some(config.markdown_code_block_indent() as usize);
                 console.render_markdown_with_indent(&markdown, code_block_indent);
             }
         } else {

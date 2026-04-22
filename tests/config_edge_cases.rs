@@ -62,7 +62,7 @@ fn config_default_thinking_budgets() {
     assert_eq!(config.thinking_budget("low"), 2048);
     assert_eq!(config.thinking_budget("medium"), 8192);
     assert_eq!(config.thinking_budget("high"), 16384);
-    assert_eq!(config.thinking_budget("xhigh"), u32::MAX);
+    assert_eq!(config.thinking_budget("xhigh"), 32768);
     assert_eq!(config.thinking_budget("unknown"), 0);
 }
 

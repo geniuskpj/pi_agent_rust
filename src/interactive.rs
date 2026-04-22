@@ -549,14 +549,8 @@ impl PiApp {
         self.theme = theme;
         self.styles = self.theme.tui_styles();
         self.markdown_style = self.theme.glamour_style_config();
-        if let Some(indent) = self
-            .config
-            .markdown
-            .as_ref()
-            .and_then(|m| m.code_block_indent)
-        {
-            self.markdown_style.code_block.block.margin = Some(indent as usize);
-        }
+        self.markdown_style.code_block.block.margin =
+            Some(self.config.markdown_code_block_indent() as usize);
         self.spinner =
             SpinnerModel::with_spinner(spinners::dot()).style(self.styles.accent.clone());
 
@@ -2424,9 +2418,7 @@ impl PiApp {
         let theme = Theme::resolve(&config, &cwd);
         let styles = theme.tui_styles();
         let mut markdown_style = theme.glamour_style_config();
-        if let Some(indent) = config.markdown.as_ref().and_then(|m| m.code_block_indent) {
-            markdown_style.code_block.block.margin = Some(indent as usize);
-        }
+        markdown_style.code_block.block.margin = Some(config.markdown_code_block_indent() as usize);
         let editor_padding_x = config.editor_padding_x.unwrap_or(0).min(3) as usize;
         let autocomplete_max_visible =
             config.autocomplete_max_visible.unwrap_or(5).clamp(3, 20) as usize;

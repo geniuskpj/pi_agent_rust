@@ -271,7 +271,10 @@ pub struct ImageSettings {
 #[serde(default)]
 pub struct MarkdownSettings {
     /// Indentation (in spaces) applied to code blocks in rendered output.
-    #[serde(alias = "codeBlockIndent")]
+    #[serde(
+        alias = "codeBlockIndent",
+        deserialize_with = "deserialize_code_block_indent_option"
+    )]
     pub code_block_indent: Option<u8>,
 }
 
@@ -650,9 +653,16 @@ impl Config {
             "low" => budgets.and_then(|b| b.low).unwrap_or(2048),
             "medium" => budgets.and_then(|b| b.medium).unwrap_or(8192),
             "high" => budgets.and_then(|b| b.high).unwrap_or(16384),
-            "xhigh" => budgets.and_then(|b| b.xhigh).unwrap_or(u32::MAX),
+            "xhigh" => budgets.and_then(|b| b.xhigh).unwrap_or(32768),
             _ => 0,
         }
+    }
+
+    pub fn markdown_code_block_indent(&self) -> u8 {
+        self.markdown
+            .as_ref()
+            .and_then(|m| m.code_block_indent)
+            .unwrap_or(2)
     }
 
     pub fn enable_skill_commands(&self) -> bool {
@@ -1103,6 +1113,29 @@ fn merge_markdown(
         (None, Some(other)) => Some(other),
         (Some(base), None) => Some(base),
         (None, None) => None,
+    }
+}
+
+fn deserialize_code_block_indent_option<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| u8::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("markdown.codeBlockIndent must fit in u8")),
+        Some(serde_json::Value::String(indent)) => u8::try_from(indent.chars().count())
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom("markdown.codeBlockIndent string is too long")),
+        Some(_) => Err(serde::de::Error::custom(
+            "markdown.codeBlockIndent must be a string or integer",
+        )),
     }
 }
 
@@ -1838,7 +1871,7 @@ mod tests {
         assert_eq!(config.thinking_budget("low"), 2048);
         assert_eq!(config.thinking_budget("medium"), 8192);
         assert_eq!(config.thinking_budget("high"), 16384);
-        assert_eq!(config.thinking_budget("xhigh"), u32::MAX);
+        assert_eq!(config.thinking_budget("xhigh"), 32768);
         assert_eq!(config.thinking_budget("unknown-level"), 0);
     }
 
@@ -3022,7 +3055,14 @@ mod tests {
     }
 
     #[test]
-    fn markdown_code_block_indent_camel_case_alias() {
+    fn markdown_code_block_indent_accepts_legacy_string() {
+        let json = r#"{"markdown":{"codeBlockIndent":"    "}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.markdown.as_ref().unwrap().code_block_indent, Some(4));
+    }
+
+    #[test]
+    fn markdown_code_block_indent_snake_case_alias() {
         let json = r#"{"markdown":{"code_block_indent":6}}"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.markdown.as_ref().unwrap().code_block_indent, Some(6));
@@ -3033,6 +3073,7 @@ mod tests {
         let json = r"{}";
         let config: Config = serde_json::from_str(json).unwrap();
         assert!(config.markdown.is_none());
+        assert_eq!(config.markdown_code_block_indent(), 2);
     }
 
     #[test]
