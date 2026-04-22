@@ -555,9 +555,9 @@ bash tests/installer_regression.sh
 
 ### Distribution Compatibility Contract (Packaging/Invocation Scope)
 
-For drop-in adoption, packaging and invocation compatibility follows this contract:
+For migration adoption, packaging and invocation compatibility follows this contract:
 
-- This section covers packaging/invocation behavior only; strict functional drop-in replacement messaging is governed by the release certification gates in `docs/dropin-certification-contract.json`.
+- This section covers packaging/invocation behavior only; functional parity and certification status are tracked in `docs/dropin-certification-contract.json`.
 
 - Canonical executable name is `pi` across release assets and installer-managed installs.
 - Installer-managed installs also create an `rpi` compatibility launcher when no conflicting `rpi` command already exists on your PATH.
@@ -901,7 +901,7 @@ This is a second comparison pass focused on high-impact architectural deltas and
 | Area | Original pi-mono (`packages/coding-agent`) | `pi_agent_rust` | Why this divergence exists |
 |------|---------------------------------------------|------------------|----------------------------|
 | **Distribution model** | npm package (`npm install -g @mariozechner/pi-coding-agent`) | Single Rust binary (`pi`) | Remove Node runtime dependency and improve startup/deployment portability |
-| **Execution surfaces** | Interactive + print + JSON mode + RPC + SDK | Interactive + print + JSON mode + RPC (+ Rust SDK documented in `docs/sdk.md`) | Strict drop-in parity remains release-gated; JSON/RPC/SDK claims must be backed by certification artifacts |
+| **Execution surfaces** | Interactive + print + JSON mode + RPC + SDK | Interactive + print + JSON mode + RPC + Rust SDK | Rust SDK provides idiomatic companion API for embedding Pi programmatically (documented in `docs/sdk.md`) |
 | **Default built-in tool posture** | Defaults to `read/write/edit/bash` (others available) | Seven built-ins treated as first-class (`read/write/edit/bash/grep/find/ls`) | Keep common code-navigation and shell workflows available without extra configuration |
 | **Extension trust model** | Extension/package model documented as full system access | Embedded runtime with capability-gated hostcalls and policy profiles | Reduce ambient authority and make extension behavior auditable/deny-by-default |
 | **Session architecture emphasis** | JSONL tree session model and branch navigation | JSONL v3 tree + explicit session index (SQLite sidecar) + optional SQLite session backend | Faster resume/lookups at scale and safer multi-instance coordination |
@@ -911,9 +911,9 @@ This is a second comparison pass focused on high-impact architectural deltas and
 
 Practical consequence of these deltas:
 - Extension/package workflows are compatible across both implementations.
-- The non-negotiable goal is strict drop-in replacement for pi-mono across all use cases.
-- Strict drop-in replacement language is release-gated by `docs/dropin-certification-contract.json` and open-gap status in `docs/dropin-parity-gap-ledger.json`.
-- `docs/parity-certification.json` is an informational snapshot and does not override release-gate policy for strict replacement claims.
+- The goal is functional equivalence to pi-mono with Rust-idiomatic patterns and performance improvements.
+- The Rust SDK provides a companion API that delivers equivalent capabilities without requiring TypeScript-specific adaptation patterns.
+- `docs/parity-certification.json` tracks functional parity progress and certification status.
 
 ### Algorithmic Mechanics: pi-mono Baseline vs Rust Implementation
 

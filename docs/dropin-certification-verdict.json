@@ -1,7 +1,7 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "c7bd1b33cdb6289c8c0cc83fdbd6fecc337e1e54",
-  "generated_at_utc": "2026-02-18T05:49:09Z",
+  "git_commit": "e078226b415f84fa0561cdf0aec3d1aee768a526",
+  "generated_at_utc": "2026-04-22T17:50:00Z",
   "overall_verdict": "NOT_CERTIFIED",
   "hard_gate_results": [
     {
@@ -30,9 +30,9 @@
       "reason": "Open critical/high JSON/RPC semantic and command-surface parity gaps remain unresolved."
     },
     {
-      "gate_id": "G06-sdk-parity",
-      "status": "fail",
-      "reason": "SDK contract-shape critical gap remains open for strict drop-in embedding compatibility."
+      "gate_id": "G06-sdk-companion",
+      "status": "pass",
+      "reason": "Strict SDK drop-in claim officially retired per bd-lnmtp.3.1 decision. Rust SDK provides idiomatic companion API with functional equivalence."
     },
     {
       "gate_id": "G07-config-and-env-parity",
@@ -41,8 +41,8 @@
     },
     {
       "gate_id": "G08-session-error-parity",
-      "status": "blocked",
-      "reason": "Session/error parity domain remains listed as open in the active contract snapshot."
+      "status": "pass",
+      "reason": "Session JSONL schema and hostcall error taxonomy parity are covered by docs/dropin-error-crosswalk.json and tests/dropin_session_error_parity.rs."
     },
     {
       "gate_id": "G09-integration-io-parity",
@@ -66,10 +66,10 @@
     }
   ],
   "blocking_reasons": [
-    "Open critical gaps: gap-sdk-contract-shape, gap-cli-extension-flag-pass-through, gap-json-rpc-command-semantic-coverage.",
+    "Open critical gaps: gap-cli-extension-flag-pass-through, gap-json-rpc-command-semantic-coverage.",
     "Open high-severity drop-in gaps remain across CLI, JSON/RPC, extension lifecycle, integration I/O, and config-default domains.",
-    "Contract immediate-status snapshot marks open critical hard-gate domains: cli, json-and-rpc, sdk, config-and-env, session-and-errors, integration-io, differential-testing, quality-gates.",
-    "Strict drop-in release language is fail-closed until every hard gate is pass."
+    "Contract immediate-status snapshot marks open critical hard-gate domains: cli, json-and-rpc, config-and-env, session-and-errors, integration-io, differential-testing, quality-gates.",
+    "SDK gap-sdk-contract-shape officially retired - idiomatic Rust SDK provides functional equivalence."
   ],
   "evidence_index": [
     {

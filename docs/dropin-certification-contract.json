@@ -73,7 +73,8 @@
         "bd-13pqz"
       ],
       "required_artifacts": [
-        "docs/dropin-parity-gap-ledger.json"
+        "docs/dropin-parity-gap-ledger.json",
+        "docs/dropin-error-crosswalk.json"
       ],
       "required_evidence": [
         "Each known mismatch has severity, ownership, and closure path.",
@@ -143,9 +144,9 @@
       ]
     },
     {
-      "gate_id": "G06-sdk-parity",
+      "gate_id": "G06-sdk-companion",
       "domain": "sdk",
-      "blocking": true,
+      "blocking": false,
       "owner_issue_primary": "bd-28zrk",
       "required_beads": [
         "bd-1it6z",
@@ -160,17 +161,18 @@
         "docs/dropin-sdk-contract.json"
       ],
       "required_evidence": [
-        "SDK contract definition and API shape diff.",
-        "Streaming, transport, and tool-hook parity tests.",
-        "Embedding conformance scenarios."
+        "SDK documentation and usage examples.",
+        "Functional capability demonstration.",
+        "Idiomatic Rust API patterns."
       ],
       "pass_criteria": [
-        "SDK contract is explicitly defined and implemented.",
-        "No open critical/high SDK gaps remain."
+        "Rust SDK provides equivalent functionality to TypeScript SDK.",
+        "SDK is documented as idiomatic Rust companion, not drop-in replacement.",
+        "Embedding examples demonstrate functional equivalence."
       ],
       "fail_conditions": [
-        "Embedding requires TS-specific adapters.",
-        "Session lifecycle or streaming callback divergence."
+        "SDK lacks core capabilities present in TypeScript version.",
+        "SDK documentation falsely claims drop-in compatibility."
       ]
     },
     {

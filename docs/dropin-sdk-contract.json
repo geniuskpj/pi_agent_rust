@@ -19,7 +19,7 @@
   "contract_scope": {
     "goal": "Define required drop-in SDK behavior for non-CLI integrators and map each capability to concrete Rust API commitments and test obligations.",
     "certification_gate": "G06-sdk-parity",
-    "parity_gap_reference": "gap-sdk-contract-shape"
+    "parity_gap_reference": "gap-sdk-contract-shape (retired 2026-04-22)"
   },
   "capabilities": [
     {

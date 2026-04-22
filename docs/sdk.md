@@ -1,6 +1,8 @@
 # SDK Cookbook and Migration Guide
 
-This guide is for teams embedding Pi as a Rust library and migrating from the TypeScript SDK surface.
+This guide is for teams embedding Pi as a Rust library. The Rust SDK provides idiomatic Rust APIs that deliver equivalent functionality to the TypeScript SDK, using Rust-native patterns like `Result` types, structured concurrency, and zero-copy operations.
+
+**Note**: This SDK is an idiomatic Rust companion to the pi-mono TypeScript SDK, not a drop-in equivalent. The APIs provide functional equivalence while following Rust ecosystem conventions.
 
 ## Install
 

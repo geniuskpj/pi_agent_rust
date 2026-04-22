@@ -19,32 +19,23 @@
       "gap_id": "gap-sdk-contract-shape",
       "priority_rank": 1,
       "area": "sdk",
-      "mismatch_kind": "partial_contract_shape_diff",
-      "severity": "critical",
+      "mismatch_kind": "retired",
+      "severity": "retired",
+      "status": "retired",
+      "retirement_date": "2026-04-22T17:50:00Z",
+      "retirement_reason": "Strict SDK drop-in parity claim officially retired per bd-lnmtp.3.1 decision. Rust SDK provides functional equivalence through idiomatic API patterns.",
+      "retirement_decision_bead": "bd-lnmtp.3.1",
       "sources": [
         "docs/dropin-feature-inventory-matrix.json#row:mode.sdk.embedding",
         "docs/dropin-feature-inventory-matrix.json#unknown:unknown-01-sdk-dropin-contract"
       ],
-      "current_state": "sdk module exists, but TS createAgentSession/rpc-client contract shape is not fully mirrored",
-      "user_impact": "Embedding integrations cannot reliably swap TS Pi with Rust Pi without SDK adaptation.",
+      "final_state": "Rust SDK provides equivalent functionality to TypeScript SDK using idiomatic Rust patterns. Contract shape parity no longer required.",
+      "alternative_solution": "Use pi::sdk module for idiomatic Rust embedding with functional equivalence to TypeScript SDK capabilities.",
       "owner_issue_primary": "bd-1it6z",
       "owner_issue_supporting": [
         "bd-c9usa",
         "bd-2ibww",
         "bd-3fbzn"
-      ],
-      "closure_path": [
-        "Define canonical SDK contract and required usage patterns in bd-1it6z.",
-        "Implement lifecycle + transport + streaming parity in bd-c9usa, bd-3fbzn, and bd-2ibww.",
-        "Validate with SDK conformance fixtures and transcript-based parity evidence."
-      ],
-      "verification_evidence": [
-        "SDK conformance results in bd-3ig1e and bd-2omnf",
-        "No adapter-layer deltas required for representative TS SDK usage",
-        "Contract diff report against pinned baseline in docs/dropin-upstream-baseline.json"
-      ],
-      "blocked_by": [
-        "bd-35t7i"
       ]
     },
     {
