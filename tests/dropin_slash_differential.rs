@@ -3,20 +3,16 @@
 //! This test suite verifies that slash commands in Rust Pi produce
 //! equivalent behavior to pi-mono through automated RPC testing.
 
-use std::collections::HashMap;
-
+#[path = "dropin_slash_differential/mod.rs"]
 mod dropin_slash_differential;
 use dropin_slash_differential::*;
 
 /// Comprehensive test of slash command parity across all supported commands.
-#[tokio::test]
-async fn test_slash_command_differential_parity() {
+#[test]
+fn test_slash_command_differential_parity() {
     let tester = DifferentialTester::new().expect("Failed to create differential tester");
 
-    let results = tester
-        .run_all_scenarios()
-        .await
-        .expect("Failed to run differential scenarios");
+    let results = tester.run_all_scenarios();
 
     // Collect any failures
     let mut failures = Vec::new();
@@ -49,7 +45,7 @@ async fn test_slash_command_differential_parity() {
     if !failures.is_empty() {
         println!("Failures:");
         for failure in &failures {
-            println!("  - {}", failure);
+            println!("  - {failure}");
         }
     }
 
@@ -63,8 +59,6 @@ async fn test_slash_command_differential_parity() {
 fn test_slash_command_parsing() {
     // Verify that our test scenarios cover the actual slash commands
     // supported by the Rust implementation
-    use crate::interactive::commands::SlashCommand;
-
     let tester = DifferentialTester::new().expect("Failed to create tester");
 
     // Check that we have test scenarios for core commands
@@ -96,8 +90,7 @@ fn test_slash_command_parsing() {
             scenario_commands
                 .iter()
                 .any(|cmd| cmd.starts_with(essential)),
-            "Missing test scenario for essential command: {}",
-            essential
+            "Missing test scenario for essential command: {essential}"
         );
     }
 }
@@ -120,7 +113,7 @@ fn test_response_canonicalization() {
         }
     });
 
-    let canonicalized = canonicalize_response(test_response.clone());
+    let canonicalized = canonicalize_response(test_response);
 
     // Non-deterministic fields should be removed
     assert!(canonicalized.get("timestamp").is_none());
@@ -135,8 +128,8 @@ fn test_response_canonicalization() {
 }
 
 /// Test combinatorial slash command scenarios.
-#[tokio::test]
-async fn test_combinatorial_slash_commands() {
+#[test]
+fn test_combinatorial_slash_commands() {
     let mut tester = DifferentialTester::new().expect("Failed to create tester");
 
     // Add combinatorial test scenarios
@@ -177,10 +170,7 @@ async fn test_combinatorial_slash_commands() {
         .collect();
 
     for scenario in combinatorial_scenarios {
-        let result = tester
-            .run_scenario(&scenario)
-            .await
-            .expect("Failed to run combinatorial scenario");
+        let result = DifferentialTester::run_scenario(&scenario);
 
         // For now, expect success with placeholder implementation
         assert!(
@@ -192,8 +182,8 @@ async fn test_combinatorial_slash_commands() {
 }
 
 /// Test error handling for invalid slash commands.
-#[tokio::test]
-async fn test_invalid_slash_command_handling() {
+#[test]
+fn test_invalid_slash_command_handling() {
     let mut tester = DifferentialTester::new().expect("Failed to create tester");
 
     // Add invalid command scenarios
@@ -223,10 +213,7 @@ async fn test_invalid_slash_command_handling() {
 
     for scenario in invalid_scenarios {
         tester.add_scenario(scenario.clone());
-        let result = tester
-            .run_scenario(&scenario)
-            .await
-            .expect("Failed to run invalid command scenario");
+        let result = DifferentialTester::run_scenario(&scenario);
 
         // Invalid commands should still complete (with appropriate error responses)
         // For placeholder implementation, expect success

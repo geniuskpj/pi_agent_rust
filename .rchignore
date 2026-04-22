@@ -40,6 +40,8 @@ _tmp*/
 _tmp*/**
 cloudyknoll/
 cloudyknoll/**
+pane*/
+pane*/**
 target/
 target/**
 .rch-target/

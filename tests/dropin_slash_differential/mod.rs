@@ -5,7 +5,6 @@
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// A slash command test scenario.
@@ -59,7 +58,7 @@ pub fn canonicalize_response(mut response: Value) -> Value {
 /// Test runner for differential slash command testing.
 pub struct DifferentialTester {
     temp_dir: TempDir,
-    scenarios: Vec<SlashCommandScenario>,
+    pub scenarios: Vec<SlashCommandScenario>,
 }
 
 impl DifferentialTester {
@@ -74,6 +73,7 @@ impl DifferentialTester {
     }
 
     /// Default set of slash command scenarios to test.
+    #[allow(clippy::too_many_lines)]
     fn default_scenarios() -> Vec<SlashCommandScenario> {
         vec![
             SlashCommandScenario {
@@ -225,29 +225,29 @@ impl DifferentialTester {
     }
 
     /// Run all scenarios and return results.
-    pub async fn run_all_scenarios(&self) -> anyhow::Result<HashMap<String, TestResult>> {
+    pub fn run_all_scenarios(&self) -> HashMap<String, TestResult> {
         let mut results = HashMap::new();
 
         for scenario in &self.scenarios {
             println!("Running scenario: {}", scenario.name);
-            let result = self.run_scenario(scenario).await?;
+            let result = Self::run_scenario(scenario);
             results.insert(scenario.name.clone(), result);
         }
 
-        Ok(results)
+        results
     }
 
     /// Run a single scenario.
-    async fn run_scenario(&self, scenario: &SlashCommandScenario) -> anyhow::Result<TestResult> {
+    pub fn run_scenario(scenario: &SlashCommandScenario) -> TestResult {
         // TODO: Implement actual RPC-based testing against both pi-mono and Rust Pi
         // For now, return a placeholder
-        Ok(TestResult {
+        TestResult {
             scenario_name: scenario.name.clone(),
             success: true,
             rust_response: json!({"status": "success", "command": scenario.command}),
             pi_mono_response: json!({"status": "success", "command": scenario.command}),
             differences: vec![],
-        })
+        }
     }
 }
 
@@ -265,8 +265,8 @@ pub struct TestResult {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_canonicalize_response() {
+    #[test]
+    fn test_canonicalize_response() {
         let response = json!({
             "status": "success",
             "timestamp": "2024-04-22T10:30:00Z",
@@ -281,18 +281,19 @@ mod tests {
         let canonicalized = canonicalize_response(response);
 
         // Timestamps and IDs should be removed
-        assert!(!canonicalized.get("timestamp").is_some());
-        assert!(!canonicalized.get("id").is_some());
-        assert!(!canonicalized["data"].get("nested_timestamp").is_some());
+        assert!(canonicalized.get("timestamp").is_none());
+        assert!(canonicalized.get("id").is_none());
+        assert!(canonicalized["data"].get("nested_timestamp").is_none());
 
         // Other fields should be preserved
         assert_eq!(canonicalized["status"], "success");
         assert_eq!(canonicalized["data"]["value"], 42);
     }
 
-    #[tokio::test]
-    async fn test_scenario_creation() {
+    #[test]
+    fn test_scenario_creation() {
         let tester = DifferentialTester::new().unwrap();
+        assert!(tester.temp_dir.path().is_dir());
         assert!(!tester.scenarios.is_empty());
 
         // Verify we have basic commands covered
@@ -301,17 +302,37 @@ mod tests {
         assert!(scenario_names.iter().any(|name| name.contains("clear")));
         assert!(scenario_names.iter().any(|name| name.contains("model")));
         assert!(scenario_names.iter().any(|name| name.contains("exit")));
+        assert!(
+            tester
+                .scenarios
+                .iter()
+                .all(|scenario| !scenario.description.is_empty())
+        );
+        assert!(
+            tester
+                .scenarios
+                .iter()
+                .all(|scenario| scenario.setup.iter().all(|entry| !entry.is_empty()))
+        );
+        assert!(
+            tester
+                .scenarios
+                .iter()
+                .all(|scenario| !scenario.supports_streaming)
+        );
     }
 
-    #[tokio::test]
-    async fn test_placeholder_scenario_run() {
+    #[test]
+    fn test_placeholder_scenario_run() {
         let tester = DifferentialTester::new().unwrap();
 
         if let Some(scenario) = tester.scenarios.first() {
-            let result = tester.run_scenario(scenario).await.unwrap();
+            let result = DifferentialTester::run_scenario(scenario);
             assert_eq!(result.scenario_name, scenario.name);
             // Placeholder implementation should succeed
             assert!(result.success);
+            assert_eq!(result.rust_response["command"], scenario.command);
+            assert_eq!(result.pi_mono_response["command"], scenario.command);
         }
     }
 }

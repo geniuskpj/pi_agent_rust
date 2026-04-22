@@ -29,7 +29,7 @@ fn upstream_session_header_and_entries_parse_with_rust_schema() {
             "message": {
                 "role": "user",
                 "content": "hello from pi-mono",
-                "timestamp": 1776816001000_i64
+                "timestamp": 1_776_816_001_000_i64
             }
         }),
         json!({

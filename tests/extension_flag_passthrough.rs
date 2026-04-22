@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use pi::cli::{ExtensionCliFlag, parse_with_extension_flags};
-use pi::extensions::ExtensionManager;
 
 /// Test that extension CLI flags are parsed correctly from command line arguments.
 #[test]
@@ -27,7 +26,7 @@ fn test_extension_flag_parsing_basic() {
     assert_eq!(parsed.extension_flags[0].value, Some("true".to_string()));
 
     // The message should still be parsed correctly
-    assert_eq!(parsed.cli.message, vec!["Hello", "world"]);
+    assert_eq!(parsed.cli.message_args(), vec!["Hello", "world"]);
 }
 
 /// Test parsing extension flags without values (boolean flags).
@@ -132,13 +131,13 @@ fn test_extension_flag_parsing_edge_cases() {
     let args1 = vec![
         "pi".to_string(),
         "--empty".to_string(),
-        "".to_string(),
+        String::new(),
         "message".to_string(),
     ];
 
     let parsed1 = parse_with_extension_flags(args1).expect("Should parse empty value");
     assert_eq!(parsed1.extension_flags.len(), 1);
-    assert_eq!(parsed1.extension_flags[0].value, Some("".to_string()));
+    assert_eq!(parsed1.extension_flags[0].value, Some(String::new()));
 
     // Flag at end without value
     let args2 = vec![
@@ -182,7 +181,7 @@ fn test_extension_flag_parsing_mixed_formats() {
     assert_eq!(flags["flag3"], Some("value3".to_string()));
     assert_eq!(flags["flag4"], Some("value4".to_string()));
 
-    assert_eq!(parsed.cli.message, vec!["final", "message"]);
+    assert_eq!(parsed.cli.message_args(), vec!["final", "message"]);
 }
 
 /// Test that subcommands don't interfere with extension flag parsing.
@@ -200,15 +199,12 @@ fn test_extension_flags_with_subcommands() {
 
     // Should handle gracefully even with subcommands
     // Note: This might fail parsing due to subcommand, but extension flags should still be extracted
-    match parsed {
-        Ok(p) => {
-            // If parsing succeeds, extension flag should be extracted
-            assert!(p.extension_flags.iter().any(|f| f.name == "global-flag"));
-        }
-        Err(_) => {
-            // If parsing fails due to subcommand, that's expected
-            // The important thing is that the preprocessing works
-        }
+    if let Ok(p) = parsed {
+        // If parsing succeeds, extension flag should be extracted
+        assert!(p.extension_flags.iter().any(|f| f.name == "global-flag"));
+    } else {
+        // If parsing fails due to subcommand, that's expected
+        // The important thing is that the preprocessing works
     }
 }
 
@@ -230,7 +226,7 @@ fn test_negative_numbers_not_extension_flags() {
     assert_eq!(parsed.extension_flags[0].name, "real-flag");
 
     // -42 should be part of the message
-    assert!(parsed.cli.message.contains(&"-42".to_string()));
+    assert!(parsed.cli.message_args().contains(&"-42"));
 }
 
 #[cfg(test)]
@@ -267,15 +263,12 @@ mod integration_tests {
             self.registered_flags.clone()
         }
 
-        fn set_flag_value(
-            &self,
-            extension_id: &str,
-            name: &str,
-            value: Value,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            let mut values = self.set_values.lock().unwrap();
-            values.push((extension_id.to_string(), name.to_string(), value));
-            Ok(())
+        fn set_flag_value(&self, extension_id: &str, name: &str, value: Value) {
+            self.set_values.lock().unwrap().push((
+                extension_id.to_string(),
+                name.to_string(),
+                value,
+            ));
         }
 
         fn get_set_values(&self) -> Vec<(String, String, Value)> {
@@ -283,8 +276,8 @@ mod integration_tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_extension_flag_application_success() {
+    #[test]
+    fn test_extension_flag_application_success() {
         let manager = MockExtensionManager::new();
         let flags = vec![
             ExtensionCliFlag {
@@ -324,19 +317,16 @@ mod integration_tests {
                 let value = match flag_type {
                     "boolean" => {
                         let bool_val = match flag.value.as_deref() {
-                            Some("true") | Some("1") | Some("yes") | Some("on") => true,
-                            Some("false") | Some("0") | Some("no") | Some("off") => false,
-                            None => true, // Flag without value defaults to true
-                            Some(v) => return Err(format!("Invalid boolean value: {}", v)),
+                            Some("false" | "0" | "no" | "off") => false,
+                            Some("true" | "1" | "yes" | "on") | None => true,
+                            Some(v) => panic!("Invalid boolean value: {v}"),
                         };
                         Value::Bool(bool_val)
                     }
                     _ => Value::String(flag.value.clone().unwrap_or_default()),
                 };
 
-                manager
-                    .set_flag_value(extension_id, &flag.name, value)
-                    .unwrap();
+                manager.set_flag_value(extension_id, &flag.name, value);
             }
         }
 

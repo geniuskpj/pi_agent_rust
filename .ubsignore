@@ -2,3 +2,15 @@ target/
 target-*/
 legacy_pi_mono_code/
 .ruff_cache/
+.git/
+.beads/
+.bench/
+.bench_round3/
+.bv/
+.ntm/
+codex_extindex_review/
+codex_extindex_review_test/
+fuzz/
+release_artifacts/
+pane*/
+pane*/**

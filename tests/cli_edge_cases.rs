@@ -17,12 +17,16 @@ fn test_quoted_arguments_with_spaces() {
         "pi".to_string(),
         "--provider".to_string(),
         "custom provider".to_string(), // Space in value
-        "hello world".to_string(), // Space in message
+        "hello world".to_string(),     // Space in message
         "another message".to_string(),
-    ]).expect("Should parse quoted args with spaces");
+    ])
+    .expect("Should parse quoted args with spaces");
 
     assert_eq!(parsed.cli.provider, Some("custom provider".to_string()));
-    assert_eq!(parsed.cli.message, vec!["hello", "world", "another", "message"]);
+    assert_eq!(
+        parsed.cli.message,
+        vec!["hello", "world", "another", "message"]
+    );
 }
 
 /// Test nested quoting scenarios.
@@ -33,10 +37,17 @@ fn test_nested_quotes() {
         "--system-prompt".to_string(),
         r#"You are a "helpful" assistant"#.to_string(),
         r#"Process the file "data.txt""#.to_string(),
-    ]).expect("Should parse nested quotes");
+    ])
+    .expect("Should parse nested quotes");
 
-    assert_eq!(parsed.cli.system_prompt, Some(r#"You are a "helpful" assistant"#.to_string()));
-    assert_eq!(parsed.cli.message, vec!["Process", "the", "file", r#""data.txt""#]);
+    assert_eq!(
+        parsed.cli.system_prompt,
+        Some(r#"You are a "helpful" assistant"#.to_string())
+    );
+    assert_eq!(
+        parsed.cli.message,
+        vec!["Process", "the", "file", r#""data.txt""#]
+    );
 }
 
 /// Test escaped quotes in arguments.
@@ -47,10 +58,17 @@ fn test_escaped_quotes() {
         "--system-prompt".to_string(),
         r#"Say \"hello\" to the user"#.to_string(),
         r#"The file is \"important.txt\""#.to_string(),
-    ]).expect("Should parse escaped quotes");
+    ])
+    .expect("Should parse escaped quotes");
 
-    assert_eq!(parsed.cli.system_prompt, Some(r#"Say \"hello\" to the user"#.to_string()));
-    assert_eq!(parsed.cli.message, vec!["The", "file", "is", r#"\"important.txt\""#]);
+    assert_eq!(
+        parsed.cli.system_prompt,
+        Some(r#"Say \"hello\" to the user"#.to_string())
+    );
+    assert_eq!(
+        parsed.cli.message,
+        vec!["The", "file", "is", r#"\"important.txt\""#]
+    );
 }
 
 /// Test environment variable expansion in CLI arguments.
@@ -70,7 +88,8 @@ fn test_environment_variable_expansion() {
         "--model".to_string(),
         "$TEST_MODEL".to_string(),
         "Check ${TEST_PATH}/file.txt".to_string(),
-    ]).expect("Should handle env var syntax");
+    ])
+    .expect("Should handle env var syntax");
 
     // These are literal strings since shell expansion happens before CLI parsing
     assert_eq!(parsed.cli.provider, Some("${TEST_PROVIDER}".to_string()));
@@ -107,13 +126,17 @@ fn test_file_reference_edge_cases() -> std::result::Result<(), Box<dyn std::erro
         format!("@{}", space_file.display()), // File path with spaces
         format!("@{}", nested_file.display()),
         "analyze these".to_string(),
-    ]).expect("Should parse @file references");
+    ])
+    .expect("Should parse @file references");
 
-    assert_eq!(parsed.cli.file_args(), vec![
-        simple_file.to_string_lossy(),
-        space_file.to_string_lossy(),
-        nested_file.to_string_lossy()
-    ]);
+    assert_eq!(
+        parsed.cli.file_args(),
+        vec![
+            simple_file.to_string_lossy(),
+            space_file.to_string_lossy(),
+            nested_file.to_string_lossy()
+        ]
+    );
     assert_eq!(parsed.cli.message_args(), vec!["analyze", "these"]);
 
     Ok(())
@@ -127,11 +150,15 @@ fn test_nonexistent_file_references() {
         "@/nonexistent/file.txt".to_string(),
         "@missing.txt".to_string(),
         "process anyway".to_string(),
-    ]).expect("Should parse even with non-existent @file references");
+    ])
+    .expect("Should parse even with non-existent @file references");
 
     // CLI parsing should succeed even if files don't exist
     // File existence checking happens later in the pipeline
-    assert_eq!(parsed.cli.file_args(), vec!["/nonexistent/file.txt", "missing.txt"]);
+    assert_eq!(
+        parsed.cli.file_args(),
+        vec!["/nonexistent/file.txt", "missing.txt"]
+    );
     assert_eq!(parsed.cli.message_args(), vec!["process", "anyway"]);
 }
 
@@ -146,7 +173,8 @@ fn test_positional_precedence() {
         "--verbose".to_string(),
         "hello".to_string(),
         "world".to_string(),
-    ]).expect("Should parse flags before positionals");
+    ])
+    .expect("Should parse flags before positionals");
 
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     assert!(parsed.cli.verbose);
@@ -161,7 +189,8 @@ fn test_positional_precedence() {
         "second".to_string(),
         "--verbose".to_string(),
         "third".to_string(),
-    ]).expect("Should parse mixed flags and positionals");
+    ])
+    .expect("Should parse mixed flags and positionals");
 
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     assert!(parsed.cli.verbose);
@@ -179,7 +208,8 @@ fn test_double_dash_separator() {
         "--not-a-flag".to_string(),
         "regular".to_string(),
         "args".to_string(),
-    ]).expect("Should parse args after --");
+    ])
+    .expect("Should parse args after --");
 
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     // Everything after -- should be treated as positional arguments
@@ -192,36 +222,45 @@ fn test_extension_flags_edge_cases() {
     let parsed = parse_with_extension_flags(vec![
         "pi".to_string(),
         "--debug-level=high".to_string(), // Equals syntax
-        "--verbose".to_string(), // Boolean flag
+        "--verbose".to_string(),          // Boolean flag
         "--output-dir".to_string(),
         "/path/with spaces".to_string(), // Value with spaces
         "--flag-with-dashes".to_string(),
         "value".to_string(),
         "message".to_string(),
-    ]).expect("Should parse extension flags with edge cases");
+    ])
+    .expect("Should parse extension flags with edge cases");
 
     assert_eq!(parsed.extension_flags.len(), 4);
 
     // Check equals syntax
-    let debug_flag = parsed.extension_flags.iter()
+    let debug_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "debug-level")
         .expect("Should have debug-level flag");
     assert_eq!(debug_flag.value, Some("high".to_string()));
 
     // Check boolean flag
-    let verbose_flag = parsed.extension_flags.iter()
+    let verbose_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "verbose")
         .expect("Should have verbose flag");
     assert_eq!(verbose_flag.value, None);
 
     // Check value with spaces
-    let output_flag = parsed.extension_flags.iter()
+    let output_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "output-dir")
         .expect("Should have output-dir flag");
     assert_eq!(output_flag.value, Some("/path/with spaces".to_string()));
 
     // Check flag with dashes
-    let dashes_flag = parsed.extension_flags.iter()
+    let dashes_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "flag-with-dashes")
         .expect("Should have flag-with-dashes flag");
     assert_eq!(dashes_flag.value, Some("value".to_string()));
@@ -240,23 +279,28 @@ fn test_complex_mixed_scenarios() -> std::result::Result<(), Box<dyn std::error:
         "claude-opus".to_string(),
         "--custom-flag=debug".to_string(), // Extension flag with equals
         format!("@{}", temp_file.display()), // File reference
-        "--another-flag".to_string(), // Extension boolean flag
-        "Analyze this file".to_string(), // Message with spaces
-        "--".to_string(), // Separator
+        "--another-flag".to_string(),      // Extension boolean flag
+        "Analyze this file".to_string(),   // Message with spaces
+        "--".to_string(),                  // Separator
         "--not-parsed-as-flag".to_string(), // After separator
-    ]).expect("Should parse complex mixed scenario");
+    ])
+    .expect("Should parse complex mixed scenario");
 
     // Check standard flags
     assert_eq!(parsed.cli.model, Some("claude-opus".to_string()));
 
     // Check extension flags
     assert_eq!(parsed.extension_flags.len(), 2);
-    let custom_flag = parsed.extension_flags.iter()
+    let custom_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "custom-flag")
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value, Some("debug".to_string()));
 
-    let another_flag = parsed.extension_flags.iter()
+    let another_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "another-flag")
         .expect("Should have another-flag");
     assert_eq!(another_flag.value, None);
@@ -267,7 +311,12 @@ fn test_complex_mixed_scenarios() -> std::result::Result<(), Box<dyn std::error:
 
     // Check message (including args after --)
     assert!(parsed.cli.message.contains(&"Analyze".to_string()));
-    assert!(parsed.cli.message.contains(&"--not-parsed-as-flag".to_string()));
+    assert!(
+        parsed
+            .cli
+            .message
+            .contains(&"--not-parsed-as-flag".to_string())
+    );
 
     Ok(())
 }
@@ -310,11 +359,17 @@ fn test_unicode_and_special_chars() {
         "--custom-flag".to_string(),
         "café-naïve".to_string(),
         "Message with émojis 🎉 and ñice chars".to_string(),
-    ]).expect("Should handle Unicode and special characters");
+    ])
+    .expect("Should handle Unicode and special characters");
 
-    assert_eq!(parsed.cli.system_prompt, Some("Respond in 中文 and emoji 🚀".to_string()));
+    assert_eq!(
+        parsed.cli.system_prompt,
+        Some("Respond in 中文 and emoji 🚀".to_string())
+    );
 
-    let custom_flag = parsed.extension_flags.iter()
+    let custom_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "custom-flag")
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value, Some("café-naïve".to_string()));
@@ -336,11 +391,14 @@ fn test_long_arguments() {
         "--custom-flag".to_string(),
         long_value.clone(),
         long_message.trim().to_string(),
-    ]).expect("Should handle very long arguments");
+    ])
+    .expect("Should handle very long arguments");
 
     assert_eq!(parsed.cli.system_prompt.as_ref().unwrap().len(), 10000);
 
-    let custom_flag = parsed.extension_flags.iter()
+    let custom_flag = parsed
+        .extension_flags
+        .iter()
         .find(|f| f.name == "custom-flag")
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value.as_ref().unwrap().len(), 10000);
