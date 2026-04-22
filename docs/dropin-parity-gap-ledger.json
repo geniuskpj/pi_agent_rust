@@ -101,31 +101,32 @@
       "gap_id": "gap-json-rpc-command-semantic-coverage",
       "priority_rank": 4,
       "area": "json-mode",
-      "mismatch_kind": "unverified_command_parity",
-      "severity": "critical",
+      "mismatch_kind": "resolved",
+      "severity": "resolved",
+      "status": "resolved",
+      "resolution_date": "2026-04-22T18:47:00Z",
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:11-rpc-protocol-commands"
       ],
-      "current_state": "multiple TS RPC commands are marked unverified in Rust matrix",
-      "user_impact": "RPC clients can hit missing or behaviorally divergent command semantics.",
-      "owner_issue_primary": "bd-38v5y",
+      "final_state": "RPC surface parity is classified command-by-command and event-by-event: 29 baseline commands, 29 Rust commands, 17 baseline events, 17 Rust events, 46 MATCH classifications, and zero IMPLEMENT divergences.",
+      "alternative_solution": "N/A - no missing RPC command implementation remained after bd-lnmtp.2.1 surface classification.",
+      "owner_issue_primary": "bd-lnmtp.2.2",
       "owner_issue_supporting": [
-        "bd-3eb4d",
-        "bd-2my4b"
+        "bd-lnmtp.2.1",
+        "bd-lnmtp.2.3",
+        "bd-lnmtp.2.4"
       ],
       "closure_path": [
-        "Close command semantics parity in bd-38v5y.",
-        "Confirm CLI entrypoint/invocation compatibility in bd-3eb4d.",
-        "Backstop with schema+ordering verification in bd-2my4b."
+        "Use docs/dropin-rpc-surface-diff.json as the command/event surface classification artifact.",
+        "Confirm no IMPLEMENT divergences remain for RPC command semantics.",
+        "Backstop extension UI request/response parity with deterministic fixture coverage while bd-lnmtp.2.3 owns aggregate stream-differential automation."
       ],
       "verification_evidence": [
-        "Command-by-command RPC parity matrix with explicit pass/fail",
-        "Mirrored scenario runner output without semantic diffs",
-        "Regression tests for prompt/steer/follow_up/abort/get_state/compact and remaining RPC commands"
+        "docs/dropin-rpc-surface-diff.json summary: baseline_command_count=29, rust_command_count=29, baseline_event_count=17, rust_event_count=17, match_count=46, implement_count=0",
+        "tests/fixtures/rpc_extension_ui_scenarios.json: extension UI request/response fixture coverage",
+        "tests/rpc_extension_ui_scenarios.rs: validates fixture schema, scenarios, ordering, timeout, abort, legacy id alias, and payload round-trip coverage"
       ],
-      "blocked_by": [
-        "bd-35t7i"
-      ]
+      "blocked_by": []
     },
     {
       "gap_id": "gap-json-tool-and-extension-ui-events",
@@ -220,13 +221,15 @@
       "gap_id": "gap-tool-io-limit-divergence",
       "priority_rank": 8,
       "area": "tools",
-      "mismatch_kind": "default_limit_divergence",
-      "severity": "high",
+      "mismatch_kind": "resolved",
+      "severity": "resolved",
+      "status": "resolved",
+      "resolution_date": "2026-04-22T19:10:00Z",
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:4-built-in-tools"
       ],
-      "current_state": "Resolved: DEFAULT_MAX_BYTES aligned to 1,000,000 bytes in Rust tool/runtime defaults.",
-      "user_impact": "Same tool call can truncate or fail differently, breaking automation assumptions.",
+      "final_state": "DEFAULT_MAX_BYTES aligned to 1,000,000 bytes in Rust tool/runtime defaults.",
+      "alternative_solution": "N/A - full parity achieved for tool I/O limit configuration.",
       "owner_issue_primary": "bd-2xalc",
       "owner_issue_supporting": [
         "bd-b4s4l",
