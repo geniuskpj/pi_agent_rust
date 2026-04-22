@@ -1,0 +1,309 @@
+{
+  "schema": "pi.rpc.extension_ui_scenarios.v1",
+  "bead": "bd-lnmtp.2.4",
+  "description": "Deterministic extension_ui_request/extension_ui_response parity scenarios for the G05 RPC differential harness.",
+  "wire": {
+    "request_event_type": "extension_ui_request",
+    "response_command_type": "extension_ui_response",
+    "request_id_field": "requestId",
+    "legacy_request_id_alias": "id"
+  },
+  "scenarios": [
+    {
+      "id": "rpc-ui-confirm-accepted",
+      "method": "confirm",
+      "class": "roundtrip",
+      "request": {
+        "id": "req-confirm-accepted",
+        "method": "confirm",
+        "payload": {
+          "title": "Delete file?",
+          "message": "This cannot be undone.",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-confirm-accepted",
+        "confirmed": true
+      },
+      "expect": {
+        "resolved": true,
+        "value": true,
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-confirm-denied",
+      "method": "confirm",
+      "class": "roundtrip",
+      "request": {
+        "id": "req-confirm-denied",
+        "method": "confirm",
+        "payload": {
+          "title": "Run risky operation?",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-confirm-denied",
+        "value": false
+      },
+      "expect": {
+        "resolved": true,
+        "value": false,
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-select-string-option",
+      "method": "select",
+      "class": "roundtrip",
+      "request": {
+        "id": "req-select-string",
+        "method": "select",
+        "payload": {
+          "title": "Pick a model",
+          "options": ["claude-sonnet", "gpt-4o", "gemini-pro"],
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-select-string",
+        "value": "gpt-4o"
+      },
+      "expect": {
+        "resolved": true,
+        "value": "gpt-4o",
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-select-object-option",
+      "method": "select",
+      "class": "roundtrip",
+      "request": {
+        "id": "req-select-object",
+        "method": "select",
+        "payload": {
+          "title": "Pick an environment",
+          "options": [
+            {
+              "label": "Production",
+              "value": "prod"
+            },
+            {
+              "label": "Staging",
+              "value": "stage"
+            }
+          ],
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-select-object",
+        "value": "stage"
+      },
+      "expect": {
+        "resolved": true,
+        "value": "stage",
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-input-text",
+      "method": "input",
+      "class": "roundtrip",
+      "request": {
+        "id": "req-input-text",
+        "method": "input",
+        "payload": {
+          "title": "Enter API key",
+          "message": "Paste your key below",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-input-text",
+        "value": "sk-test-12345"
+      },
+      "expect": {
+        "resolved": true,
+        "value": "sk-test-12345",
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-editor-text",
+      "method": "editor",
+      "class": "roundtrip",
+      "request": {
+        "id": "req-editor-text",
+        "method": "editor",
+        "payload": {
+          "title": "Edit config",
+          "message": "Modify the YAML below",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-editor-text",
+        "value": "key: new_value"
+      },
+      "expect": {
+        "resolved": true,
+        "value": "key: new_value",
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-cancelled",
+      "method": "confirm",
+      "class": "abort",
+      "request": {
+        "id": "req-cancelled",
+        "method": "confirm",
+        "payload": {
+          "title": "Proceed?",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-cancelled",
+        "cancelled": true
+      },
+      "expect": {
+        "resolved": true,
+        "value": null,
+        "cancelled": true
+      }
+    },
+    {
+      "id": "rpc-ui-timeout-cancel-default",
+      "method": "confirm",
+      "class": "timeout",
+      "request": {
+        "id": "req-timeout",
+        "method": "confirm",
+        "payload": {
+          "title": "Short timeout",
+          "timeout": 25
+        },
+        "timeout_ms": 25
+      },
+      "response": null,
+      "expect": {
+        "resolved": true,
+        "value": null,
+        "cancelled": true
+      }
+    },
+    {
+      "id": "rpc-ui-id-alias",
+      "method": "confirm",
+      "class": "legacy-alias",
+      "request": {
+        "id": "req-id-alias",
+        "method": "confirm",
+        "payload": {
+          "title": "Legacy id alias?",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "id": "req-id-alias",
+        "confirmed": true
+      },
+      "expect": {
+        "resolved": true,
+        "value": true,
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-sequential-first",
+      "method": "confirm",
+      "class": "concurrent-ordering",
+      "request": {
+        "id": "req-seq-1",
+        "method": "confirm",
+        "payload": {
+          "title": "First?",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-seq-1",
+        "confirmed": true
+      },
+      "expect": {
+        "emission_index": 0,
+        "resolved": true,
+        "value": true,
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-sequential-second",
+      "method": "input",
+      "class": "concurrent-ordering",
+      "request": {
+        "id": "req-seq-2",
+        "method": "input",
+        "payload": {
+          "title": "Second?",
+          "timeout": 5000
+        },
+        "timeout_ms": 5000
+      },
+      "response": {
+        "type": "extension_ui_response",
+        "requestId": "req-seq-2",
+        "value": "hello"
+      },
+      "expect": {
+        "emission_index": 1,
+        "resolved": true,
+        "value": "hello",
+        "cancelled": false
+      }
+    },
+    {
+      "id": "rpc-ui-notify-fire-and-forget",
+      "method": "notify",
+      "class": "fire-and-forget",
+      "request": {
+        "id": "req-notify",
+        "method": "notify",
+        "payload": {
+          "title": "Heads up!",
+          "message": "Something happened"
+        },
+        "timeout_ms": null
+      },
+      "response": null,
+      "expect": {
+        "resolved": true,
+        "value": null,
+        "cancelled": false
+      }
+    }
+  ]
+}
