@@ -292,6 +292,14 @@ fn test_from_lock_error_poisoned() {
     assert_display_prefix(&err, "Session error:");
 }
 
+#[test]
+fn test_from_lock_error_polled_after_completion() {
+    let lock_err = asupersync::sync::LockError::PolledAfterCompletion;
+    let err: Error = lock_err.into();
+
+    assert_display_prefix(&err, "Session error:");
+}
+
 // =============================================================================
 // Display format stability tests (for snapshot comparisons)
 // =============================================================================

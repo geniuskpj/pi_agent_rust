@@ -876,7 +876,10 @@ impl From<asupersync::sync::LockError> for Error {
     fn from(value: asupersync::sync::LockError) -> Self {
         match value {
             asupersync::sync::LockError::Cancelled => Self::Aborted,
-            asupersync::sync::LockError::Poisoned => Self::session(value.to_string()),
+            asupersync::sync::LockError::Poisoned
+            | asupersync::sync::LockError::PolledAfterCompletion => {
+                Self::session(value.to_string())
+            }
         }
     }
 }
