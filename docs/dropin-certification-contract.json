@@ -388,7 +388,6 @@
       "sdk",
       "config-and-env",
       "session-and-errors",
-      "integration-io",
       "differential-testing",
       "quality-gates"
     ]

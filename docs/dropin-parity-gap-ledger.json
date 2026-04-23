@@ -241,8 +241,8 @@
         "Capture cross-size behavioral tests for truncation/error parity."
       ],
       "verification_evidence": [
-        "Tool conformance fixtures at threshold boundaries",
-        "Before/after diff of truncation metadata and error envelopes",
+        "tests/dropin_tool_io_differential.rs exercises tool I/O threshold boundaries, process lifecycle timeout cleanup, and SSE framing",
+        "tests/dropin_tool_io_differential/g09_tool_io_scenarios.json defines the executable G09 parity scenario matrix",
         "Documented default values in parity spec"
       ],
       "blocked_by": [

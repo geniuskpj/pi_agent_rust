@@ -1,0 +1,266 @@
+{
+  "schema": "pi.dropin.extension_ui_differential_scenarios.v1",
+  "bead": "bd-lnmtp.2.4",
+  "description": "Extension UI request/response round-trip differential scenarios covering prompt types, timeout, abort, and concurrent prompt ordering for G05 parity validation.",
+  "canonicalization": {
+    "volatile_fields": ["timestamp", "requestId", "id", "timeout"],
+    "response_ordering": "preserve_request_sequence",
+    "concurrent_prompts": "queue_based_serialization"
+  },
+  "scenarios": [
+    {
+      "id": "ui-confirm-basic",
+      "type": "confirm_prompt",
+      "description": "Basic yes/no confirmation prompt with boolean response",
+      "requests": [
+        {
+          "id": "req-1",
+          "type": "prompt",
+          "message": "test extension ui with confirm method",
+          "ui_method": "confirm",
+          "ui_payload": { "title": "Continue with operation?", "message": "This will perform a test operation." }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "confirm" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-select-basic",
+      "type": "select_prompt",
+      "description": "Selection prompt with multiple options",
+      "requests": [
+        {
+          "id": "req-2",
+          "type": "prompt",
+          "message": "test extension ui with select method",
+          "ui_method": "select",
+          "ui_payload": {
+            "title": "Choose an option",
+            "options": ["Option A", "Option B", "Option C"]
+          }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "select" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-input-basic",
+      "type": "input_prompt",
+      "description": "Text input prompt for single-line string input",
+      "requests": [
+        {
+          "id": "req-3",
+          "type": "prompt",
+          "message": "test extension ui with input method",
+          "ui_method": "input",
+          "ui_payload": {
+            "title": "Enter a value",
+            "placeholder": "Type something here..."
+          }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "input" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-editor-basic",
+      "type": "editor_prompt",
+      "description": "Multi-line text editor prompt",
+      "requests": [
+        {
+          "id": "req-4",
+          "type": "prompt",
+          "message": "test extension ui with editor method",
+          "ui_method": "editor",
+          "ui_payload": {
+            "title": "Edit content",
+            "content": "Initial content\nfor editing",
+            "language": "text"
+          }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "editor" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-notify-basic",
+      "type": "notify_prompt",
+      "description": "Notification prompt with no expected response",
+      "requests": [
+        {
+          "id": "req-5",
+          "type": "prompt",
+          "message": "test extension ui with notify method",
+          "ui_method": "notify",
+          "ui_payload": {
+            "title": "Operation completed",
+            "message": "The test operation finished successfully."
+          }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "notify" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-custom-basic",
+      "type": "custom_prompt",
+      "description": "Custom prompt with passthrough payload",
+      "requests": [
+        {
+          "id": "req-6",
+          "type": "prompt",
+          "message": "test extension ui with custom method",
+          "ui_method": "custom",
+          "ui_payload": {
+            "component": "file-picker",
+            "props": { "accept": ".json,.txt" }
+          }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "custom" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-timeout-confirm",
+      "type": "timeout_scenario",
+      "description": "Confirmation prompt with timeout configuration",
+      "requests": [
+        {
+          "id": "req-7",
+          "type": "prompt",
+          "message": "test extension ui with timeout",
+          "ui_method": "confirm",
+          "ui_payload": {
+            "title": "Time-sensitive operation",
+            "message": "Please respond within the timeout period."
+          },
+          "timeout_ms": 5000
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "confirm", "has_timeout": true },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-cancelled-input",
+      "type": "cancellation_scenario",
+      "description": "Input prompt that gets cancelled",
+      "requests": [
+        {
+          "id": "req-8",
+          "type": "prompt",
+          "message": "test cancellable extension ui",
+          "ui_method": "input",
+          "ui_payload": { "title": "Enter data (cancellable)" }
+        },
+        {
+          "id": "req-8-cancel",
+          "type": "extension_ui_response",
+          "requestId": "req-8",
+          "cancelled": true
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "input" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-select-validation",
+      "type": "validation_scenario",
+      "description": "Select prompt with option validation",
+      "requests": [
+        {
+          "id": "req-9",
+          "type": "prompt",
+          "message": "test select validation",
+          "ui_method": "select",
+          "ui_payload": {
+            "title": "Pick a valid option",
+            "options": ["Valid A", "Valid B"]
+          }
+        },
+        {
+          "id": "req-9-response",
+          "type": "extension_ui_response",
+          "requestId": "req-9",
+          "value": "Valid A"
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "select" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-concurrent-prompts",
+      "type": "concurrency_scenario",
+      "description": "Multiple concurrent prompts to test queue ordering",
+      "requests": [
+        {
+          "id": "req-10a",
+          "type": "prompt",
+          "message": "first concurrent prompt",
+          "ui_method": "confirm",
+          "ui_payload": { "title": "First prompt" }
+        },
+        {
+          "id": "req-10b",
+          "type": "prompt",
+          "message": "second concurrent prompt",
+          "ui_method": "input",
+          "ui_payload": { "title": "Second prompt" }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "extension_ui_request", "method": "confirm" },
+        { "type": "extension_ui_request", "method": "input" },
+        { "type": "response_success" }
+      ]
+    },
+    {
+      "id": "ui-invalid-method",
+      "type": "error_scenario",
+      "description": "Invalid UI method should return error",
+      "requests": [
+        {
+          "id": "req-11",
+          "type": "prompt",
+          "message": "test invalid ui method",
+          "ui_method": "invalid_method",
+          "ui_payload": { "title": "This should fail" }
+        }
+      ],
+      "expected_patterns": [
+        { "type": "response_error" }
+      ]
+    },
+    {
+      "id": "ui-missing-required-field",
+      "type": "error_scenario",
+      "description": "UI request missing required requestId field",
+      "requests": [
+        {
+          "type": "extension_ui_response",
+          "value": "response without requestId"
+        }
+      ],
+      "expected_patterns": [
+        { "type": "response_error" }
+      ]
+    }
+  ]
+}
