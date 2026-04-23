@@ -4,6 +4,7 @@
 //! branching and history navigation.
 
 use crate::agent_cx::AgentCx;
+use tracing::warn;
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -1352,7 +1353,7 @@ impl Session {
     pub async fn open(path: &str) -> Result<Self> {
         let (session, diagnostics) = Self::open_with_diagnostics(path).await?;
         for warning in diagnostics.warning_lines() {
-            eprintln!("{warning}");
+            warn!("{warning}");
         }
         Ok(session)
     }

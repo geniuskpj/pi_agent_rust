@@ -6,6 +6,7 @@
 //! - Package-based resource discovery
 
 use crate::config::Config;
+use tracing::warn;
 use crate::error::{Error, Result};
 use crate::package_manager::{
     PackageManager, PackageScope, ResolveExtensionSourcesOptions, ResolvedResource, ResourceOrigin,
@@ -657,7 +658,7 @@ pub async fn discover_package_resources(manager: &PackageManager) -> Result<Pack
         };
         if !root.exists() {
             if let Err(err) = manager.install(&entry.source, entry.scope).await {
-                eprintln!("Warning: Failed to install {}: {err}", entry.source);
+                warn!("Failed to install {}: {err}", entry.source);
                 continue;
             }
         }

@@ -13,6 +13,7 @@
 //! 5. If done: return final message
 
 use crate::auth::AuthStorage;
+use tracing::warn;
 use crate::compaction::{self, ResolvedCompactionSettings};
 use crate::compaction_worker::{CompactionQuota, CompactionWorkerState};
 use crate::error::{Error, Result};
@@ -7490,13 +7491,13 @@ fn log_repair_diagnostics(events: &[crate::extensions_js::ExtensionRepairEvent])
         .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
     if verbose {
-        eprintln!(
+        warn!(
             "[auto-repair] {} extension{} auto-repaired:",
             events.len(),
             if events.len() == 1 { "" } else { "s" }
         );
         for ev in events {
-            eprintln!(
+            warn!(
                 "  {}: {} ({})",
                 ev.pattern, ev.extension_id, ev.repair_action
             );
