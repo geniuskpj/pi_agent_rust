@@ -68,15 +68,15 @@
   "blocking_reasons": [],
   "evidence_index": [
     {
-      "path": "docs/dropin-certification-contract.json",
+      "path": "docs/contracts/dropin-certification-contract.json",
       "description": "Normative hard-gate contract and verdict artifact requirements"
     },
     {
-      "path": "docs/dropin-upstream-baseline.json",
+      "path": "docs/contracts/dropin-upstream-baseline.json",
       "description": "Pinned upstream baseline reference"
     },
     {
-      "path": "docs/dropin-feature-inventory-matrix.json",
+      "path": "docs/evidence/dropin-feature-inventory-matrix.json",
       "description": "Machine-readable execution-surface inventory"
     },
     {
@@ -84,7 +84,7 @@
       "description": "Human-auditable inventory companion"
     },
     {
-      "path": "docs/dropin-parity-gap-ledger.json",
+      "path": "docs/evidence/dropin-parity-gap-ledger.json",
       "description": "Owned parity gaps with severity and closure paths"
     },
     {
