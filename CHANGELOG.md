@@ -12,6 +12,35 @@ Repository: <https://github.com/Dicklesworthstone/pi_agent_rust>
 
 ---
 
+## [v0.1.12] — 2026-04-23 — Release
+
+### Bug Fixes
+
+- **Actually fix Windows build.** v0.1.11 attempted to work around the published
+  `sqlmodel-sqlite` 0.2.1 dynamic-link issue by adding `libsqlite3-sys` with
+  `bundled-windows` as a top-level direct dep. That attempt failed because
+  `sqlmodel-sqlite` 0.2.1 still declared `#[link(name = "sqlite3")]` (dynamic)
+  without importing any item from `libsqlite3-sys`, so rustc elided the
+  `libsqlite3-sys` rlib and dropped its build-script static-link directives
+  before link time — leaving only the dynamic-link directive, which failed with
+  `__imp_sqlite3_*: unresolved external symbol` on MSVC. Upgrading to
+  `sqlmodel-sqlite` 0.2.2 picks up
+  [`50e1aca`](https://github.com/Dicklesworthstone/sqlmodel_rust/commit/50e1aca)
+  (always bundle via `libsqlite3-sys` feature `bundled`) and
+  [`c8bb7d7`](https://github.com/Dicklesworthstone/sqlmodel_rust/commit/c8bb7d7)
+  (pin the rlib with an explicit `#[link(name = "sqlite3", kind = "static")]`),
+  which make the static-link directives actually survive into the link step.
+  Fixes [#55](https://github.com/Dicklesworthstone/pi_agent_rust/issues/55).
+
+### Dependencies
+
+- Bump `sqlmodel-sqlite` and `sqlmodel-core` from 0.2.1 to 0.2.2.
+- Drop the now-redundant `[target.'cfg(windows)'.dependencies] libsqlite3-sys`
+  block and the FreeBSD `libsqlite3-sys` mirror of the same workaround. Both
+  are subsumed by `sqlmodel-sqlite` 0.2.2 bundling sqlite on every target.
+
+---
+
 ## [v0.1.11] — 2026-04-15 — Release
 
 ### Bug Fixes

@@ -1,6 +1,6 @@
 [package]
 name = "pi_agent_rust"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 rust-version = "1.85"
 description = "High-performance AI coding agent CLI - Rust port of Pi Agent"
@@ -91,8 +91,8 @@ fs4 = "0.13"
 glob = "0.3"
 ignore = "0.4"
 crossbeam-queue = "0.3"
-sqlmodel-sqlite = { version = "0.2.1" }
-sqlmodel-core = { version = "0.2.1" }
+sqlmodel-sqlite = { version = "0.2.2" }
+sqlmodel-core = { version = "0.2.2" }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -176,18 +176,10 @@ harness = false
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
 
-# Windows: provide bundled SQLite for sqlmodel-sqlite's FFI linkage.
-# The published sqlmodel-sqlite crate is missing this target dep; without it
-# the linker fails with "cannot open input file 'sqlite3.lib'" on MSVC.
-[target.'cfg(windows)'.dependencies]
-libsqlite3-sys = { version = "0.37", features = ["bundled-windows"] }
-
 # FreeBSD: third-party libs live under /usr/local and rquickjs-sys doesn't
 # ship pre-generated bindings for this target, so regenerate at build time
 # via the `bindgen` feature (uses /usr/bin/clang from the base system).
-# Bundled sqlite mirrors the Windows workaround.
 [target.'cfg(target_os = "freebsd")'.dependencies]
-libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 rquickjs = { version = "0.11", features = ["futures", "loader", "bindgen"] }
 
 [features]
