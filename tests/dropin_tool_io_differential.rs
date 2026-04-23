@@ -68,7 +68,7 @@ async fn execute_text<T: Tool + ?Sized>(tool: &T, input: Value) -> pi::PiResult<
 }
 
 fn write_fixture(path: impl AsRef<Path>, content: &str) {
-    std::fs::write(path, content).expect("write fixture file")
+    std::fs::write(path, content).expect("write fixture file");
 }
 
 async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
