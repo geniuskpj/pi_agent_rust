@@ -3,7 +3,7 @@
 //! CLI binary: Generate conformance test matrix from inclusion list + API matrix.
 //!
 //! ```text
-//! cargo run --bin ext_conformance_matrix -- \
+//! cargo run --example ext_conformance_matrix -- \
 //!   --inclusion docs/extension-inclusion-list.json \
 //!   --api-matrix docs/extension-api-matrix.json \
 //!   --out docs/extension-conformance-matrix.json

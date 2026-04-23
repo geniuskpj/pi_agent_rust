@@ -5,7 +5,7 @@
 //!
 //! Usage:
 //! ```text
-//! cargo run --bin ext_validate_dedup -- \
+//! cargo run --example ext_validate_dedup -- \
 //!   --code-search docs/extension-code-search-inventory.json \
 //!   --repo-search docs/extension-repo-search-summary.json \
 //!   --npm-scan docs/extension-npm-scan-summary.json \

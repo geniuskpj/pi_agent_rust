@@ -416,7 +416,7 @@ This project validates extension compatibility with a three-track pipeline:
 1. **Fetch unvendored source corpus**
    - Binary: `ext_unvendored_fetch_run`
    - Typical command:
-     - `cargo run --bin ext_unvendored_fetch_run -- run-all --workers 8 --no-probe`
+     - `cargo run --example ext_unvendored_fetch_run -- run-all --workers 8 --no-probe`
    - Purpose:
      - Clones GitHub repos and unpacks npm tarballs into `.tmp-codex-unvendored-cache/`
      - Produces machine-readable acquisition status for all unvendored candidates
@@ -427,7 +427,7 @@ This project validates extension compatibility with a three-track pipeline:
 2. **Run end-to-end validation orchestration**
    - Binary: `ext_full_validation`
    - Typical command:
-     - `cargo run --bin ext_full_validation --`
+     - `cargo run --example ext_full_validation --`
    - Stages (in order):
      1. `refresh_onboarding_queue` (runs `ext_onboarding_queue`)
      2. `conformance_shard_0..N` (runs `ext_conformance_generated` sharded matrix)
@@ -493,8 +493,8 @@ mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
 Then run:
 
 ```bash
-cargo run --bin ext_unvendored_fetch_run -- run-all --workers 8 --no-probe
-cargo run --bin ext_full_validation --
+cargo run --example ext_unvendored_fetch_run -- run-all --workers 8 --no-probe
+cargo run --example ext_full_validation --
 ```
 
 ### Latest run snapshot (2026-04-23)
@@ -1860,7 +1860,7 @@ This keeps inner loops responsive while preserving strict claim-integrity at rel
 Pi includes a dedicated workload harness for extension runtime bottlenecks:
 
 ```bash
-cargo run --bin ext_workloads -- \
+cargo run --example ext_workloads -- \
   --out artifacts/perf/ext_workloads.jsonl \
   --matrix-out artifacts/perf/ext_hostcall_hotspot_matrix.json \
   --trace-out artifacts/perf/ext_hostcall_bridge_trace.jsonl
@@ -2291,7 +2291,7 @@ Focused validation tools:
 # Dev-firstset gate before release build
 rch exec -- cargo build --bin pi --bin ext_release_binary_e2e
 PI_HTTP_REQUEST_TIMEOUT_SECS=0 rch exec -- \
-  cargo run --bin ext_release_binary_e2e -- \
+  cargo run --example ext_release_binary_e2e -- \
   --pi-bin target/debug/pi \
   --provider ollama --model qwen2.5:0.5b \
   --jobs 10 --timeout-secs 600 --max-cases 20 --extension-policy balanced
@@ -2304,9 +2304,9 @@ PI_HTTP_REQUEST_TIMEOUT_SECS=0 target/release/ext_release_binary_e2e \
   --jobs 10 --timeout-secs 600 --extension-policy balanced
 
 # Runtime risk ledger forensics (verify, replay, calibrate)
-rch exec -- cargo run --bin ext_runtime_risk_ledger -- verify --input path/to/runtime_risk_ledger.json
-rch exec -- cargo run --bin ext_runtime_risk_ledger -- replay --input path/to/runtime_risk_ledger.json
-rch exec -- cargo run --bin ext_runtime_risk_ledger -- calibrate --input path/to/runtime_risk_ledger.json --objective balanced_accuracy
+rch exec -- cargo run --example ext_runtime_risk_ledger -- verify --input path/to/runtime_risk_ledger.json
+rch exec -- cargo run --example ext_runtime_risk_ledger -- replay --input path/to/runtime_risk_ledger.json
+rch exec -- cargo run --example ext_runtime_risk_ledger -- calibrate --input path/to/runtime_risk_ledger.json --objective balanced_accuracy
 ```
 
 - `ext_runtime_risk_ledger` operates on `pi.ext.runtime_risk_ledger.v1` artifacts (for example, from incident bundle exports).

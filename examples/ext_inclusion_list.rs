@@ -3,7 +3,7 @@
 //! CLI binary: Generate final inclusion list with version pins.
 //!
 //! ```text
-//! cargo run --bin ext_inclusion_list -- \
+//! cargo run --example ext_inclusion_list -- \
 //!   --tiered-corpus docs/extension-tiered-corpus.json \
 //!   --candidate-pool docs/extension-candidate-pool.json \
 //!   --validated docs/extension-validated-dedup.json \

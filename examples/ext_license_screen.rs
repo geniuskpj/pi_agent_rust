@@ -3,7 +3,7 @@
 //! CLI binary: Run license + policy screening on validated extension candidates.
 //!
 //! ```text
-//! cargo run --bin ext_license_screen -- \
+//! cargo run --example ext_license_screen -- \
 //!   --validated docs/extension-validated-dedup.json \
 //!   --candidate-pool docs/extension-candidate-pool.json \
 //!   --out docs/extension-license-report.json \

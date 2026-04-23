@@ -282,14 +282,14 @@ provenance, unmodified compatibility), emit a machine-readable shortfall report 
 ### 3.2 Executable Scoring Contract
 
 Normative implementation:
-- `src/bin/ext_popularity_snapshot.rs`
+- `examples/ext_popularity_snapshot.rs`
 - `src/extension_scoring.rs`
-- `src/bin/ext_score_candidates.rs`
+- `examples/ext_score_candidates.rs`
 
 Example popularity snapshot run:
 
 ```bash
-cargo run --bin ext_popularity_snapshot -- \
+cargo run --example ext_popularity_snapshot -- \
   --input docs/extension-candidate-pool.json \
   --out docs/extension-candidate-pool.json \
   --log-jsonl tests/e2e_results/ext-popularity-snapshot.jsonl
@@ -304,7 +304,7 @@ Notes:
 Example run:
 
 ```bash
-cargo run --bin ext_score_candidates -- \
+cargo run --example ext_score_candidates -- \
   --input docs/extension-candidate-pool.json \
   --out docs/extension-priority.json \
   --summary-out docs/extension-priority-summary.json \

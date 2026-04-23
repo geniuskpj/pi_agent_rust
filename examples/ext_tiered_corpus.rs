@@ -7,7 +7,7 @@
 //! outputs a tiered corpus selection.
 //!
 //! ```text
-//! cargo run --bin ext_tiered_corpus -- \
+//! cargo run --example ext_tiered_corpus -- \
 //!   --validated docs/extension-validated-dedup.json \
 //!   --candidate-pool docs/extension-candidate-pool.json \
 //!   --license-report docs/extension-license-report.json \
