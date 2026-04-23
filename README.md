@@ -181,7 +181,7 @@ If you want full details, see:
 | Feature | Pi (Rust) | Typical TS/Python CLI |
 |---------|-----------|----------------------|
 | **Startup** | <100ms | 500ms-2s |
-| **Binary size** | <22MB (CI-gated budget) | 100MB+ (with runtime) |
+| **Binary size** | ~44MB (default features) | 100MB+ (with runtime) |
 | **Memory (idle)** | <50MB | 200MB+ |
 | **Streaming** | Native SSE parser | Library-dependent |
 | **Tool execution** | Process tree management | Basic subprocess |
@@ -1817,7 +1817,7 @@ panic = "abort"      # No unwinding machinery
 strip = true         # Remove symbol tables
 ```
 
-Binary size is still explicitly budgeted in CI via `binary_size_release`, with the current release threshold set to `22.0 MB`.
+Binary size is explicitly budgeted in CI via `binary_size_release`, with a target threshold of `22.0 MB`. However, current builds with default features (including wasm-host, image-resize, jemalloc) produce ~44MB binaries. This discrepancy represents a known issue where default features have grown beyond the original size budget.
 
 ### Benchmark Evidence vs Shipping Artifacts
 
