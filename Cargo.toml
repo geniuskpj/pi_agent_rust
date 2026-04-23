@@ -45,6 +45,101 @@ path = "src/main.rs"
 name = "pi_legacy_capture"
 path = "src/bin/pi_legacy_capture.rs"
 
+# Examples (moved from src/bin/ to examples/)
+# These binaries are accessible via: cargo run --example <name>
+
+[[example]]
+name = "basic_sdk"
+path = "examples/basic_sdk.rs"
+
+[[example]]
+name = "ext_artifact_manifest"
+path = "examples/ext_artifact_manifest.rs"
+
+[[example]]
+name = "ext_conformance_matrix"
+path = "examples/ext_conformance_matrix.rs"
+
+[[example]]
+name = "ext_conformance_report"
+path = "examples/ext_conformance_report.rs"
+
+[[example]]
+name = "ext_full_validation"
+path = "examples/ext_full_validation.rs"
+
+[[example]]
+name = "ext_inclusion_list"
+path = "examples/ext_inclusion_list.rs"
+
+[[example]]
+name = "ext_license_screen"
+path = "examples/ext_license_screen.rs"
+
+[[example]]
+name = "ext_onboarding_queue"
+path = "examples/ext_onboarding_queue.rs"
+
+[[example]]
+name = "ext_popularity_snapshot"
+path = "examples/ext_popularity_snapshot.rs"
+
+[[example]]
+name = "ext_release_binary_e2e"
+path = "examples/ext_release_binary_e2e.rs"
+
+[[example]]
+name = "ext_runtime_risk_ledger"
+path = "examples/ext_runtime_risk_ledger.rs"
+
+[[example]]
+name = "ext_score_candidates"
+path = "examples/ext_score_candidates.rs"
+
+[[example]]
+name = "ext_stress"
+path = "examples/ext_stress.rs"
+
+[[example]]
+name = "ext_tiered_corpus"
+path = "examples/ext_tiered_corpus.rs"
+
+[[example]]
+name = "ext_unvendored_fetch_run"
+path = "examples/ext_unvendored_fetch_run.rs"
+
+[[example]]
+name = "ext_validate_dedup"
+path = "examples/ext_validate_dedup.rs"
+
+[[example]]
+name = "ext_workloads"
+path = "examples/ext_workloads.rs"
+
+[[example]]
+name = "pi_debug"
+path = "examples/pi_debug.rs"
+
+[[example]]
+name = "pijs_workload"
+path = "examples/pijs_workload.rs"
+
+[[example]]
+name = "session_workload_bench"
+path = "examples/session_workload_bench.rs"
+
+[[example]]
+name = "test_duration"
+path = "examples/test_duration.rs"
+
+[[example]]
+name = "test_infinite_loop"
+path = "examples/test_infinite_loop.rs"
+
+[[example]]
+name = "test_time"
+path = "examples/test_time.rs"
+
 [dependencies]
 # CLI
 clap = { version = "4.5.60", features = ["derive", "env", "string"] }
