@@ -286,13 +286,14 @@ pi "Write a quicksort implementation"
 
 Watch the response appear token-by-token, with thinking blocks shown inline.
 
-### 7 Built-in Tools
+### 8 Built-in Tools
 
 | Tool | Description | Example |
 |------|-------------|---------|
 | `read` | Read file contents, supports images | Read src/main.rs |
 | `write` | Create or overwrite files | Write a new config file |
 | `edit` | Surgical string replacement | Fix the typo on line 42 |
+| `hashline_edit` | Precise edits using LINE#HASH tags | Apply edits to specific lines using hashline anchors |
 | `bash` | Execute shell commands with timeout | Run the test suite |
 | `grep` | Search file contents with context | Find all TODO comments |
 | `find` | Discover files by pattern | Find all *.rs files |
@@ -393,7 +394,7 @@ Pi supports two extension runtime families with capability-gated host connectors
 Extensions can register tools, slash commands, event hooks, flags, providers,
 and shortcuts. See [EXTENSIONS.md](EXTENSIONS.md) for the full architecture
 and [docs/extension-catalog.json](docs/extension-catalog.json) for the
-224-entry catalog with per-extension conformance status and perf budgets.
+223-entry catalog with per-extension conformance status and perf budgets.
 
 ## Extension Validation Pipeline
 
