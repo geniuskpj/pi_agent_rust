@@ -13,6 +13,10 @@ readme = "README.md"
 keywords = ["ai", "cli", "coding-agent", "llm", "anthropic"]
 categories = ["command-line-utilities", "development-tools"]
 autobins = false
+# Binary organization per bd-uuwgi.1/bd-uuwgi.2 classification:
+# - SHIPPING: src/main.rs (pi) - main CLI binary
+# - RETIRABLE: src/bin/pi_legacy_capture.rs (pending RULE 1 approval)
+# - DEV-ONLY: moved to examples/ (21 files: ext_*, test_*, debug utilities)
 include = [
     "docs/extension-artifact-provenance.json",
     "docs/wit/extension.wit",
@@ -33,6 +37,13 @@ path = "src/lib.rs"
 [[bin]]
 name = "pi"
 path = "src/main.rs"
+
+# RETIRABLE binary (pending RULE 1 approval)
+# Legacy capture functionality - 91KB, last modified 2026-03-12
+# Candidate for removal per binary classification bd-uuwgi.1
+[[bin]]
+name = "pi_legacy_capture"
+path = "src/bin/pi_legacy_capture.rs"
 
 [dependencies]
 # CLI
