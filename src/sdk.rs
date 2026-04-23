@@ -54,6 +54,7 @@ pub use crate::provider::{
 };
 pub use crate::session::Session;
 pub use crate::tools::{Tool, ToolOutput, ToolRegistry, ToolUpdate};
+pub use crate::model::ThinkingLevel;
 
 /// Stable alias for model-exposed tool schema definitions.
 pub type ToolDefinition = ToolDef;
