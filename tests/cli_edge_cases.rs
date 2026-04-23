@@ -309,8 +309,8 @@ fn test_complex_mixed_scenarios() -> std::result::Result<(), Box<dyn std::error:
     assert!(
         parsed
             .cli
-            .message
-            .contains(&"--not-parsed-as-flag".to_string())
+            .message_args()
+            .contains(&"--not-parsed-as-flag")
     );
 
     Ok(())
