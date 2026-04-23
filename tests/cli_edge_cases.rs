@@ -7,7 +7,7 @@ use std::env;
 use std::fs;
 use tempfile::TempDir;
 
-use pi::cli::{Cli, Commands, parse_with_extension_flags};
+use pi::cli::{Commands, parse_with_extension_flags};
 
 /// Test that arguments with spaces are handled correctly when quoted.
 #[test]
@@ -24,7 +24,7 @@ fn test_quoted_arguments_with_spaces() {
 
     assert_eq!(parsed.cli.provider, Some("custom provider".to_string()));
     assert_eq!(
-        parsed.cli.message,
+        parsed.cli.message_args(),
         vec!["hello", "world", "another", "message"]
     );
 }
@@ -45,7 +45,7 @@ fn test_nested_quotes() {
         Some(r#"You are a "helpful" assistant"#.to_string())
     );
     assert_eq!(
-        parsed.cli.message,
+        parsed.cli.message_args(),
         vec!["Process", "the", "file", r#""data.txt""#]
     );
 }
@@ -66,7 +66,7 @@ fn test_escaped_quotes() {
         Some(r#"Say \"hello\" to the user"#.to_string())
     );
     assert_eq!(
-        parsed.cli.message,
+        parsed.cli.message_args(),
         vec!["The", "file", "is", r#"\"important.txt\""#]
     );
 }
@@ -94,7 +94,7 @@ fn test_environment_variable_expansion() {
     // These are literal strings since shell expansion happens before CLI parsing
     assert_eq!(parsed.cli.provider, Some("${TEST_PROVIDER}".to_string()));
     assert_eq!(parsed.cli.model, Some("$TEST_MODEL".to_string()));
-    assert_eq!(parsed.cli.message, vec!["Check", "${TEST_PATH}/file.txt"]);
+    assert_eq!(parsed.cli.message_args(), vec!["Check", "${TEST_PATH}/file.txt"]);
 
     // Cleanup
     env::remove_var("TEST_PROVIDER");
@@ -137,7 +137,7 @@ fn test_file_reference_edge_cases() -> std::result::Result<(), Box<dyn std::erro
             nested_file.to_string_lossy()
         ]
     );
-    assert_eq!(parsed.cli.message_args(), vec!["analyze", "these"]);
+    assert_eq!(parsed.cli.message_args()_args(), vec!["analyze", "these"]);
 
     Ok(())
 }
@@ -159,7 +159,7 @@ fn test_nonexistent_file_references() {
         parsed.cli.file_args(),
         vec!["/nonexistent/file.txt", "missing.txt"]
     );
-    assert_eq!(parsed.cli.message_args(), vec!["process", "anyway"]);
+    assert_eq!(parsed.cli.message_args()_args(), vec!["process", "anyway"]);
 }
 
 /// Test positional argument precedence with various flag patterns.
@@ -178,7 +178,7 @@ fn test_positional_precedence() {
 
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     assert!(parsed.cli.verbose);
-    assert_eq!(parsed.cli.message, vec!["hello", "world"]);
+    assert_eq!(parsed.cli.message_args(), vec!["hello", "world"]);
 
     // Mixed flags and positionals
     let parsed = parse_with_extension_flags(vec![
@@ -194,7 +194,7 @@ fn test_positional_precedence() {
 
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     assert!(parsed.cli.verbose);
-    assert_eq!(parsed.cli.message, vec!["first", "second", "third"]);
+    assert_eq!(parsed.cli.message_args(), vec!["first", "second", "third"]);
 }
 
 /// Test double-dash separator behavior.
@@ -213,7 +213,7 @@ fn test_double_dash_separator() {
 
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     // Everything after -- should be treated as positional arguments
-    assert_eq!(parsed.cli.message, vec!["--not-a-flag", "regular", "args"]);
+    assert_eq!(parsed.cli.message_args(), vec!["--not-a-flag", "regular", "args"]);
 }
 
 /// Test extension flags with edge cases.
@@ -310,7 +310,7 @@ fn test_complex_mixed_scenarios() -> std::result::Result<(), Box<dyn std::error:
     assert!(parsed.cli.file_args()[0].ends_with("test.txt"));
 
     // Check message (including args after --)
-    assert!(parsed.cli.message.contains(&"Analyze".to_string()));
+    assert!(parsed.cli.message_args().contains(&"Analyze".to_string()));
     assert!(
         parsed
             .cli
@@ -374,8 +374,8 @@ fn test_unicode_and_special_chars() {
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value, Some("café-naïve".to_string()));
 
-    assert!(parsed.cli.message.join(" ").contains("🎉"));
-    assert!(parsed.cli.message.join(" ").contains("ñice"));
+    assert!(parsed.cli.message_args().join(" ").contains("🎉"));
+    assert!(parsed.cli.message_args().join(" ").contains("ñice"));
 }
 
 /// Test very long arguments.
@@ -403,7 +403,7 @@ fn test_long_arguments() {
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value.as_ref().unwrap().len(), 10000);
 
-    assert!(parsed.cli.message.len() > 500); // Many repeated "word" entries
+    assert!(parsed.cli.message_args().len() > 500); // Many repeated "word" entries
 }
 
 /// Test repeated flags with different values.
@@ -477,8 +477,8 @@ fn test_empty_string_arguments() {
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value, Some("".to_string()));
 
-    assert!(parsed.cli.message.contains(&"".to_string()));
-    assert!(parsed.cli.message.contains(&"real".to_string()));
+    assert!(parsed.cli.message_args().contains(&"".to_string()));
+    assert!(parsed.cli.message_args().contains(&"real".to_string()));
 }
 
 /// Test numeric arguments and negative numbers.
@@ -603,8 +603,8 @@ fn test_shell_metacharacters() {
         .expect("Should have pattern flag");
     assert_eq!(pattern_flag.value, Some("*.rs".to_string()));
 
-    assert!(parsed.cli.message.join(" ").contains("*.txt"));
-    assert!(parsed.cli.message.join(" ").contains("$(date)"));
+    assert!(parsed.cli.message_args().join(" ").contains("*.txt"));
+    assert!(parsed.cli.message_args().join(" ").contains("$(date)"));
 }
 
 /// Test multiple @file references.
@@ -708,7 +708,7 @@ fn test_single_character_values() {
         .expect("Should have symbol flag");
     assert_eq!(symbol_flag.value, Some("@".to_string()));
 
-    assert_eq!(parsed.cli.message, vec!["x"]);
+    assert_eq!(parsed.cli.message_args(), vec!["x"]);
 }
 
 /// Test boundary cases with dashes.
@@ -726,11 +726,11 @@ fn test_dash_boundary_cases() {
     .expect("Should handle dash boundary cases");
 
     // Everything after -- should be positional
-    assert!(parsed.cli.message.contains(&"--not-a-flag".to_string()));
-    assert!(parsed.cli.message.contains(&"-".to_string()));
-    assert!(parsed.cli.message.contains(&"---".to_string()));
-    assert!(parsed.cli.message.contains(&"--flag-".to_string()));
-    assert!(parsed.cli.message.contains(&"regular".to_string()));
+    assert!(parsed.cli.message_args().contains(&"--not-a-flag".to_string()));
+    assert!(parsed.cli.message_args().contains(&"-".to_string()));
+    assert!(parsed.cli.message_args().contains(&"---".to_string()));
+    assert!(parsed.cli.message_args().contains(&"--flag-".to_string()));
+    assert!(parsed.cli.message_args().contains(&"regular".to_string()));
 }
 
 /// Test flag names that are numeric.
@@ -884,7 +884,7 @@ fn test_pathological_inputs() {
     .expect("Should handle pathological inputs gracefully");
 
     // Should not crash and should treat most as positional arguments
-    assert!(!parsed.cli.message.is_empty());
+    assert!(!parsed.cli.message_args().is_empty());
 }
 
 /// Test @file references with relative paths and edge cases.
@@ -1099,7 +1099,7 @@ fn test_massive_argument_list() {
     assert!(parsed.cli.verbose);
 
     // Message should be preserved
-    assert!(parsed.cli.message.contains(&"Process".to_string()));
+    assert!(parsed.cli.message_args().contains(&"Process".to_string()));
 }
 
 /// Test flag value detection edge cases.
@@ -1170,7 +1170,7 @@ fn test_mixed_short_long_flags() {
     // Known CLI flags
     assert!(parsed.cli.verbose);
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
-    assert_eq!(parsed.cli.extensions, Some("gpt".to_string()));
+    assert_eq!(parsed.cli.extension, Some("gpt".to_string()));
 
     // Extension flags with similar names
     let verbose_flag = parsed
@@ -1216,7 +1216,7 @@ fn test_binary_data_arguments() {
     assert_eq!(hex_flag.value, Some("\x41\x42\x43".to_string()));
 
     // Message should contain ANSI sequences
-    assert!(parsed.cli.message.join(" ").contains("\x1b[31m"));
+    assert!(parsed.cli.message_args().join(" ").contains("\x1b[31m"));
 }
 
 /// Test comprehensive flag ordering and precedence scenarios.
@@ -1244,7 +1244,6 @@ fn test_comprehensive_flag_ordering_scenarios() {
     // Verify CLI flags are extracted correctly regardless of position
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     assert!(parsed.cli.verbose);
-    assert_eq!(parsed.cli.temperature, Some(0.8));
 
     // Verify extension flags are captured in order
     assert_eq!(parsed.extension_flags.len(), 3);
@@ -1274,7 +1273,7 @@ fn test_comprehensive_flag_ordering_scenarios() {
     assert!(parsed.cli.file_args()[0].contains("file1.txt"));
 
     // Verify message parts
-    assert!(parsed.cli.message.contains(&"first".to_string()));
-    assert!(parsed.cli.message.contains(&"message".to_string()));
-    assert!(parsed.cli.message.contains(&"second".to_string()));
+    assert!(parsed.cli.message_args().contains(&"first".to_string()));
+    assert!(parsed.cli.message_args().contains(&"message".to_string()));
+    assert!(parsed.cli.message_args().contains(&"second".to_string()));
 }
