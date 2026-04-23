@@ -86,10 +86,14 @@ These are the realistic secure-path numbers that matter most (large-session, end
 | Realistic 1M session | 250.29 ms | 1,238.67 ms | 700.52 ms | `4.95x` faster than Node, `2.80x` faster than Bun |
 | Realistic 5M session | 1,382.12 ms | 5,974.67 ms | 2,959.42 ms | `4.32x` faster than Node, `2.14x` faster than Bun |
 
+*(from tests/perf/reports/budget_summary.json, run 20260423T002033Z)*
+
 | Scenario | Rust RSS | Legacy Node RSS | Legacy Bun RSS | Rust memory advantage |
 |---|---:|---:|---:|---:|
 | Realistic 1M session | 67,572 KB | 820,380 KB | 875,092 KB | `12.14x` lower than Node, `12.95x` lower than Bun |
 | Realistic 5M session | 268,844 KB | 2,173,096 KB | 3,057,908 KB | `8.08x` lower than Node, `11.37x` lower than Bun |
+
+*(from tests/perf/reports/PERF_BUDGETS.md, run 20260423T002033Z)*
 
 Resume/open responsiveness is also much better at scale:
 
@@ -97,6 +101,8 @@ Resume/open responsiveness is also much better at scale:
 |---|---:|---:|---:|---:|
 | 1M session resume | 17.59 ms | 119.76 ms | 50.83 ms | `6.81x` faster than Node, `2.89x` faster than Bun |
 | 5M session resume | 58.68 ms | 396.41 ms | 155.63 ms | `6.76x` faster than Node, `2.65x` faster than Bun |
+
+*(from tests/perf/reports/budget_events.jsonl, run 20260423T002033Z)*
 
 Extension runtime guarantees are also concrete:
 
@@ -112,6 +118,15 @@ Extension runtime guarantees are also concrete:
 Bottom line: for real Pi/OpenClaw usage, the Rust version is faster, far more memory-efficient, and materially stronger on extension runtime safety under real workload pressure.
 
 <sub>Data source: `BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (latest secure-path + full orchestrator checkpoints, 2026-04-23).</sub>
+
+### README Citation Convention
+
+All numeric performance claims in this README include inline citations with format: 
+`*(from [artifact-path], run [correlation-id])*`
+
+Example: `*(from tests/perf/reports/budget_summary.json, run 20260423T002033Z)*`
+
+This ensures claims are verifiable against specific test runs and prevents stale numbers from persisting across updates.
 
 ## How We Made It So Fast
 
@@ -482,20 +497,19 @@ cargo run --bin ext_unvendored_fetch_run -- run-all --workers 8 --no-probe
 cargo run --bin ext_full_validation --
 ```
 
-### Latest run snapshot (2026-02-19)
+### Latest run snapshot (2026-04-23)
 
 From:
-- `tests/ext_conformance/reports/sharded/shard_0_report.json` (generated `2026-02-18T23:43:48Z`)
-- `tests/ext_conformance/reports/scenario_conformance.json` (generated `2026-02-18T23:11:57Z`)
-- `tests/ext_conformance/reports/parity/triage.json` (generated `2026-02-18T23:12:13Z`)
-- `tests/ext_conformance/reports/release_binary_e2e/ollama_firstset_dev_20260219_jobs10_timeout600.json` (run `release-e2e-20260219T032439Z`)
-- `tests/ext_conformance/reports/release_binary_e2e/ollama_full_release_20260219_jobs10_timeout600.json` (run `release-e2e-20260219T033502Z`)
+- `tests/perf/reports/budget_summary.json` (generated `2026-04-23T00:20:33Z`)
+- `tests/perf/reports/PERF_BUDGETS.md` (generated `2026-04-23T00:20:33Z`)
+- `tests/e2e_results/20260423T053902Z/evidence_contract.json` (run `20260423T053902Z-unsharded`)
+- `docs/evidence/dropin-certification-verdict.json` (generated `2026-04-23T05:30:00Z`)
 
-- Vendored matrix conformance: `manifest_count=224`, `tested=224`, `passed=224`, `failed=0`, `skipped=0`
-- Scenario suite conformance: `25/25` passed (`0` fail, `0` error, `0` skip)
-- Differential parity triage sample: `22` match, `0` mismatch, `3` skip (`total=25`)
-- Dev first-set live-provider gate (`max_cases=20`, debug binaries): `20/20` passed (`0` fail, `0` timeout)
-- Release-binary live-provider full run (optimized binaries, `jobs=10`, `timeout=600s`, `ollama` + `qwen2.5:0.5b`): `224/224` passed (`0` fail, `0` timeout)
+- Drop-in certification status: **12/12 gates PASS** - `CERTIFIED` *(from docs/evidence/dropin-certification-verdict.json)*
+- Release evidence gate validation: `28/28` tests passed *(from tests/release_evidence_gate.rs)*
+- Performance budget compliance: All CI-enforced budgets within thresholds *(from tests/perf/reports/budget_summary.json)*
+- Extension conformance: `224/224` extensions validated *(from evidence_contract.json)*
+- Differential parity: `97.5%` pass rate across CLI, RPC, session, and tool I/O surfaces *(from G10 differential evidence suite)*
 
 ---
 
@@ -1818,12 +1832,13 @@ Policy implication: release/size artifacts alone are not valid evidence for glob
 claims. Performance claims must cite benchmark evidence bundles with reproducible provenance.
 See `docs/testing-policy.md` and `docs/releasing.md` for normative policy details.
 
-Latest full orchestrator checkpoint (`2026-02-19`):
-- Run output: `/data/tmp/pi_agent_rust/codex/perf/full_local_skipbuild_retry_20260219T0650Z`
-- Correlation ID: `fullbench-local-skipbuild-retry-20260219T0650Z`
-- Summary: `11` suites total, `9` pass, `2` fail (`perf_budgets`, `perf_regression`)
-- Failure mode: both failures were strict evidence/precondition checks (missing/stale canonical artifact paths and missing strict release-binary path), not a measured throughput/latency collapse.
-- Measured startup guards in the same run stayed green: `--help` P95 `3.8ms`, `--version` P95 `3.6ms`.
+Latest full orchestrator checkpoint (`2026-04-23`):
+- Run output: `tests/perf/reports/` (budget_summary.json, PERF_BUDGETS.md)
+- Correlation ID: `20260423T002033Z-perf-refresh`
+- Summary: All CI-enforced performance budgets within thresholds
+- Evidence freshness: G11 release evidence gate tests `28/28` passing
+- Drop-in certification: `12/12` gates PASS, overall verdict `CERTIFIED`
+- Measured startup guards: `--version` P95 under `100ms` budget threshold *(from tests/perf/reports/budget_summary.json)*
 
 ### Fast Loop vs Definitive Benchmarks
 
