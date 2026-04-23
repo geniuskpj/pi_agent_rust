@@ -3854,3 +3854,238 @@ mod security_unsafe_writes {
         });
     }
 }
+
+mod hashline_edit_tool {
+    use super::*;
+
+    /// Get the hashline tag for a specific line by reading with hashline=true
+    async fn get_hashline_tag(tool: &pi::tools::ReadTool, path: &std::path::Path, line_num: usize) -> String {
+        let input = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "hashline": true
+        });
+        let result = tool.execute("test-id", input, None).await
+            .expect("read with hashline should succeed");
+        let text = get_text_content(&result.content);
+
+        text.lines()
+            .find(|line| line.starts_with(&format!("{}#", line_num)))
+            .and_then(|line| line.split_once(':'))
+            .map(|(tag, _)| tag.to_string())
+            .expect(&format!("expected hashline tag for line {}", line_num))
+    }
+
+    #[test]
+    fn test_basic_replace() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            std::fs::write(&test_file, "line1\nOLD_LINE\nline3").unwrap();
+
+            // Get the hashline tag for line 2
+            let read_tool = pi::tools::ReadTool::new(temp_dir.path());
+            let line2_tag = get_hashline_tag(&read_tool, &test_file, 2).await;
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": line2_tag,
+                    "lines": "NEW_LINE"
+                }]
+            });
+
+            let result = tool.execute("test-id", input, None).await
+                .expect("edit should succeed");
+
+            // Verify the edit was applied
+            let content = std::fs::read_to_string(&test_file).unwrap();
+            assert_eq!(content, "line1\nNEW_LINE\nline3");
+
+            // Just verify the tool executed successfully - content may be empty
+            assert!(result.details.is_none() || result.details.as_ref().unwrap().is_object());
+        });
+    }
+
+    #[test]
+    fn test_anchor_not_found() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            std::fs::write(&test_file, "line1\nline2\nline3").unwrap();
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": "5#XX",  // Line 5 doesn't exist
+                    "lines": "NEW_LINE"
+                }]
+            });
+
+            let result = tool.execute("test-id", input, None).await;
+            assert!(result.is_err());
+            let error_msg = result.unwrap_err().to_string();
+            assert!(error_msg.contains("Line 5 out of range"));
+        });
+    }
+
+    #[test]
+    fn test_hash_mismatch() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            std::fs::write(&test_file, "line1\nline2\nline3").unwrap();
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": "2#ZZ",  // Wrong hash for line 2
+                    "lines": "NEW_LINE"
+                }]
+            });
+
+            let result = tool.execute("test-id", input, None).await;
+            assert!(result.is_err());
+            let error_msg = result.unwrap_err().to_string();
+            assert!(error_msg.contains("Hash mismatch at line 2"));
+        });
+    }
+
+    #[test]
+    fn test_empty_file_operations() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("empty.txt");
+            std::fs::write(&test_file, "").unwrap();
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+
+            // Test prepend to empty file (BOF)
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "prepend",
+                    "lines": "First line"
+                }]
+            });
+
+            let _result = tool.execute("test-id", input, None).await
+                .expect("prepend to empty file should succeed");
+
+            let content = std::fs::read_to_string(&test_file).unwrap();
+            assert!(content == "First line\n" || content == "First line");
+
+            // Test append operation
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "append",
+                    "lines": "Second line"
+                }]
+            });
+
+            let _result = tool.execute("test-id", input, None).await
+                .expect("append should succeed");
+
+            let content = std::fs::read_to_string(&test_file).unwrap();
+            assert_eq!(content, "First line\nSecond line\n");
+        });
+    }
+
+    #[test]
+    fn test_multiline_edit() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            std::fs::write(&test_file, "line1\nOLD_LINE\nline3").unwrap();
+
+            // Get the hashline tag for line 2
+            let read_tool = pi::tools::ReadTool::new(temp_dir.path());
+            let line2_tag = get_hashline_tag(&read_tool, &test_file, 2).await;
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": line2_tag,
+                    "lines": ["NEW_LINE_1", "NEW_LINE_2", "NEW_LINE_3"]
+                }]
+            });
+
+            let result = tool.execute("test-id", input, None).await
+                .expect("multiline edit should succeed");
+
+            let content = std::fs::read_to_string(&test_file).unwrap();
+            assert_eq!(content, "line1\nNEW_LINE_1\nNEW_LINE_2\nNEW_LINE_3\nline3");
+
+        });
+    }
+
+    #[test]
+    fn test_unicode_boundaries() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("unicode.txt");
+            std::fs::write(&test_file, "αβγ\n🚀🌟💫\nδεζ").unwrap();
+
+            // Get the hashline tag for line 2 (emoji line)
+            let read_tool = pi::tools::ReadTool::new(temp_dir.path());
+            let line2_tag = get_hashline_tag(&read_tool, &test_file, 2).await;
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": line2_tag,
+                    "lines": "⭐️✨🎉"
+                }]
+            });
+
+            let result = tool.execute("test-id", input, None).await
+                .expect("unicode edit should succeed");
+
+            let content = std::fs::read_to_string(&test_file).unwrap();
+            assert_eq!(content, "αβγ\n⭐️✨🎉\nδεζ");
+
+        });
+    }
+
+    #[test]
+    fn test_range_replace() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("range.txt");
+            std::fs::write(&test_file, "line1\nSTART\nMIDDLE\nEND\nline5").unwrap();
+
+            // Get the hashline tags for the range
+            let read_tool = pi::tools::ReadTool::new(temp_dir.path());
+            let start_tag = get_hashline_tag(&read_tool, &test_file, 2).await;
+            let end_tag = get_hashline_tag(&read_tool, &test_file, 4).await;
+
+            let tool = pi::tools::HashlineEditTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": test_file.to_string_lossy(),
+                "edits": [{
+                    "op": "replace",
+                    "pos": start_tag,
+                    "end": end_tag,
+                    "lines": "REPLACEMENT"
+                }]
+            });
+
+            let result = tool.execute("test-id", input, None).await
+                .expect("range replace should succeed");
+
+            let content = std::fs::read_to_string(&test_file).unwrap();
+            assert_eq!(content, "line1\nREPLACEMENT\nline5");
+
+        });
+    }
+}
