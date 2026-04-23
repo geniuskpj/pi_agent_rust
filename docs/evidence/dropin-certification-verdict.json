@@ -96,8 +96,8 @@
       "description": "Implementation matrix with strict-claim guardrail language"
     },
     {
-      "path": "tests/e2e_results/20260208T080120Z/evidence_contract.json",
-      "description": "Recent evidence-contract artifact used by release gate checks"
+      "path": "tests/e2e_results/20260423T053902Z/evidence_contract.json",
+      "description": "Fresh evidence-contract artifact generated 2026-04-23 (quick profile run)"
     },
     {
       "path": "tests/dropin_tool_io_differential.rs",

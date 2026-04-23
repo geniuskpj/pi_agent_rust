@@ -111,7 +111,7 @@ Extension runtime guarantees are also concrete:
 
 Bottom line: for real Pi/OpenClaw usage, the Rust version is faster, far more memory-efficient, and materially stronger on extension runtime safety under real workload pressure.
 
-<sub>Data source: `BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (latest secure-path + full orchestrator checkpoints, 2026-02-19).</sub>
+<sub>Data source: `BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (latest secure-path + full orchestrator checkpoints, 2026-04-23).</sub>
 
 ## How We Made It So Fast
 
@@ -647,7 +647,7 @@ Interactive file references:
 | `-p, --print` | Single response, no interaction |
 | `--mode text|json|rpc` | Output/protocol mode |
 | `--provider <NAME>` | Force provider for this run (aliases supported) |
-| `--model <MODEL>` | Model to use (auto-select fallback: `anthropic/claude-opus-4-5`, then `openai/gpt-5.1-codex`, then `google/gemini-2.5-pro`) |
+| `--model <MODEL>` | Model to use (auto-select fallback: `anthropic/claude-sonnet-4-6`, then `anthropic/claude-opus-4-7`, then `openai/gpt-5.1-codex`) |
 | `--thinking <LEVEL>` | Thinking level: off/minimal/low/medium/high/xhigh |
 | `--tools <TOOLS>` | Comma-separated tool list |
 | `--api-key <KEY>` | API key (or use provider-specific env vars such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) |
