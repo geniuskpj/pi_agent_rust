@@ -341,7 +341,8 @@ impl SseParser {
                 &mut emit,
             );
             if consumed < combined.len() {
-                self.buffer.push_str(&combined[consumed..]);
+                // Build buffer fresh from truly unprocessed tail only (no duplication).
+                self.buffer = combined[consumed..].to_string();
             }
             if self.buffer.len() > MAX_BUFFER_SIZE {
                 self.reset_after_buffer_limit(&mut emit);
@@ -992,6 +993,33 @@ mod tests {
         let events = parser.feed("\n");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data, "hello");
+    }
+
+    #[test]
+    fn test_buffer_no_duplication_on_straddle() {
+        // Test that buffer content is not duplicated when data straddles event boundaries.
+        // This exercises the slow-path scenario that previously had a buffer duplication bug.
+        let mut parser = SseParser::new();
+
+        // Feed partial event data that fills buffer but doesn't complete event
+        let events = parser.feed("data: start");
+        assert!(events.is_empty());
+        assert!(parser.has_pending()); // Buffer should have partial data
+
+        // Feed more data that triggers slow path processing and leaves partial data
+        let events = parser.feed("_middle_incomplete");
+        assert!(events.is_empty());
+        assert!(parser.has_pending()); // Should still have buffered data
+
+        // Complete the event - this should work without duplicated data
+        let events = parser.feed("\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "start_middle_incomplete");
+
+        // Verify buffer is clean for next event
+        let events = parser.feed("data: second\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "second");
     }
 
     #[test]
