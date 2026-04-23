@@ -12,6 +12,7 @@ documentation = "https://docs.rs/pi_agent_rust"
 readme = "README.md"
 keywords = ["ai", "cli", "coding-agent", "llm", "anthropic"]
 categories = ["command-line-utilities", "development-tools"]
+autobins = false
 include = [
     "docs/extension-artifact-provenance.json",
     "docs/wit/extension.wit",
