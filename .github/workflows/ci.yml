@@ -217,6 +217,18 @@ jobs:
             exit 1
           fi
 
+      - name: Evidence freshness claim integrity
+        run: |
+          set -euxo pipefail
+          if command -v python3 >/dev/null 2>&1; then
+            python3 scripts/check_readme_evidence_freshness.py
+          elif command -v python >/dev/null 2>&1; then
+            python scripts/check_readme_evidence_freshness.py
+          else
+            echo "python interpreter not found"
+            exit 1
+          fi
+
       - name: Suite classification guard
         run: |
           set -euo pipefail
