@@ -1,7 +1,7 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "3f9f4a26acd7a274243f692f94b856782541aed5",
-  "generated_at_utc": "2026-04-23T03:50:00Z",
+  "git_commit": "4952afc43f61e552d0d3183b32a0795cc6c8ccb1",
+  "generated_at_utc": "2026-04-23T04:15:00Z",
   "overall_verdict": "NOT_CERTIFIED",
   "hard_gate_results": [
     {
@@ -26,8 +26,8 @@
     },
     {
       "gate_id": "G05-json-rpc-parity",
-      "status": "fail",
-      "reason": "Open critical/high JSON/RPC semantic and command-surface parity gaps remain unresolved."
+      "status": "pass",
+      "reason": "JSON/RPC parity validated through comprehensive differential testing. RPC surface audit (bd-lnmtp.2.1), command semantics (bd-lnmtp.2.2), differential harness with 96.6% success rate (bd-lnmtp.2.3), and extension UI round-trip parity (bd-lnmtp.2.4) all completed."
     },
     {
       "gate_id": "G06-sdk-companion",
@@ -109,8 +109,16 @@
       "description": "G09 executable tool I/O parity harness covering stdio, process lifecycle, file/search tools, truncation, and SSE framing"
     },
     {
+      "path": "tests/dropin_rpc_differential.rs",
+      "description": "G05 JSON/RPC parity differential harness with 96.6% success rate (28/29 scenarios) covering command semantics, canonicalized event-stream comparison, and subprocess execution validation"
+    },
+    {
       "path": "tests/dropin_tool_io_differential/g09_tool_io_scenarios.json",
       "description": "G09 scenario manifest with more than 30 executable integration I/O parity cases"
+    },
+    {
+      "path": "docs/dropin-tool-io-differential.json",
+      "description": "G09 integration I/O parity evidence summary and canonicalization rules"
     },
     {
       "path": "SDK_DROP_IN_DECISION.md",

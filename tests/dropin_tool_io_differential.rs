@@ -12,7 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tempfile::TempDir;
 
 #[derive(Debug, Deserialize)]
 struct Scenario {
@@ -63,7 +62,9 @@ async fn execute<T: Tool + ?Sized>(tool: &T, input: Value) -> pi::PiResult<ToolO
 }
 
 async fn execute_text<T: Tool + ?Sized>(tool: &T, input: Value) -> pi::PiResult<String> {
-    execute(tool, input).await.map(|output| output_text(&output))
+    execute(tool, input)
+        .await
+        .map(|output| output_text(&output))
 }
 
 fn write_fixture(path: impl AsRef<Path>, content: &str) {
@@ -76,8 +77,11 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
 
     match scenario.case_name.as_str() {
         "bash_stdout_basic" => {
-            let output = execute_text(&BashTool::new(root), json!({"command": "printf 'alpha\\n'"}))
-                .await?;
+            let output = execute_text(
+                &BashTool::new(root),
+                json!({"command": "printf 'alpha\\n'"}),
+            )
+            .await?;
             assert_contains(&output, "alpha", &scenario.id);
         }
         "bash_stderr_basic" => {
@@ -103,8 +107,16 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
                 json!({"command": "printf 'bad\\n'; exit 42"}),
             )
             .await?;
-            assert!(output.is_error, "{}: non-zero exit must be an error", scenario.id);
-            assert_contains(&output_text(&output), "Command exited with code 42", &scenario.id);
+            assert!(
+                output.is_error,
+                "{}: non-zero exit must be an error",
+                scenario.id
+            );
+            assert_contains(
+                &output_text(&output),
+                "Command exited with code 42",
+                &scenario.id,
+            );
         }
         "bash_no_output" => {
             let output = execute_text(&BashTool::new(root), json!({"command": "true"})).await?;
@@ -117,7 +129,11 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
             )
             .await?;
             assert!(output.is_error, "{}: timeout must be an error", scenario.id);
-            assert_contains(&output_text(&output), "Command timed out after 1 seconds", &scenario.id);
+            assert_contains(
+                &output_text(&output),
+                "Command timed out after 1 seconds",
+                &scenario.id,
+            );
         }
         "bash_timeout_kills_descendant" => {
             let leak_path = root.join("leaked.txt");
@@ -141,8 +157,8 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
                 None,
                 Some("export PI_G09_PREFIXED=from-prefix".to_string()),
             );
-            let output = execute_text(&tool, json!({"command": "printf \"$PI_G09_PREFIXED\\n\""}))
-                .await?;
+            let output =
+                execute_text(&tool, json!({"command": "printf \"$PI_G09_PREFIXED\\n\""})).await?;
             assert_contains(&output, "from-prefix", &scenario.id);
         }
         "bash_line_truncation_details" => {
@@ -198,9 +214,11 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
             );
         }
         "write_reports_utf16_code_units" => {
-            let output =
-                execute_text(&WriteTool::new(root), json!({"path": "emoji.txt", "content": "😀"}))
-                    .await?;
+            let output = execute_text(
+                &WriteTool::new(root),
+                json!({"path": "emoji.txt", "content": "😀"}),
+            )
+            .await?;
             assert_contains(&output, "Successfully wrote 2 bytes", &scenario.id);
         }
         "write_rejects_parent_escape" => {
@@ -209,12 +227,15 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
                 json!({"path": "../escape.txt", "content": "nope"}),
             )
             .await;
-            assert!(result.is_err(), "{}: write must reject parent escape", scenario.id);
+            assert!(
+                result.is_err(),
+                "{}: write must reject parent escape",
+                scenario.id
+            );
         }
         "read_full_text" => {
             write_fixture(root.join("sample.txt"), "alpha\nbeta\n");
-            let output =
-                execute_text(&ReadTool::new(root), json!({"path": "sample.txt"})).await?;
+            let output = execute_text(&ReadTool::new(root), json!({"path": "sample.txt"})).await?;
             assert_contains(&output, "alpha", &scenario.id);
             assert_contains(&output, "beta", &scenario.id);
         }
@@ -232,9 +253,11 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
         }
         "read_hashline" => {
             write_fixture(root.join("sample.txt"), "alpha\n");
-            let output =
-                execute_text(&ReadTool::new(root), json!({"path": "sample.txt", "hashline": true}))
-                    .await?;
+            let output = execute_text(
+                &ReadTool::new(root),
+                json!({"path": "sample.txt", "hashline": true}),
+            )
+            .await?;
             assert_contains(&output, "1#", &scenario.id);
             assert_contains(&output, "alpha", &scenario.id);
         }
@@ -258,7 +281,11 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
         }
         "read_rejects_parent_escape" => {
             let result = execute(&ReadTool::new(root), json!({"path": "../escape.txt"})).await;
-            assert!(result.is_err(), "{}: read must reject parent escape", scenario.id);
+            assert!(
+                result.is_err(),
+                "{}: read must reject parent escape",
+                scenario.id
+            );
         }
         "write_read_unicode_roundtrip" => {
             execute(
@@ -266,8 +293,7 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
                 json!({"path": "unicode.txt", "content": "café 🚀\n"}),
             )
             .await?;
-            let output =
-                execute_text(&ReadTool::new(root), json!({"path": "unicode.txt"})).await?;
+            let output = execute_text(&ReadTool::new(root), json!({"path": "unicode.txt"})).await?;
             assert_contains(&output, "café 🚀", &scenario.id);
         }
         "edit_replaces_unique_text" => {
@@ -292,7 +318,11 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
                 json!({"path": "edit.txt", "oldText": "missing", "newText": "replacement"}),
             )
             .await;
-            assert!(result.is_err(), "{}: edit must reject missing oldText", scenario.id);
+            assert!(
+                result.is_err(),
+                "{}: edit must reject missing oldText",
+                scenario.id
+            );
         }
         "grep_literal_match" => {
             write_fixture(root.join("grep.txt"), "alpha\nneedle\n");
@@ -346,21 +376,27 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
                 json!({"pattern": "needle", "path": "../"}),
             )
             .await;
-            assert!(result.is_err(), "{}: grep must reject parent escape", scenario.id);
+            assert!(
+                result.is_err(),
+                "{}: grep must reject parent escape",
+                scenario.id
+            );
         }
         "find_glob_basic" => {
             write_fixture(root.join("alpha.txt"), "a");
             write_fixture(root.join("beta.md"), "b");
-            let output =
-                execute_text(&FindTool::new(root), json!({"pattern": "*.txt"})).await?;
+            let output = execute_text(&FindTool::new(root), json!({"pattern": "*.txt"})).await?;
             assert_contains(&output, "alpha.txt", &scenario.id);
             assert_not_contains(&output, "beta.md", &scenario.id);
         }
         "find_limit_details" => {
             write_fixture(root.join("one.txt"), "1");
             write_fixture(root.join("two.txt"), "2");
-            let output =
-                execute(&FindTool::new(root), json!({"pattern": "*.txt", "limit": 1})).await?;
+            let output = execute(
+                &FindTool::new(root),
+                json!({"pattern": "*.txt", "limit": 1}),
+            )
+            .await?;
             assert!(
                 output
                     .details
@@ -377,9 +413,16 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
             assert_contains(&output, "No files found matching pattern", &scenario.id);
         }
         "find_rejects_parent_escape" => {
-            let result =
-                execute(&FindTool::new(root), json!({"pattern": "*.txt", "path": "../"})).await;
-            assert!(result.is_err(), "{}: find must reject parent escape", scenario.id);
+            let result = execute(
+                &FindTool::new(root),
+                json!({"pattern": "*.txt", "path": "../"}),
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "{}: find must reject parent escape",
+                scenario.id
+            );
         }
         "ls_sorted_basic" => {
             write_fixture(root.join("b.txt"), "b");
@@ -412,13 +455,16 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
         "ls_empty_directory" => {
             let empty = root.join("empty");
             std::fs::create_dir(&empty).expect("create empty directory fixture");
-            let output =
-                execute_text(&LsTool::new(root), json!({"path": "empty"})).await?;
+            let output = execute_text(&LsTool::new(root), json!({"path": "empty"})).await?;
             assert_contains(&output, "(empty directory)", &scenario.id);
         }
         "ls_rejects_parent_escape" => {
             let result = execute(&LsTool::new(root), json!({"path": "../"})).await;
-            assert!(result.is_err(), "{}: ls must reject parent escape", scenario.id);
+            assert!(
+                result.is_err(),
+                "{}: ls must reject parent escape",
+                scenario.id
+            );
         }
         "sse_crlf_boundary" => {
             let mut parser = SseParser::new();
@@ -456,14 +502,22 @@ async fn run_scenario(scenario: &Scenario) -> pi::PiResult<()> {
         "truncate_tail_line_window" => {
             let content = "1\n2\n3\n4\n5".to_string();
             let truncation = truncate_tail(content, 2, 1024);
-            assert!(truncation.truncated, "{}: tail truncation expected", scenario.id);
+            assert!(
+                truncation.truncated,
+                "{}: tail truncation expected",
+                scenario.id
+            );
             assert_eq!(truncation.content, "4\n5");
             assert_eq!(truncation.total_lines, 5);
             assert_eq!(truncation.output_lines, 2);
         }
         "truncate_head_unicode_boundary" => {
             let truncation = truncate_head("αβγδε".to_string(), usize::MAX, 5);
-            assert!(truncation.truncated, "{}: byte truncation expected", scenario.id);
+            assert!(
+                truncation.truncated,
+                "{}: byte truncation expected",
+                scenario.id
+            );
             assert_eq!(truncation.content, "αβ");
         }
         other => panic!("unhandled G09 scenario case: {other}"),
