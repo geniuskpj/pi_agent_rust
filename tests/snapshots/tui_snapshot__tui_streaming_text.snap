@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshot.rs
+assertion_line: 214
 expression: view
 ---
   Pi (dummy/dummy-model)
@@ -10,6 +11,4 @@ expression: view
   Assistant:
   Streaming response...
 
-  ⣾  Processing...
-
-  Tokens: 0 in / 0 out  |  /help  |  Ctrl+C: quit
+  Tokens: 0 in / 0 out  |  Persist: balanced  |  /help  |  Ctrl+C: quit

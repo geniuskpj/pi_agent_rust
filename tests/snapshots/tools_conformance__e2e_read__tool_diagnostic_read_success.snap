@@ -1,0 +1,44 @@
+---
+source: tests/tools_conformance.rs
+assertion_line: 1585
+expression: pretty
+---
+{
+  "allowlisted_env": {
+    "_normalized": "environment-dependent"
+  },
+  "captured_epoch_ms": 0,
+  "command_transcript": {
+    "details": null,
+    "input": {
+      "path": "<WORKSPACE_ROOT>/sample.txt"
+    },
+    "is_error": false,
+    "outcome": "ok",
+    "output_text": "    1→alpha\n    2→beta\n    3→gamma"
+  },
+  "cwd": "<WORKSPACE_ROOT>",
+  "schema": "pi.test.tool_diagnostic.v1",
+  "test": "e2e_read_diagnostic_artifact_matches_golden_contract",
+  "timing_ms": {
+    "diagnostics_capture": 0,
+    "tool_execute": 0,
+    "workspace_snapshot": 0
+  },
+  "tool_call_id": "read-golden-001",
+  "tool_name": "read",
+  "workspace_root": "<WORKSPACE_ROOT>",
+  "workspace_snapshot": {
+    "entries": [
+      {
+        "kind": "file",
+        "path": "sample.txt",
+        "permissions_octal": "<PERMISSIONS>",
+        "size_bytes": 16
+      }
+    ],
+    "root": "<WORKSPACE_ROOT>",
+    "total_entries": 1,
+    "truncated": false
+  }
+}

@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshot.rs
+assertion_line: 214
 expression: view
 ---
   Pi (dummy/dummy-model)
@@ -16,8 +17,6 @@ short output here
 
     Done.
 
-
-
   Tool output expanded
 
   Enter: send  Shift+Enter: newline  Alt+Enter: multi-line  [thinking: off]
@@ -25,4 +24,4 @@ short output here
   │ >
   │ >
 
-  Tokens: 0 in / 0 out  |  /help  |  Ctrl+C: quit
+  Tokens: 0 in / 0 out  |  Persist: balanced  |  /help  |  Ctrl+C: quit
