@@ -9,3 +9,8 @@
 # Temporary
 last-touched
 *.tmp
+
+# Repair safety artifacts (fixing-beads-problems skill)
+# Preserved pre-repair DB/WAL copies and timestamped recovery snapshots.
+*.bad_*
+recovery_*/
