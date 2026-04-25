@@ -26,6 +26,10 @@ include = [
     "Cargo.toml",
     "LICENSE",
     "README.md",
+    # Pulled in by `include_str!("../../CHANGELOG.md")` in
+    # src/interactive/commands.rs and src/interactive.rs — without it the
+    # `cargo publish --dry-run` verify step fails to build the packaged tarball.
+    "CHANGELOG.md",
     "build.rs",
     "src/**",
 ]
