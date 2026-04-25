@@ -298,6 +298,24 @@ pub struct SessionOptions {
     pub include_cwd_in_prompt: bool,
     pub max_tool_iterations: usize,
 
+    /// Optional factory for the session's [`ToolRegistry`].
+    ///
+    /// When `None` (the default), [`create_agent_session`] builds the
+    /// built-in tool set from [`SessionOptions::enabled_tools`] exactly
+    /// as it always has — existing callers are unaffected.
+    ///
+    /// Setting this lets a downstream embedder layer custom tools onto
+    /// the registry: approval-gated wrappers around the built-ins, a
+    /// read-only "plan mode" subset, a `Task` tool that spawns nested
+    /// sandboxed sessions, etc. Implement [`ToolFactory`] on your own
+    /// `Send + Sync` type and call [`default_tool_registry`] from inside
+    /// it to inherit the current built-in resolution rules.
+    ///
+    /// Wrapped in `Arc` because [`SessionOptions`] is cloned through
+    /// the session-handle pipeline and the factory may need to outlive
+    /// the options struct.
+    pub tool_factory: Option<Arc<dyn ToolFactory>>,
+
     /// Session-level event listener invoked for every [`AgentEvent`].
     ///
     /// Unlike the per-prompt callback passed to [`AgentSessionHandle::prompt`],
@@ -333,12 +351,53 @@ impl Default for SessionOptions {
             repair_policy: None,
             include_cwd_in_prompt: true,
             max_tool_iterations: 50,
+            tool_factory: None,
             on_event: None,
             on_tool_start: None,
             on_tool_end: None,
             on_stream_event: None,
         }
     }
+}
+
+/// Hook for assembling the session's [`ToolRegistry`].
+///
+/// Attach an `Arc<dyn ToolFactory>` to [`SessionOptions::tool_factory`]
+/// to inject custom tools, wrap the built-ins, or restrict the active
+/// set. The factory runs once during [`create_agent_session`], after
+/// the tool-name allowlist has been resolved from
+/// [`SessionOptions::enabled_tools`].
+///
+/// To layer on top of the existing built-ins instead of starting from
+/// scratch, call [`default_tool_registry`] from inside your impl and
+/// register additional tools (or wrap existing ones) on the returned
+/// registry.
+pub trait ToolFactory: Send + Sync {
+    /// Build the registry for a new session.
+    ///
+    /// - `enabled` is the resolved tool-name allowlist after
+    ///   [`SessionOptions::enabled_tools`] and CLI defaults are merged.
+    /// - `cwd` is the working directory the session opened in.
+    /// - `config` is pi's loaded [`Config`], passed through so custom
+    ///   tools can read settings such as `block_images` without
+    ///   duplicating the config-loading logic.
+    fn create_tool_registry(
+        &self,
+        enabled: &[&str],
+        cwd: &Path,
+        config: &Config,
+    ) -> ToolRegistry;
+}
+
+/// Build the same [`ToolRegistry`] [`create_agent_session`] uses by
+/// default.
+///
+/// Useful inside a [`ToolFactory`] impl when you want to start from
+/// the standard built-in tool set and then layer custom tools on top
+/// (e.g. wrap each tool with an approval gate, or add a `Task` tool
+/// that spawns a nested session).
+pub fn default_tool_registry(enabled: &[&str], cwd: &Path, config: &Config) -> ToolRegistry {
+    ToolRegistry::new(enabled, cwd, Some(config))
 }
 
 /// Lightweight handle for programmatic embedding.
@@ -1653,7 +1712,10 @@ pub async fn create_agent_session(options: SessionOptions) -> Result<AgentSessio
         fail_closed_hooks: config.fail_closed_hooks(),
     };
 
-    let tools = ToolRegistry::new(&enabled_tools, &cwd, Some(&config));
+    let tools = match &options.tool_factory {
+        Some(factory) => factory.create_tool_registry(&enabled_tools, &cwd, &config),
+        None => ToolRegistry::new(&enabled_tools, &cwd, Some(&config)),
+    };
     let session_arc = Arc::new(asupersync::sync::Mutex::new(session));
 
     let context_window_tokens = if selection.model_entry.model.context_window == 0 {
