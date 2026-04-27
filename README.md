@@ -117,7 +117,7 @@ Extension runtime guarantees are also concrete:
 
 Bottom line: for real Pi/OpenClaw usage, the Rust version is faster, far more memory-efficient, and materially stronger on extension runtime safety under real workload pressure.
 
-<sub>Data source: `BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (latest secure-path + full orchestrator checkpoints, 2026-04-23).</sub>
+<sub>Data source: `docs/planning/BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (latest secure-path + full orchestrator checkpoints, 2026-04-23).</sub>
 
 ### README Citation Convention
 
@@ -174,7 +174,7 @@ How we kept claims honest:
 
 If you want full details, see:
 
-- `BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (methodology + results + caveats + raw artifact paths)
+- `docs/planning/BENCHMARK_COMPARISON_BETWEEN_RUST_VERSION_AND_ORIGINAL__GPT.md` (methodology + results + caveats + raw artifact paths)
 
 ## Why Pi?
 
@@ -392,7 +392,7 @@ Pi supports two extension runtime families with capability-gated host connectors
 - Models that do not require configured credentials can run keyless.
 
 Extensions can register tools, slash commands, event hooks, flags, providers,
-and shortcuts. See [EXTENSIONS.md](EXTENSIONS.md) for the full architecture
+and shortcuts. See [EXTENSIONS.md](docs/planning/EXTENSIONS.md) for the full architecture
 and [docs/extension-catalog.json](docs/extension-catalog.json) for the
 223-entry catalog with per-extension conformance status and perf budgets.
 
@@ -2033,7 +2033,7 @@ Pi is honest about what it doesn't do:
 | **Not all provider APIs** | Built-in support includes Anthropic, OpenAI (Chat + Responses), Gemini, Cohere, Azure OpenAI, Bedrock, Vertex AI, GitHub Copilot, and GitLab Duo; some ecosystem-specific APIs are still TBD |
 | **No web browsing** | Use bash with curl |
 | **No GUI** | Terminal-only by design |
-| **Some extensions need npm stubs** | Common stubs are provided; unlisted npm packages still require a stub. See EXTENSIONS.md §8.1 |
+| **Some extensions need npm stubs** | Common stubs are provided; unlisted npm packages still require a stub. See docs/planning/EXTENSIONS.md §8.1 |
 | **English-centric** | Works but not optimized for other languages |
 | **Nightly Rust required** | Uses 2024 edition features |
 
@@ -2174,7 +2174,7 @@ Rollback rule: remove `PI_EXTENSION_ALLOW_DANGEROUS`, set `extensionPolicy.profi
 back to `safe` or set `extensionPolicy.defaultPermissive` to `false`, and re-run
 `pi --explain-extension-policy` to confirm deny decisions.
 
-See [EXTENSIONS.md](EXTENSIONS.md) for the full architecture, runtime contract,
+See [EXTENSIONS.md](docs/planning/EXTENSIONS.md) for the full architecture, runtime contract,
 and conformance results.
 
 ### Unsafe Forbidden
@@ -2208,7 +2208,7 @@ A: Each session is a JSONL file with message entries. Sessions are per-project (
 A: Memory safety is non-negotiable for a tool that executes arbitrary commands. The performance cost is negligible for this use case.
 
 **Q: How do I extend Pi?**
-A: Pi has a full extension system with two runtime families: JS/TS entrypoints run in embedded QuickJS, and `*.native.json` descriptors run in the native-rust descriptor runtime. Both are capability-gated and audited through the same policy system. One session uses one runtime family at a time. Extensions can register tools, slash commands, event hooks, flags, and custom providers. See [EXTENSIONS.md](EXTENSIONS.md) for details. For built-in tool changes, implement the `Tool` trait in `src/tools.rs`.
+A: Pi has a full extension system with two runtime families: JS/TS entrypoints run in embedded QuickJS, and `*.native.json` descriptors run in the native-rust descriptor runtime. Both are capability-gated and audited through the same policy system. One session uses one runtime family at a time. Extensions can register tools, slash commands, event hooks, flags, and custom providers. See [EXTENSIONS.md](docs/planning/EXTENSIONS.md) for details. For built-in tool changes, implement the `Tool` trait in `src/tools.rs`.
 
 **Q: Why isn't X feature included?**
 A: Pi focuses on core coding assistance. Features like web browsing, image generation, etc. are out of scope. Use specialized tools for those.

@@ -1,7 +1,7 @@
 //! Extension conformance harness utilities (normalization + diff triage).
 //!
 //! This is the first building block for the planned `tests/ext_conformance/` suite
-//! described in `CONFORMANCE.md` and `EXTENSIONS.md`.
+//! described in `docs/planning/CONFORMANCE.md` and `docs/planning/EXTENSIONS.md`.
 //!
 //! The core idea:
 //! - Extension logs (JSONL) must be comparable across runs.

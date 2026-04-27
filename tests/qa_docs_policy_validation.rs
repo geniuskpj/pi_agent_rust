@@ -26,7 +26,7 @@ use std::process::{Command, Output};
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const TESTING_POLICY_PATH: &str = "docs/testing-policy.md";
-const PLAN_TO_COMPLETE_PORT_PATH: &str = "PLAN_TO_COMPLETE_PORT.md";
+const PLAN_TO_COMPLETE_PORT_PATH: &str = "docs/planning/PLAN_TO_COMPLETE_PORT.md";
 const PROGRAM_GOVERNANCE_PATH: &str = "docs/program-governance.md";
 const NON_MOCK_RUBRIC_PATH: &str = "docs/non-mock-rubric.json";
 const QA_RUNBOOK_PATH: &str = "docs/qa-runbook.md";
