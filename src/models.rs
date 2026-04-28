@@ -593,6 +593,14 @@ enum ModelRegistryLoadMode {
 }
 
 impl ModelRegistry {
+    #[cfg(test)]
+    pub(crate) fn from_entries_for_tests(entries: Vec<ModelEntry>) -> Self {
+        Self {
+            models: entries,
+            error: None,
+        }
+    }
+
     pub fn load(auth: &AuthStorage, models_path: Option<PathBuf>) -> Self {
         Self::load_with_mode(auth, models_path, ModelRegistryLoadMode::Full)
     }

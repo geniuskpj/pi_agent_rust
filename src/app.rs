@@ -1156,11 +1156,7 @@ mod tests {
     }
 
     fn registry_with_entries(entries: Vec<ModelEntry>) -> ModelRegistry {
-        let dir = tempdir().expect("tempdir");
-        let auth = AuthStorage::load(dir.path().join("auth.json")).expect("load auth");
-        let mut registry = ModelRegistry::load(&auth, None);
-        registry.merge_entries(entries);
-        registry
+        ModelRegistry::from_entries_for_tests(entries)
     }
 
     #[test]
