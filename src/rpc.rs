@@ -1061,7 +1061,8 @@ pub async fn run(
 
                     if let Some((entry, thinking_level, is_scoped)) = cycle_result {
                         // Apply thinking level after dropping lock
-                        apply_thinking_level_for_session(session.clone(), thinking_level, &cx).await?;
+                        apply_thinking_level_for_session(session.clone(), thinking_level, &cx)
+                            .await?;
                         Ok(Some((entry, thinking_level, is_scoped)))
                     } else {
                         Ok(None)
@@ -1111,7 +1112,7 @@ pub async fn run(
 
                 // Get the properly clamped level first
                 let clamped_level = {
-                    let mut guard = session
+                    let guard = session
                         .lock(&cx)
                         .await
                         .map_err(|err| Error::session(format!("session lock failed: {err}")))?;
@@ -1149,7 +1150,7 @@ pub async fn run(
             "cycle_thinking_level" => {
                 // Calculate next thinking level without holding lock across apply_thinking_level await
                 let next = {
-                    let mut guard = session
+                    let guard = session
                         .lock(&cx)
                         .await
                         .map_err(|err| Error::session(format!("session lock failed: {err}")))?;
@@ -1328,7 +1329,7 @@ pub async fn run(
                 let result: Result<()> = async {
                     // Apply session info changes without holding lock across persist_session await
                     {
-                        let mut guard = session
+                        let guard = session
                             .lock(&cx)
                             .await
                             .map_err(|err| Error::session(format!("session lock failed: {err}")))?;
@@ -1447,7 +1448,7 @@ pub async fn run(
                     let response = match result {
                         Ok(result) => {
                             // Append bash execution message without holding lock across persist_session await
-                            let should_persist = if let Ok(mut guard) = session.lock(&bash_cx).await {
+                            let should_persist = if let Ok(guard) = session.lock(&bash_cx).await {
                                 if let Ok(mut inner_session) = guard.session.lock(&bash_cx).await {
                                     inner_session.append_message(SessionMessage::BashExecution {
                                         command: command.clone(),
@@ -7029,7 +7030,10 @@ export default function init(pi) {
             let agent_session = build_test_agent_session(Session::in_memory());
             let session_handle = Arc::new(asupersync::sync::Mutex::new(agent_session));
             let inner_session_handle = {
-                let guard = session_handle.lock(&AgentCx::for_request()).await.expect("session lock");
+                let guard = session_handle
+                    .lock(&AgentCx::for_request())
+                    .await
+                    .expect("session lock");
                 Arc::clone(&guard.session)
             };
             let hold_cx = AgentCx::for_request();
@@ -7067,7 +7071,10 @@ export default function init(pi) {
                 let guard = session_handle.lock(&verify_cx).await.expect("session lock");
                 Arc::clone(&guard.session)
             };
-            let session = session_arc.lock(verify_cx.cx()).await.expect("session lock");
+            let session = session_arc
+                .lock(verify_cx.cx())
+                .await
+                .expect("session lock");
             assert!(session.header.thinking_level.is_none());
             drop(session);
             let agent_thinking_level = {
@@ -7095,10 +7102,7 @@ export default function init(pi) {
                 .expect("apply thinking level");
 
             let verify_cx = AgentCx::for_request();
-            let guard = session_handle
-                .lock(&verify_cx)
-                .await
-                .expect("session lock");
+            let guard = session_handle.lock(&verify_cx).await.expect("session lock");
             let session = guard
                 .session
                 .lock(verify_cx.cx())

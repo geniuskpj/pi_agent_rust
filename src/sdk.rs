@@ -42,6 +42,7 @@ pub use crate::agent::{
 pub use crate::config::Config;
 pub use crate::error::{Error, Result};
 pub use crate::extensions::{ExtensionManager, ExtensionPolicy, ExtensionRegion};
+pub use crate::model::ThinkingLevel;
 pub use crate::model::{
     AssistantMessage, ContentBlock, Cost, CustomMessage, ImageContent, Message, StopReason,
     StreamEvent, TextContent, ThinkingContent, ToolCall, ToolResultMessage, Usage, UserContent,
@@ -54,7 +55,6 @@ pub use crate::provider::{
 };
 pub use crate::session::Session;
 pub use crate::tools::{Tool, ToolOutput, ToolRegistry, ToolUpdate};
-pub use crate::model::ThinkingLevel;
 
 /// Stable alias for model-exposed tool schema definitions.
 pub type ToolDefinition = ToolDef;
@@ -381,12 +381,7 @@ pub trait ToolFactory: Send + Sync {
     /// - `config` is pi's loaded [`Config`], passed through so custom
     ///   tools can read settings such as `block_images` without
     ///   duplicating the config-loading logic.
-    fn create_tool_registry(
-        &self,
-        enabled: &[&str],
-        cwd: &Path,
-        config: &Config,
-    ) -> ToolRegistry;
+    fn create_tool_registry(&self, enabled: &[&str], cwd: &Path, config: &Config) -> ToolRegistry;
 }
 
 /// Build the same [`ToolRegistry`] [`create_agent_session`] uses by
@@ -1712,10 +1707,10 @@ pub async fn create_agent_session(options: SessionOptions) -> Result<AgentSessio
         fail_closed_hooks: config.fail_closed_hooks(),
     };
 
-    let tools = match &options.tool_factory {
-        Some(factory) => factory.create_tool_registry(&enabled_tools, &cwd, &config),
-        None => ToolRegistry::new(&enabled_tools, &cwd, Some(&config)),
-    };
+    let tools = options.tool_factory.as_ref().map_or_else(
+        || ToolRegistry::new(&enabled_tools, &cwd, Some(&config)),
+        |factory| factory.create_tool_registry(&enabled_tools, &cwd, &config),
+    );
     let session_arc = Arc::new(asupersync::sync::Mutex::new(session));
 
     let context_window_tokens = if selection.model_entry.model.context_window == 0 {

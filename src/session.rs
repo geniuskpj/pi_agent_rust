@@ -4,7 +4,6 @@
 //! branching and history navigation.
 
 use crate::agent_cx::AgentCx;
-use tracing::warn;
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -36,6 +35,7 @@ use std::thread;
 use std::time::Instant;
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 /// Current session file format version.
 pub const SESSION_VERSION: u8 = 3;

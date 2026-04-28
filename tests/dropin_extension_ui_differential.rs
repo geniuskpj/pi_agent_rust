@@ -1,10 +1,9 @@
 #![forbid(unsafe_code)]
 
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 use tempfile::TempDir;
 
 const UI_SCENARIOS: &str =
@@ -20,9 +19,10 @@ struct ExtensionUiDifferentialTester {
 impl ExtensionUiDifferentialTester {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = tempfile::tempdir()?;
-        let rust_pi_path = std::env::var("CARGO_TARGET_DIR")
-            .map(|dir| format!("{}/debug/pi", dir))
-            .unwrap_or_else(|_| "target/debug/pi".to_string());
+        let rust_pi_path = std::env::var("CARGO_TARGET_DIR").map_or_else(
+            |_| "target/debug/pi".to_string(),
+            |dir| format!("{dir}/debug/pi"),
+        );
 
         Ok(Self {
             temp_dir,
@@ -43,7 +43,7 @@ impl ExtensionUiDifferentialTester {
 
         // Send all requests in sequence
         for request in requests {
-            writeln!(stdin, "{}", request)?;
+            writeln!(stdin, "{request}")?;
         }
         drop(child.stdin.take());
 
@@ -61,11 +61,7 @@ impl ExtensionUiDifferentialTester {
         Ok(json!(responses))
     }
 
-    fn validate_ui_scenario(
-        &self,
-        scenario: &Value,
-        actual_responses: &Value,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    fn validate_ui_scenario(scenario: &Value, actual_responses: &Value) -> bool {
         let expected_patterns = scenario["expected_patterns"]
             .as_array()
             .expect("expected patterns");
@@ -76,26 +72,26 @@ impl ExtensionUiDifferentialTester {
             let pattern_type = pattern["type"].as_str().expect("pattern type");
             let found = responses
                 .iter()
-                .any(|response| self.matches_pattern(response, pattern, pattern_type));
+                .any(|response| Self::matches_pattern(response, pattern, pattern_type));
 
             if !found {
-                return Ok(false);
+                return false;
             }
         }
 
-        Ok(true)
+        true
     }
 
-    fn matches_pattern(&self, response: &Value, pattern: &Value, pattern_type: &str) -> bool {
+    fn matches_pattern(response: &Value, pattern: &Value, pattern_type: &str) -> bool {
         match pattern_type {
             "extension_ui_request" => {
                 response.get("type") == Some(&json!("extension_ui_request"))
                     && pattern
                         .get("method")
-                        .map_or(true, |m| response.get("method") == Some(m))
+                        .is_none_or(|m| response.get("method") == Some(m))
                     && pattern
                         .get("has_timeout")
-                        .map_or(true, |_| response.get("timeout").is_some())
+                        .is_none_or(|_| response.get("timeout").is_some())
             }
             "response_success" => {
                 response.get("type") == Some(&json!("response"))
@@ -116,7 +112,7 @@ fn canonicalize_ui_response(value: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(canonicalize_ui_response).collect()),
         Value::Object(object) => {
             let mut canonicalized = BTreeMap::new();
-            for (key, value) in object.iter() {
+            for (key, value) in object {
                 // Skip volatile fields specific to extension UI
                 if matches!(key.as_str(), "timestamp" | "requestId" | "id" | "timeout") {
                     continue;
@@ -154,18 +150,12 @@ fn g05_extension_ui_differential_fixture_validation() {
         let id = scenario["id"].as_str().expect("scenario id");
         assert!(
             scenario.get("description").is_some(),
-            "{} missing description",
-            id
+            "{id} missing description"
         );
-        assert!(
-            scenario.get("requests").is_some(),
-            "{} missing requests",
-            id
-        );
+        assert!(scenario.get("requests").is_some(), "{id} missing requests");
         assert!(
             scenario.get("expected_patterns").is_some(),
-            "{} missing expected_patterns",
-            id
+            "{id} missing expected_patterns"
         );
     }
 }
@@ -195,8 +185,7 @@ fn g05_extension_ui_canonicalization_stable() {
 
         assert_eq!(
             canonical_once, canonical_twice,
-            "Canonicalization not stable for test case {}",
-            i
+            "Canonicalization not stable for test case {i}"
         );
 
         // Verify volatile fields are removed
@@ -223,12 +212,11 @@ fn g05_extension_ui_differential_basic_scenarios() {
 
     let cargo_target_dir =
         std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let rust_pi_path = format!("{}/debug/pi", cargo_target_dir);
+    let rust_pi_path = format!("{cargo_target_dir}/debug/pi");
 
     if !std::path::Path::new(&rust_pi_path).exists() {
         eprintln!(
-            "Warning: Rust pi binary not found at {}. Skipping UI differential test.",
-            rust_pi_path
+            "Warning: Rust pi binary not found at {rust_pi_path}. Skipping UI differential test."
         );
         return;
     }
@@ -236,10 +224,7 @@ fn g05_extension_ui_differential_basic_scenarios() {
     let tester = match ExtensionUiDifferentialTester::new() {
         Ok(t) => t,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to create UI differential tester: {}. Skipping test.",
-                e
-            );
+            eprintln!("Warning: Failed to create UI differential tester: {e}. Skipping test.");
             return;
         }
     };
@@ -253,35 +238,35 @@ fn g05_extension_ui_differential_basic_scenarios() {
         let scenario_type = scenario["type"].as_str().unwrap_or("unknown");
 
         match tester.execute_ui_scenario(scenario) {
-            Ok(responses) => match tester.validate_ui_scenario(scenario, &responses) {
-                Ok(true) => {
+            Ok(responses) => {
+                if ExtensionUiDifferentialTester::validate_ui_scenario(scenario, &responses) {
                     successful_scenarios += 1;
-                    println!("✓ {}: {} - PASS", scenario_id, scenario_type);
+                    println!("✓ {scenario_id}: {scenario_type} - PASS");
+                } else {
+                    failed_scenarios
+                        .push(format!("{scenario_id}: {scenario_type} - Pattern mismatch"));
+                    println!("✗ {scenario_id}: {scenario_type} - FAIL");
                 }
-                Ok(false) => {
-                    failed_scenarios.push(format!(
-                        "{}: {} - Pattern mismatch",
-                        scenario_id, scenario_type
-                    ));
-                    println!("✗ {}: {} - FAIL", scenario_id, scenario_type);
-                }
-                Err(e) => {
-                    failed_scenarios.push(format!(
-                        "{}: {} - Validation error: {}",
-                        scenario_id, scenario_type, e
-                    ));
-                    println!("✗ {}: {} - ERROR: {}", scenario_id, scenario_type, e);
-                }
-            },
+            }
             Err(e) => {
                 failed_scenarios.push(format!(
-                    "{}: {} - Execution error: {}",
-                    scenario_id, scenario_type, e
+                    "{scenario_id}: {scenario_type} - Execution error: {e}"
                 ));
-                println!("✗ {}: {} - ERROR: {}", scenario_id, scenario_type, e);
+                println!("✗ {scenario_id}: {scenario_type} - ERROR: {e}");
             }
         }
     }
+
+    assert!(
+        total_scenarios > 0,
+        "Should have tested at least one UI scenario"
+    );
+
+    let successful_scenarios_u32 =
+        u32::try_from(successful_scenarios).expect("scenario success count fits in u32");
+    let total_scenarios_u32 = u32::try_from(total_scenarios).expect("scenario count fits in u32");
+    let success_rate =
+        (f64::from(successful_scenarios_u32) / f64::from(total_scenarios_u32)) * 100.0;
 
     println!(
         "\n=== G05 Extension UI Basic Differential Test Summary ===\n\
@@ -292,19 +277,13 @@ fn g05_extension_ui_differential_basic_scenarios() {
         total_scenarios,
         successful_scenarios,
         failed_scenarios.len(),
-        (successful_scenarios as f64 / total_scenarios as f64) * 100.0
+        success_rate
     );
 
     if !failed_scenarios.is_empty() {
         println!("Failed scenarios:");
         for failure in &failed_scenarios {
-            println!("  - {}", failure);
+            println!("  - {failure}");
         }
     }
-
-    // For now, just verify that we tested scenarios
-    assert!(
-        total_scenarios > 0,
-        "Should have tested at least one UI scenario"
-    );
 }

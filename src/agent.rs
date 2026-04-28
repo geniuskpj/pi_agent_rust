@@ -13,7 +13,6 @@
 //! 5. If done: return final message
 
 use crate::auth::AuthStorage;
-use tracing::warn;
 use crate::compaction::{self, ResolvedCompactionSettings};
 use crate::compaction_worker::{CompactionQuota, CompactionWorkerState};
 use crate::error::{Error, Result};
@@ -57,6 +56,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::warn;
 
 const MAX_CONCURRENT_TOOLS: usize = 8;
 /// Maximum messages in steering queue to prevent unbounded growth

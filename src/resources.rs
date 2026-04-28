@@ -6,7 +6,6 @@
 //! - Package-based resource discovery
 
 use crate::config::Config;
-use tracing::warn;
 use crate::error::{Error, Result};
 use crate::package_manager::{
     PackageManager, PackageScope, ResolveExtensionSourcesOptions, ResolvedResource, ResourceOrigin,
@@ -16,6 +15,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use tracing::warn;
 
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
     payload.downcast::<String>().map_or_else(

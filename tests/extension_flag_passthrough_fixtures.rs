@@ -18,93 +18,87 @@ struct ExtensionFlagFixture {
 
 fn get_extension_flag_fixtures() -> Vec<ExtensionFlagFixture> {
     vec![
-    ExtensionFlagFixture {
-        name: "mixed_builtin_and_extension_flags",
-        args: &[
-            "pi",
-            "--model",
-            "claude-sonnet-4",
-            "--debug",
-            "true",
-            "--thinking",
-            "medium",
-            "--custom-flag",
-            "value",
-            "Hello",
-            "world",
-        ],
-        expected_message: &["Hello", "world"],
-    },
-    ExtensionFlagFixture {
-        name: "boolean_extension_flags_mixed_with_builtin",
-        args: &[
-            "pi",
-            "--print",
-            "--unknown-flag",
-            "--dry-run",
-            "--tools",
-            "grep,edit",
-            "test",
-            "message",
-        ],
-        expected_message: &["test", "message"],
-    },
-    ExtensionFlagFixture {
-        name: "equals_syntax_extension_flags",
-        args: &[
-            "pi",
-            "--model=gpt-4",
-            "--level=debug",
-            "--format=json",
-            "--continue",
-            "review",
-            "this",
-            "code",
-        ],
-        expected_message: &["review", "this", "code"],
-    },
-    ExtensionFlagFixture {
-        name: "edge_case_flag_ordering",
-        args: &[
-            "pi",
-            "--model",
-            "claude-opus-4",
-            "--thinking",
-            "high",
-            "--custom-first",
-            "--custom-middle",
-            "value",
-            "--custom-last",
-            "message",
-        ],
-        expected_message: &[],
-    },
-    ExtensionFlagFixture {
-        name: "complex_mixed_scenario",
-        args: &[
-            "pi",
-            "--resume",
-            "--ext-level=trace",
-            "--provider",
-            "anthropic",
-            "--ext-timeout",
-            "30",
-            "--ext-format",
-            "--no-tools",
-            "Complex",
-            "test",
-            "message",
-            "with",
-            "message",
-        ],
-        expected_message: &[
-            "Complex",
-            "test",
-            "message",
-            "with",
-            "message",
-        ],
-    },
+        ExtensionFlagFixture {
+            name: "mixed_builtin_and_extension_flags",
+            args: &[
+                "pi",
+                "--model",
+                "claude-sonnet-4",
+                "--debug",
+                "true",
+                "--thinking",
+                "medium",
+                "--custom-flag",
+                "value",
+                "Hello",
+                "world",
+            ],
+            expected_message: &["Hello", "world"],
+        },
+        ExtensionFlagFixture {
+            name: "boolean_extension_flags_mixed_with_builtin",
+            args: &[
+                "pi",
+                "--print",
+                "--unknown-flag",
+                "--dry-run",
+                "--tools",
+                "grep,edit",
+                "test",
+                "message",
+            ],
+            expected_message: &["test", "message"],
+        },
+        ExtensionFlagFixture {
+            name: "equals_syntax_extension_flags",
+            args: &[
+                "pi",
+                "--model=gpt-4",
+                "--level=debug",
+                "--format=json",
+                "--continue",
+                "review",
+                "this",
+                "code",
+            ],
+            expected_message: &["review", "this", "code"],
+        },
+        ExtensionFlagFixture {
+            name: "edge_case_flag_ordering",
+            args: &[
+                "pi",
+                "--model",
+                "claude-opus-4",
+                "--thinking",
+                "high",
+                "--custom-first",
+                "--custom-middle",
+                "value",
+                "--custom-last",
+                "message",
+            ],
+            expected_message: &[],
+        },
+        ExtensionFlagFixture {
+            name: "complex_mixed_scenario",
+            args: &[
+                "pi",
+                "--resume",
+                "--ext-level=trace",
+                "--provider",
+                "anthropic",
+                "--ext-timeout",
+                "30",
+                "--ext-format",
+                "--no-tools",
+                "Complex",
+                "test",
+                "message",
+                "with",
+                "message",
+            ],
+            expected_message: &["Complex", "test", "message", "with", "message"],
+        },
     ]
 }
 
@@ -115,7 +109,11 @@ fn test_extension_flag_passthrough_fixtures() {
     for fixture in fixtures {
         println!("Testing fixture: {}", fixture.name);
 
-        let args: Vec<String> = fixture.args.iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = fixture
+            .args
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         let parsed = parse_with_extension_flags(args)
             .unwrap_or_else(|e| panic!("Fixture '{}' failed to parse: {}", fixture.name, e));
 
@@ -124,35 +122,90 @@ fn test_extension_flag_passthrough_fixtures() {
             "mixed_builtin_and_extension_flags" => {
                 assert_eq!(parsed.cli.model.as_deref(), Some("claude-sonnet-4"));
                 assert_eq!(parsed.cli.thinking.as_deref(), Some("medium"));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "debug" && f.value == Some("true".to_string())));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "custom-flag" && f.value == Some("value".to_string())));
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "debug" && f.value == Some("true".to_string()))
+                );
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "custom-flag" && f.value == Some("value".to_string()))
+                );
             }
             "boolean_extension_flags_mixed_with_builtin" => {
                 assert!(parsed.cli.print);
                 assert_eq!(parsed.cli.tools, "grep,edit");
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "unknown-flag" && f.value.is_none()));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "dry-run" && f.value.is_none()));
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "unknown-flag" && f.value.is_none())
+                );
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "dry-run" && f.value.is_none())
+                );
             }
             "equals_syntax_extension_flags" => {
                 assert_eq!(parsed.cli.model.as_deref(), Some("gpt-4"));
                 assert!(parsed.cli.r#continue);
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "level" && f.value == Some("debug".to_string())));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "format" && f.value == Some("json".to_string())));
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "level" && f.value == Some("debug".to_string()))
+                );
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "format" && f.value == Some("json".to_string()))
+                );
             }
             "edge_case_flag_ordering" => {
                 assert_eq!(parsed.cli.model.as_deref(), Some("claude-opus-4"));
                 assert_eq!(parsed.cli.thinking.as_deref(), Some("high"));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "custom-first" && f.value.is_none()));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "custom-middle" && f.value == Some("value".to_string())));
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "custom-first" && f.value.is_none())
+                );
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "custom-middle" && f.value == Some("value".to_string()))
+                );
                 // Note: custom-last might not be parsed if it appears after message args start
             }
             "complex_mixed_scenario" => {
                 assert!(parsed.cli.resume);
                 assert_eq!(parsed.cli.provider.as_deref(), Some("anthropic"));
                 assert!(parsed.cli.no_tools);
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "ext-level" && f.value == Some("trace".to_string())));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "ext-timeout" && f.value == Some("30".to_string())));
-                assert!(parsed.extension_flags.iter().any(|f| f.name == "ext-format" && f.value.is_none()));
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "ext-level" && f.value == Some("trace".to_string()))
+                );
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "ext-timeout" && f.value == Some("30".to_string()))
+                );
+                assert!(
+                    parsed
+                        .extension_flags
+                        .iter()
+                        .any(|f| f.name == "ext-format" && f.value.is_none())
+                );
             }
             _ => panic!("Unknown fixture: {}", fixture.name),
         }
@@ -177,7 +230,7 @@ fn test_extension_flag_application_integration() {
 
     // This test validates that the extension flags are properly structured
     // and can be created without panicking
-    let test_flags = vec![
+    let test_flags = [
         pi::cli::ExtensionCliFlag {
             name: "debug".to_string(),
             value: Some("true".to_string()),
@@ -235,15 +288,9 @@ fn test_two_pass_parsing_edge_cases() {
     let parsed_sub = parse_with_extension_flags(args_with_subcommand);
     // Should either parse successfully with extension flag extracted,
     // or fail gracefully if subcommands are not supported
-    match parsed_sub {
-        Ok(p) => {
-            // If parsing succeeds, extension flag should be extracted
-            assert!(p.extension_flags.iter().any(|f| f.name == "ext-flag"));
-        }
-        Err(_) => {
-            // If parsing fails due to subcommand, that's expected
-            // The important thing is that preprocessing worked
-        }
+    if let Ok(p) = parsed_sub {
+        // If parsing succeeds, extension flag should be extracted.
+        assert!(p.extension_flags.iter().any(|f| f.name == "ext-flag"));
     }
 }
 

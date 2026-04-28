@@ -3859,20 +3859,29 @@ mod hashline_edit_tool {
     use super::*;
 
     /// Get the hashline tag for a specific line by reading with hashline=true
-    async fn get_hashline_tag(tool: &pi::tools::ReadTool, path: &std::path::Path, line_num: usize) -> String {
+    async fn get_hashline_tag(
+        tool: &pi::tools::ReadTool,
+        path: &std::path::Path,
+        line_num: usize,
+    ) -> String {
         let input = serde_json::json!({
             "path": path.to_string_lossy(),
             "hashline": true
         });
-        let result = tool.execute("test-id", input, None).await
+        let result = tool
+            .execute("test-id", input, None)
+            .await
             .expect("read with hashline should succeed");
         let text = get_text_content(&result.content);
 
+        let line_prefix = format!("{line_num}#");
         text.lines()
-            .find(|line| line.starts_with(&format!("{}#", line_num)))
+            .find(|line| line.starts_with(&line_prefix))
             .and_then(|line| line.split_once(':'))
-            .map(|(tag, _)| tag.to_string())
-            .expect(&format!("expected hashline tag for line {}", line_num))
+            .map_or_else(
+                || panic!("expected hashline tag for line {line_num}"),
+                |(tag, _)| tag.to_string(),
+            )
     }
 
     #[test]
@@ -3896,7 +3905,9 @@ mod hashline_edit_tool {
                 }]
             });
 
-            let result = tool.execute("test-id", input, None).await
+            let result = tool
+                .execute("test-id", input, None)
+                .await
                 .expect("edit should succeed");
 
             // Verify the edit was applied
@@ -3974,7 +3985,9 @@ mod hashline_edit_tool {
                 }]
             });
 
-            let _result = tool.execute("test-id", input, None).await
+            let _result = tool
+                .execute("test-id", input, None)
+                .await
                 .expect("prepend to empty file should succeed");
 
             let content = std::fs::read_to_string(&test_file).unwrap();
@@ -3989,7 +4002,9 @@ mod hashline_edit_tool {
                 }]
             });
 
-            let _result = tool.execute("test-id", input, None).await
+            let _result = tool
+                .execute("test-id", input, None)
+                .await
                 .expect("append should succeed");
 
             let content = std::fs::read_to_string(&test_file).unwrap();
@@ -4018,12 +4033,12 @@ mod hashline_edit_tool {
                 }]
             });
 
-            let result = tool.execute("test-id", input, None).await
+            tool.execute("test-id", input, None)
+                .await
                 .expect("multiline edit should succeed");
 
             let content = std::fs::read_to_string(&test_file).unwrap();
             assert_eq!(content, "line1\nNEW_LINE_1\nNEW_LINE_2\nNEW_LINE_3\nline3");
-
         });
     }
 
@@ -4048,12 +4063,12 @@ mod hashline_edit_tool {
                 }]
             });
 
-            let result = tool.execute("test-id", input, None).await
+            tool.execute("test-id", input, None)
+                .await
                 .expect("unicode edit should succeed");
 
             let content = std::fs::read_to_string(&test_file).unwrap();
             assert_eq!(content, "αβγ\n⭐️✨🎉\nδεζ");
-
         });
     }
 
@@ -4080,12 +4095,12 @@ mod hashline_edit_tool {
                 }]
             });
 
-            let result = tool.execute("test-id", input, None).await
+            tool.execute("test-id", input, None)
+                .await
                 .expect("range replace should succeed");
 
             let content = std::fs::read_to_string(&test_file).unwrap();
             assert_eq!(content, "line1\nREPLACEMENT\nline5");
-
         });
     }
 }
