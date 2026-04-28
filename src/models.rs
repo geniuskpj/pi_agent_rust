@@ -377,7 +377,21 @@ fn parse_upstream_provider_model_ids() -> HashMap<String, Vec<String>> {
         };
 
     let mut by_provider: HashMap<String, Vec<String>> = HashMap::new();
-    for (provider, ids) in parsed {
+    merge_provider_model_ids(&mut by_provider, parsed);
+    merge_provider_model_ids(&mut by_provider, parse_user_model_overrides());
+
+    for ids in by_provider.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
+    }
+    by_provider
+}
+
+fn merge_provider_model_ids(
+    target: &mut HashMap<String, Vec<String>>,
+    source: HashMap<String, Vec<String>>,
+) {
+    for (provider, ids) in source {
         let provider = provider.trim();
         if provider.is_empty() {
             continue;
@@ -385,7 +399,7 @@ fn parse_upstream_provider_model_ids() -> HashMap<String, Vec<String>> {
         let canonical_provider = canonical_provider_id(provider)
             .unwrap_or(provider)
             .to_string();
-        let entry = by_provider.entry(canonical_provider.clone()).or_default();
+        let entry = target.entry(canonical_provider.clone()).or_default();
         for model_id in ids {
             let normalized = canonicalize_model_id_for_provider(&canonical_provider, &model_id);
             if !normalized.is_empty() {
@@ -393,12 +407,88 @@ fn parse_upstream_provider_model_ids() -> HashMap<String, Vec<String>> {
             }
         }
     }
+}
 
-    for ids in by_provider.values_mut() {
-        ids.sort_unstable();
-        ids.dedup();
+/// Path to the user's optional model-override file.
+///
+/// Resolution order:
+/// 1. `PI_MODELS_OVERRIDE` env var (absolute path) — primarily for tests and
+///    advanced users who want to keep the override outside the standard config
+///    directory.
+/// 2. `<config_dir>/pi/models-override.json` — `<config_dir>` is whatever
+///    `dirs::config_dir()` reports (e.g. `~/.config` on Linux,
+///    `~/Library/Application Support` on macOS).
+///
+/// Returns `None` when no config directory can be resolved and no env override
+/// is set; callers treat that as "no override available".
+fn user_model_overrides_path() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("PI_MODELS_OVERRIDE") {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
     }
-    by_provider
+    dirs::config_dir().map(|dir| dir.join("pi").join("models-override.json"))
+}
+
+/// Parse the user-supplied override file. Same shape as the bundled snapshot:
+/// `{ "<provider>": ["<model-id>", ...], ... }`. Missing or unreadable files
+/// are silently ignored; malformed JSON logs a warning and is treated as
+/// empty so a typo in the override never breaks pi startup.
+fn parse_user_model_overrides() -> HashMap<String, Vec<String>> {
+    user_model_overrides_path()
+        .map(|path| parse_user_model_overrides_at(&path))
+        .unwrap_or_default()
+}
+
+fn parse_user_model_overrides_at(path: &Path) -> HashMap<String, Vec<String>> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                tracing::debug!(
+                    path = %path.display(),
+                    error = %err,
+                    "User model override file present but unreadable; ignoring"
+                );
+            }
+            return HashMap::new();
+        }
+    };
+    if content.trim().is_empty() {
+        return HashMap::new();
+    }
+    match serde_json::from_str::<HashMap<String, Vec<String>>>(&content) {
+        Ok(value) => {
+            tracing::debug!(
+                path = %path.display(),
+                providers = value.len(),
+                "Loaded user model override file"
+            );
+            value
+        }
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to parse pi user model override file; ignoring"
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// CRC32C of the user override file at process start, or 0 when no override
+/// exists. Folded into [`model_catalog_cache_fingerprint`] so consumers that
+/// memoize against the fingerprint refresh when a user changes their override.
+fn user_model_overrides_fingerprint() -> u32 {
+    user_model_overrides_path().map_or(0, |path| user_model_overrides_fingerprint_at(&path))
+}
+
+fn user_model_overrides_fingerprint_at(path: &Path) -> u32 {
+    fs::read(path)
+        .ok()
+        .map_or(0, |bytes| crc32c::crc32c(&bytes))
 }
 
 fn upstream_provider_model_ids() -> &'static HashMap<String, Vec<String>> {
@@ -465,7 +555,11 @@ pub fn model_catalog_cache_fingerprint() -> u64 {
     *MODEL_CATALOG_CACHE_FINGERPRINT.get_or_init(|| {
         let legacy = u64::from(crc32c::crc32c(LEGACY_MODELS_GENERATED_TS.as_bytes()));
         let upstream = u64::from(crc32c::crc32c(UPSTREAM_PROVIDER_MODEL_IDS_JSON.as_bytes()));
-        (legacy << 32) | upstream
+        let user_override = u64::from(user_model_overrides_fingerprint());
+        // Mix the override CRC into both halves so any change forces cache
+        // invalidation regardless of whether the snapshot or the override
+        // moved.
+        (legacy ^ user_override) << 32 | (upstream ^ user_override)
     })
 }
 
@@ -4159,6 +4253,131 @@ mod tests {
         // Unknown models return None (fall back to provider default)
         assert_eq!(model_is_reasoning("some-custom-model"), None);
         assert_eq!(model_is_reasoning("my-fine-tune"), None);
+    }
+
+    // -------- User model overrides (issue #60) --------
+
+    #[test]
+    fn parse_user_model_overrides_at_returns_empty_for_missing_file() {
+        let dir = tempdir().expect("tempdir");
+        let missing = dir.path().join("nope.json");
+        assert!(parse_user_model_overrides_at(&missing).is_empty());
+    }
+
+    #[test]
+    fn parse_user_model_overrides_at_returns_empty_for_blank_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("models-override.json");
+        fs::write(&path, "   \n  \t").expect("write blank override");
+        assert!(parse_user_model_overrides_at(&path).is_empty());
+    }
+
+    #[test]
+    fn parse_user_model_overrides_at_returns_empty_for_malformed_json() {
+        // A malformed override file must not break startup — it should log
+        // and return an empty map. (issue #60: "no surprises" requirement.)
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("models-override.json");
+        fs::write(&path, "{ this is not json }").expect("write bad json");
+        assert!(parse_user_model_overrides_at(&path).is_empty());
+    }
+
+    #[test]
+    fn parse_user_model_overrides_at_loads_well_formed_overrides() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("models-override.json");
+        fs::write(
+            &path,
+            r#"{"anthropic": ["claude-opus-4-7"], "openrouter": ["anthropic/claude-opus-4-7"]}"#,
+        )
+        .expect("write override");
+
+        let overrides = parse_user_model_overrides_at(&path);
+        assert_eq!(
+            overrides.get("anthropic").map(Vec::as_slice),
+            Some(&["claude-opus-4-7".to_string()][..])
+        );
+        assert_eq!(
+            overrides.get("openrouter").map(Vec::as_slice),
+            Some(&["anthropic/claude-opus-4-7".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn merge_provider_model_ids_unions_entries_per_provider() {
+        // Set-union semantics from issue #60: if a model appears in both the
+        // bundled snapshot and the user override, dedup keeps it once.
+        let mut target: HashMap<String, Vec<String>> = HashMap::new();
+        let mut snapshot = HashMap::new();
+        snapshot.insert(
+            "anthropic".to_string(),
+            vec![
+                "claude-opus-4-6".to_string(),
+                "claude-haiku-4-5".to_string(),
+            ],
+        );
+        merge_provider_model_ids(&mut target, snapshot);
+
+        let mut user = HashMap::new();
+        user.insert(
+            "anthropic".to_string(),
+            vec!["claude-opus-4-6".to_string(), "claude-opus-4-7".to_string()],
+        );
+        merge_provider_model_ids(&mut target, user);
+
+        let mut anthropic = target.remove("anthropic").expect("anthropic key");
+        anthropic.sort_unstable();
+        anthropic.dedup();
+        assert_eq!(
+            anthropic,
+            vec![
+                "claude-haiku-4-5".to_string(),
+                "claude-opus-4-6".to_string(),
+                "claude-opus-4-7".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_provider_model_ids_skips_blank_entries() {
+        let mut target: HashMap<String, Vec<String>> = HashMap::new();
+        let mut user = HashMap::new();
+        user.insert(
+            " ".to_string(), // blank provider
+            vec!["foo".to_string()],
+        );
+        user.insert(
+            "anthropic".to_string(),
+            vec![
+                String::new(),
+                " ".to_string(),
+                "claude-opus-4-7".to_string(),
+            ],
+        );
+        merge_provider_model_ids(&mut target, user);
+
+        assert_eq!(
+            target.get("anthropic").map_or(&[][..], Vec::as_slice),
+            &["claude-opus-4-7".to_string()]
+        );
+        assert!(!target.contains_key(" "));
+    }
+
+    #[test]
+    fn user_model_overrides_fingerprint_at_changes_with_content() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("models-override.json");
+
+        // Missing file => 0
+        assert_eq!(user_model_overrides_fingerprint_at(&path), 0);
+
+        fs::write(&path, r#"{"anthropic":["a"]}"#).expect("write v1");
+        let fp_v1 = user_model_overrides_fingerprint_at(&path);
+        assert_ne!(fp_v1, 0, "non-empty file should not hash to 0");
+
+        fs::write(&path, r#"{"anthropic":["b"]}"#).expect("write v2");
+        let fp_v2 = user_model_overrides_fingerprint_at(&path);
+        assert_ne!(fp_v1, fp_v2, "fingerprint must change when content changes");
     }
 
     mod proptest_models {
