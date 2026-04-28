@@ -9241,6 +9241,19 @@ function __normalizeExecOptions(raw) {
   };
 }
 
+function __utf8ByteLength(value) {
+  return new TextEncoder().encode(String(value ?? "")).length;
+}
+
+function __truncateToUtf8Bytes(value, maxBytes) {
+  const text = String(value ?? "");
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= maxBytes) {
+    return text;
+  }
+  return new TextDecoder().decode(bytes.slice(0, maxBytes));
+}
+
 function __wrapExecLike(commandForError, child, opts, callback) {
   let stdoutChunks = [];
   let stderrChunks = [];
@@ -9267,8 +9280,8 @@ function __wrapExecLike(commandForError, child, opts, callback) {
         const out = stdoutChunks.join("");
         const errOut = stderrChunks.join("");
         const err = new Error(`${isStdout ? "stdout" : "stderr"} maxBuffer length exceeded`);
-        err.stdout = out.slice(0, opts.maxBuffer);
-        err.stderr = errOut.slice(0, opts.maxBuffer);
+        err.stdout = __truncateToUtf8Bytes(out, opts.maxBuffer);
+        err.stderr = __truncateToUtf8Bytes(errOut, opts.maxBuffer);
         finish(err, err.stdout, err.stderr);
       }
     }
@@ -9278,14 +9291,14 @@ function __wrapExecLike(commandForError, child, opts, callback) {
     if (killedForMaxBuffer) return;
     const str = String(chunk ?? "");
     stdoutChunks.push(str);
-    stdoutLen += str.length;
+    stdoutLen += __utf8ByteLength(str);
     checkMaxBuffer(true);
   });
   child.stderr?.on("data", (chunk) => {
     if (killedForMaxBuffer) return;
     const str = String(chunk ?? "");
     stderrChunks.push(str);
-    stderrLen += str.length;
+    stderrLen += __utf8ByteLength(str);
     checkMaxBuffer(false);
   });
 
@@ -9303,18 +9316,18 @@ function __wrapExecLike(commandForError, child, opts, callback) {
     let out = stdoutChunks.join("");
     let errOut = stderrChunks.join("");
 
-    if (out.length > opts.maxBuffer) {
+    if (__utf8ByteLength(out) > opts.maxBuffer) {
       const err = new Error("stdout maxBuffer length exceeded");
-      err.stdout = out.slice(0, opts.maxBuffer);
+      err.stdout = __truncateToUtf8Bytes(out, opts.maxBuffer);
       err.stderr = errOut;
       finish(err, err.stdout, errOut);
       return;
     }
 
-    if (errOut.length > opts.maxBuffer) {
+    if (__utf8ByteLength(errOut) > opts.maxBuffer) {
       const err = new Error("stderr maxBuffer length exceeded");
       err.stdout = out;
-      err.stderr = errOut.slice(0, opts.maxBuffer);
+      err.stderr = __truncateToUtf8Bytes(errOut, opts.maxBuffer);
       finish(err, out, err.stderr);
       return;
     }
@@ -24963,6 +24976,99 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(r["cbErr"], serde_json::Value::Null);
             assert_eq!(r["stdout"], serde_json::json!("hello-exec\n"));
             assert_eq!(r["stderr"], serde_json::json!(""));
+        });
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn pijs_child_process_exec_max_buffer_counts_utf8_bytes() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.execMaxBufferResult = {};
+                    import('node:child_process').then(({ exec }) => {
+                        const child = exec('printf multi', { maxBuffer: 4 }, (err, stdout, stderr) => {
+                            globalThis.execMaxBufferResult.cbDone = true;
+                            globalThis.execMaxBufferResult.errMessage =
+                                err ? String((err && err.message) || err) : null;
+                            globalThis.execMaxBufferResult.errStdout =
+                                err ? String((err && err.stdout) || '') : null;
+                            globalThis.execMaxBufferResult.errStderr =
+                                err ? String((err && err.stderr) || '') : null;
+                            globalThis.execMaxBufferResult.stdout = stdout;
+                            globalThis.execMaxBufferResult.stderr = stderr;
+                        });
+                        child.on('close', (code, signal) => {
+                            globalThis.execMaxBufferResult.closeCode = code;
+                            globalThis.execMaxBufferResult.closeSignal = signal;
+                            globalThis.execMaxBufferResult.killed = child.killed;
+                            globalThis.execMaxBufferResult.closed = true;
+                        });
+                    });
+                    ",
+                )
+                .await
+                .expect("eval child_process exec maxBuffer script");
+
+            let mut requests = runtime.drain_hostcall_requests();
+            assert_eq!(requests.len(), 1);
+            let request = requests.pop_front().expect("exec hostcall");
+            assert!(
+                matches!(&request.kind, HostcallKind::Exec { cmd } if cmd == "sh"),
+                "unexpected hostcall kind: {:?}",
+                request.kind
+            );
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
+
+            let call_id = request.call_id;
+            runtime.complete_hostcall(
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({ "stdout": "ééx" }),
+                    is_final: false,
+                },
+            );
+            assert!(
+                runtime.tick().await.is_ok(),
+                "tick exec maxBuffer stdout chunk"
+            );
+            runtime.complete_hostcall(
+                call_id,
+                HostcallOutcome::StreamChunk {
+                    sequence: 1,
+                    chunk: serde_json::json!({
+                        "code": 0,
+                        "killed": true
+                    }),
+                    is_final: true,
+                },
+            );
+
+            drain_until_idle(&runtime, &clock).await;
+            let r = get_global_json(&runtime, "execMaxBufferResult").await;
+            assert_eq!(r["cbDone"], serde_json::json!(true));
+            assert_eq!(
+                r["errMessage"],
+                serde_json::json!("stdout maxBuffer length exceeded")
+            );
+            assert_eq!(r["errStdout"], serde_json::json!("éé"));
+            assert_eq!(r["errStderr"], serde_json::json!(""));
+            assert_eq!(r["stdout"], serde_json::json!("éé"));
+            assert_eq!(r["stderr"], serde_json::json!(""));
+            assert_eq!(r["closed"], serde_json::json!(true));
+            assert_eq!(r["killed"], serde_json::json!(true));
+            assert_eq!(r["closeCode"], serde_json::Value::Null);
+            assert_eq!(r["closeSignal"], serde_json::json!("SIGTERM"));
         });
     }
 
