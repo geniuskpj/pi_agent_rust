@@ -403,13 +403,13 @@ impl ExtensionSession for SessionHandle {
 
     async fn set_name(&self, name: String) -> Result<()> {
         let cx = AgentCx::for_current_or_request();
-        #[cfg(test)]
-        emit_set_name_deadline_probe(cx.budget().deadline);
         let mut session = self
             .0
             .lock(cx.cx())
             .await
             .map_err(|e| Error::session(format!("Failed to lock session: {e}")))?;
+        #[cfg(test)]
+        emit_set_name_deadline_probe(&session.header.id, cx.budget().deadline);
         session.set_name(&name);
         Ok(())
     }
@@ -5177,20 +5177,23 @@ fn generate_entry_id(existing: &HashSet<String>) -> String {
 }
 
 #[cfg(test)]
-fn set_name_deadline_probe()
--> &'static std::sync::Mutex<Option<std::sync::mpsc::Sender<Option<asupersync::Time>>>> {
-    static PROBE: std::sync::OnceLock<
-        std::sync::Mutex<Option<std::sync::mpsc::Sender<Option<asupersync::Time>>>>,
-    > = std::sync::OnceLock::new();
+type SetNameDeadlineProbe = Option<(String, std::sync::mpsc::Sender<Option<asupersync::Time>>)>;
+
+#[cfg(test)]
+fn set_name_deadline_probe() -> &'static std::sync::Mutex<SetNameDeadlineProbe> {
+    static PROBE: std::sync::OnceLock<std::sync::Mutex<SetNameDeadlineProbe>> =
+        std::sync::OnceLock::new();
     PROBE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 #[cfg(test)]
-fn emit_set_name_deadline_probe(deadline: Option<asupersync::Time>) {
+fn emit_set_name_deadline_probe(session_id: &str, deadline: Option<asupersync::Time>) {
     let probe = set_name_deadline_probe();
     let guard = probe.lock().expect("lock set_name deadline probe");
-    if let Some(tx) = guard.as_ref() {
-        let _ = tx.send(deadline);
+    if let Some((target_session_id, tx)) = guard.as_ref() {
+        if target_session_id == session_id {
+            let _ = tx.send(deadline);
+        }
     }
 }
 
@@ -5654,7 +5657,9 @@ mod tests {
                 }
             }
 
-            let session = Arc::new(AsyncMutex::new(Session::in_memory()));
+            let session_state = Session::in_memory();
+            let probe_session_id = session_state.header.id.clone();
+            let session = Arc::new(AsyncMutex::new(session_state));
             let handle = SessionHandle(Arc::clone(&session));
 
             let (probe_tx, probe_rx) = std::sync::mpsc::channel();
@@ -5663,7 +5668,7 @@ mod tests {
                     .lock()
                     .expect("lock set_name deadline probe");
                 assert!(probe.is_none(), "set_name deadline probe already installed");
-                *probe = Some(probe_tx);
+                *probe = Some((probe_session_id, probe_tx));
             }
             let _probe_reset = ProbeReset;
 

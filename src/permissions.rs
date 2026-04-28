@@ -226,7 +226,14 @@ impl PermissionStore {
         let lock_handle = open_permissions_lock_file(&self.path)?;
         let _file_guard = lock_permissions_file(lock_handle, Duration::from_secs(30))?;
 
-        self.decisions = load_permissions_decisions(&self.path)?;
+        match load_permissions_decisions(&self.path) {
+            Ok(decisions) => self.decisions = decisions,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to reload extension permissions before update; repairing from in-memory state: {err}"
+                );
+            }
+        }
         update(&mut self.decisions);
         self.save_unlocked()
     }

@@ -7021,7 +7021,7 @@ export default function init(pi) {
     }
 
     #[test]
-    fn apply_thinking_level_inherits_cancelled_context_when_session_lock_is_held() {
+    fn apply_thinking_level_inherits_cancelled_context_without_partial_mutation() {
         let runtime = asupersync::runtime::RuntimeBuilder::current_thread()
             .build()
             .expect("runtime build");
@@ -7060,7 +7060,7 @@ export default function init(pi) {
                 outcome.expect_err("lock acquisition should honor inherited cancellation")
             };
             assert!(
-                err.to_string().contains("inner session lock failed"),
+                err.to_string().contains("session lock failed"),
                 "unexpected error: {err}"
             );
 
