@@ -47,7 +47,9 @@ extern crate self as pi;
 
 // Gap H: jemalloc allocator for allocation-heavy paths.
 // Declared in the library so all project binaries/tests share allocator behavior.
-#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+// BSD-family targets stay on their platform allocator to avoid allocator-domain
+// mismatch across libc/pthread and C dependencies such as QuickJS.
+#[cfg(all(feature = "jemalloc", any(target_os = "linux", target_os = "macos")))]
 #[global_allocator]
 static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

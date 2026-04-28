@@ -1894,8 +1894,11 @@ If the evidence set is incomplete or contradictory, the claim-integrity gate sta
 
 ### Allocator Strategy for Benchmarks
 
-Shipping builds default to the platform allocator. For allocator experiments, Pi
-supports `jemalloc` as an explicit build-time option:
+Default Linux/macOS builds use `jemalloc` for allocation-heavy paths. FreeBSD
+and MSVC builds always use the platform allocator; FreeBSD libc already uses
+jemalloc internally, and mixing allocator domains across libc/pthread and C
+dependencies can turn heap corruption into thread-spawn crashes. For allocator
+experiments, Pi supports explicit `system` and `jemalloc` benchmark variants:
 
 ```bash
 # System allocator baseline + jemalloc variant in one repeatable run
@@ -1907,8 +1910,8 @@ The benchmark harness records both requested and effective allocator metadata in
 its JSONL output (`allocator_requested`, `allocator_effective`,
 `allocator_fallback_reason`) via `PI_BENCH_ALLOCATOR`.
 
-- `system`: build and run without allocator feature overrides
-- `jemalloc`: build with `--features jemalloc`
+- `system`: build with the normal benchmark feature set except `jemalloc`
+- `jemalloc`: build with `--features jemalloc` where supported by the target
 - `auto`: prefer `jemalloc`, fall back to `system` if build fails
 
 If `jemalloc` is requested but unavailable for the current build, the run fails

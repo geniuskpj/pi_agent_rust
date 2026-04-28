@@ -272,7 +272,9 @@ name = "tui_perf"
 harness = false
 
 # Gap H: jemalloc for 10-20% allocation-heavy path improvement.
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
+# Keep the global jemalloc override to targets where tikv-jemallocator is a
+# supported allocator choice. BSD-family targets stay on the platform allocator.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
 
 # FreeBSD: third-party libs live under /usr/local and rquickjs-sys doesn't
@@ -289,7 +291,7 @@ wasm-host = ["dep:wasmtime"]
 sqlite-sessions = []
 ext-conformance = []
 fuzzing = []
-jemalloc = ["tikv-jemallocator"]
+jemalloc = ["dep:tikv-jemallocator"]
 
 [profile.release]
 opt-level = 3

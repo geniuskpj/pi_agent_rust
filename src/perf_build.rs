@@ -57,7 +57,10 @@ enum RequestedAllocator {
 /// Returns the allocator compiled into the current binary.
 #[must_use]
 pub const fn compiled_allocator() -> AllocatorKind {
-    if cfg!(all(feature = "jemalloc", not(target_env = "msvc"))) {
+    if cfg!(all(
+        feature = "jemalloc",
+        any(target_os = "linux", target_os = "macos")
+    )) {
         AllocatorKind::Jemalloc
     } else {
         AllocatorKind::System
@@ -100,7 +103,7 @@ pub fn resolve_bench_allocator_from(raw_value: Option<&str>) -> AllocatorSelecti
             Some("system requested but binary was built with --features jemalloc".to_string())
         }
         RequestedAllocator::Jemalloc if effective != AllocatorKind::Jemalloc => {
-            Some("jemalloc requested but binary was built without --features jemalloc".to_string())
+            Some("jemalloc requested but this target/build uses the system allocator".to_string())
         }
         RequestedAllocator::Unknown => Some(format!(
             "unknown allocator '{requested_raw}'; using compiled allocator '{}'",
@@ -254,14 +257,14 @@ mod tests {
     fn allocator_jemalloc_request_reports_compile_time_mismatch() {
         let resolved = resolve_bench_allocator_from(Some("jemalloc"));
         assert_eq!(resolved.requested, "jemalloc");
-        if cfg!(feature = "jemalloc") {
+        if super::compiled_allocator() == AllocatorKind::Jemalloc {
             assert_eq!(resolved.effective, AllocatorKind::Jemalloc);
             assert!(resolved.fallback_reason.is_none());
         } else {
             assert_eq!(resolved.effective, AllocatorKind::System);
             assert!(
                 resolved.fallback_reason.is_some(),
-                "{BENCH_ALLOCATOR_ENV}=jemalloc should report fallback without feature"
+                "{BENCH_ALLOCATOR_ENV}=jemalloc should report fallback without compiled jemalloc"
             );
         }
     }
@@ -270,7 +273,7 @@ mod tests {
     fn allocator_system_request_reports_compile_time_mismatch() {
         let resolved = resolve_bench_allocator_from(Some("system"));
         assert_eq!(resolved.requested, "system");
-        if cfg!(feature = "jemalloc") {
+        if super::compiled_allocator() == AllocatorKind::Jemalloc {
             assert_eq!(resolved.effective, AllocatorKind::Jemalloc);
             assert!(resolved.fallback_reason.is_some());
         } else {

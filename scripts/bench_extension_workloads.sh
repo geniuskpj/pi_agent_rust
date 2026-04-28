@@ -14,6 +14,7 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 BENCH_ALLOCATORS_CSV="${BENCH_ALLOCATORS_CSV:-system,jemalloc}"
 BENCH_ALLOCATOR_FALLBACK="${BENCH_ALLOCATOR_FALLBACK:-system}"
 BENCH_CARGO_RUNNER="${BENCH_CARGO_RUNNER:-auto}"
+BENCH_SYSTEM_FEATURES="${BENCH_SYSTEM_FEATURES:-image-resize,clipboard,wasm-host,sqlite-sessions}"
 
 BIN="$TARGET_DIR/$BENCH_CARGO_PROFILE/pijs_workload"
 ITERATIONS="${ITERATIONS:-200}"
@@ -70,6 +71,32 @@ run_cargo_with_rustflags() {
   else
     "${CARGO_EXEC_PREFIX[@]}" "$@"
   fi
+}
+
+target_supports_jemalloc() {
+  local target_args=()
+  if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
+    target_args=(--target "$CARGO_BUILD_TARGET")
+  fi
+
+  local cfg
+  if ! cfg="$(rustc --print cfg "${target_args[@]}" 2>/dev/null)"; then
+    return 1
+  fi
+
+  grep -Eq '^target_os="(linux|macos)"$' <<<"$cfg"
+}
+
+build_system_allocator_binary() {
+  local rustflags="$1"
+  local build_log="$2"
+  local args=(build --profile "$BENCH_CARGO_PROFILE" --no-default-features --bin pijs_workload)
+
+  if [[ -n "$BENCH_SYSTEM_FEATURES" ]]; then
+    args+=(--features "$BENCH_SYSTEM_FEATURES")
+  fi
+
+  run_cargo_with_rustflags "$rustflags" "${args[@]}" >>"$build_log" 2>&1
 }
 
 find_llvm_profdata() {
@@ -159,18 +186,23 @@ build_binary_for_allocator() {
   : > "$build_log"
 
   if [[ "$normalized" == "system" ]]; then
-    run_cargo_with_rustflags "$rustflags" build --profile "$BENCH_CARGO_PROFILE" --bin pijs_workload >>"$build_log" 2>&1
+    build_system_allocator_binary "$rustflags" "$build_log"
     EFFECTIVE_ALLOCATOR="system"
     return 0
   fi
 
   if [[ "$normalized" == "jemalloc" ]]; then
     if run_cargo_with_rustflags "$rustflags" build --profile "$BENCH_CARGO_PROFILE" --features jemalloc --bin pijs_workload >>"$build_log" 2>&1; then
-      EFFECTIVE_ALLOCATOR="jemalloc"
+      if target_supports_jemalloc; then
+        EFFECTIVE_ALLOCATOR="jemalloc"
+      else
+        EFFECTIVE_ALLOCATOR="system"
+        ALLOCATOR_FALLBACK_REASON="jemalloc_unsupported_target"
+      fi
       return 0
     fi
     if [[ "$BENCH_ALLOCATOR_FALLBACK" == "system" ]]; then
-      run_cargo_with_rustflags "$rustflags" build --profile "$BENCH_CARGO_PROFILE" --bin pijs_workload >>"$build_log" 2>&1
+      build_system_allocator_binary "$rustflags" "$build_log"
       EFFECTIVE_ALLOCATOR="system"
       ALLOCATOR_FALLBACK_REASON="jemalloc_build_failed"
       return 0
@@ -179,11 +211,17 @@ build_binary_for_allocator() {
   fi
 
   # auto mode: try jemalloc first, then fail-closed to system.
+  if ! target_supports_jemalloc; then
+    build_system_allocator_binary "$rustflags" "$build_log"
+    EFFECTIVE_ALLOCATOR="system"
+    ALLOCATOR_FALLBACK_REASON="auto_jemalloc_unsupported_target"
+    return 0
+  fi
   if run_cargo_with_rustflags "$rustflags" build --profile "$BENCH_CARGO_PROFILE" --features jemalloc --bin pijs_workload >>"$build_log" 2>&1; then
     EFFECTIVE_ALLOCATOR="jemalloc"
     return 0
   fi
-  run_cargo_with_rustflags "$rustflags" build --profile "$BENCH_CARGO_PROFILE" --bin pijs_workload >>"$build_log" 2>&1
+  build_system_allocator_binary "$rustflags" "$build_log"
   EFFECTIVE_ALLOCATOR="system"
   ALLOCATOR_FALLBACK_REASON="auto_jemalloc_build_failed"
   return 0
