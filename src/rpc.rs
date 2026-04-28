@@ -6537,7 +6537,7 @@ export default function init(pi) {
 
             let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(16);
             maybe_auto_compact(
-                Arc::new(Mutex::new(agent_session)),
+                Arc::new(asupersync::sync::Mutex::new(agent_session)),
                 options,
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 out_tx,
