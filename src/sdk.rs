@@ -1374,6 +1374,46 @@ impl AgentSessionHandle {
         }
     }
 
+    /// Update the persisted session display name.
+    ///
+    /// Records a `SessionInfo` entry with the new name on the leaf path and
+    /// flushes session metadata to disk, mirroring how the in-process rename
+    /// path works for runtime CLIs that need to retitle a live session.
+    pub async fn set_session_name(&mut self, name: impl Into<String>) -> Result<()> {
+        let name = name.into();
+        let cx = crate::agent_cx::AgentCx::for_request();
+        {
+            let mut guard = self
+                .session
+                .session
+                .lock(cx.cx())
+                .await
+                .map_err(|e| Error::session(e.to_string()))?;
+            guard.append_session_info(Some(name));
+        }
+        self.session.persist_session().await
+    }
+
+    /// Read the per-prompt `max_tokens` cap currently configured on the
+    /// session's stream options.
+    ///
+    /// `None` means the provider's default applies (e.g. 4096 for the
+    /// openai-compat provider), which can truncate generations that emit
+    /// large tool-call arguments. Embedders carrying tool-heavy traffic
+    /// should raise this via [`Self::set_max_tokens`].
+    pub const fn max_tokens(&self) -> Option<u32> {
+        self.session.agent.stream_options().max_tokens
+    }
+
+    /// Override the per-prompt `max_tokens` cap.
+    ///
+    /// Persists for the lifetime of the in-process handle only; not written
+    /// to session metadata. Pass `None` to fall back to the provider's
+    /// default cap.
+    pub fn set_max_tokens(&mut self, max_tokens: Option<u32>) {
+        self.session.agent.stream_options_mut().max_tokens = max_tokens;
+    }
+
     /// Return all model messages for the current session path.
     pub async fn messages(&self) -> Result<Vec<Message>> {
         let cx = crate::agent_cx::AgentCx::for_request();
@@ -2509,5 +2549,62 @@ mod tests {
         assert!(registry.get("read").is_some());
         assert!(registry.get("bash").is_some());
         assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn set_session_name_records_session_info_entry() {
+        let tmp = tempdir().expect("tempdir");
+        let options = SessionOptions {
+            working_directory: Some(tmp.path().to_path_buf()),
+            no_session: true,
+            ..SessionOptions::default()
+        };
+
+        let mut handle = run_async(create_agent_session(options)).expect("create session");
+        run_async(handle.set_session_name("renamed-by-sdk")).expect("set session name");
+
+        let (cached, info_entries) = run_async(async {
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let guard = handle
+                .session()
+                .session
+                .lock(cx.cx())
+                .await
+                .expect("lock session");
+            let info_entries = guard
+                .entries_for_current_path()
+                .iter()
+                .filter_map(|entry| match entry {
+                    crate::session::SessionEntry::SessionInfo(info) => info.name.clone(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (guard.cached_name.clone(), info_entries)
+        });
+        assert_eq!(cached.as_deref(), Some("renamed-by-sdk"));
+        assert_eq!(info_entries, vec!["renamed-by-sdk".to_string()]);
+    }
+
+    #[test]
+    fn max_tokens_default_is_none_and_set_overrides() {
+        let tmp = tempdir().expect("tempdir");
+        let options = SessionOptions {
+            working_directory: Some(tmp.path().to_path_buf()),
+            no_session: true,
+            ..SessionOptions::default()
+        };
+
+        let mut handle = run_async(create_agent_session(options)).expect("create session");
+        assert_eq!(handle.max_tokens(), None);
+
+        handle.set_max_tokens(Some(32_000));
+        assert_eq!(handle.max_tokens(), Some(32_000));
+        assert_eq!(
+            handle.session().agent.stream_options().max_tokens,
+            Some(32_000)
+        );
+
+        handle.set_max_tokens(None);
+        assert_eq!(handle.max_tokens(), None);
     }
 }
