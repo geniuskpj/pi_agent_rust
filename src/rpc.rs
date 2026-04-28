@@ -6468,6 +6468,107 @@ export default function init(pi) {
         assert!(!should_auto_compact(0, 200_000, 40_000));
     }
 
+    #[test]
+    fn auto_compaction_missing_api_key_omits_absent_result_field() {
+        let runtime = asupersync::runtime::RuntimeBuilder::new()
+            .blocking_threads(1, 1)
+            .build()
+            .expect("runtime build");
+        let runtime_handle = runtime.handle();
+
+        runtime.block_on(async move {
+            let mut model = dummy_entry("test-model", false);
+            model.model.provider = "test-provider".to_string();
+            model.model.context_window = 1;
+
+            let agent = Agent::new(
+                Arc::new(NoopProvider),
+                ToolRegistry::new(&[], Path::new("."), None),
+                AgentConfig::default(),
+            );
+            let mut inner_session = Session::in_memory();
+            inner_session.header.provider = Some("test-provider".to_string());
+            inner_session.header.model_id = Some("test-model".to_string());
+            inner_session.append_message(crate::session::SessionMessage::User {
+                content: UserContent::Text("hello".to_string()),
+                timestamp: Some(0),
+            });
+            inner_session.append_message(crate::session::SessionMessage::Assistant {
+                message: AssistantMessage {
+                    content: vec![ContentBlock::Text(TextContent::new("world"))],
+                    api: "test-api".to_string(),
+                    provider: "test-provider".to_string(),
+                    model: "test-model".to_string(),
+                    usage: Usage {
+                        total_tokens: 10,
+                        ..Usage::default()
+                    },
+                    stop_reason: StopReason::Stop,
+                    error_message: None,
+                    timestamp: 0,
+                },
+            });
+
+            let agent_session = AgentSession::new(
+                agent,
+                Arc::new(asupersync::sync::Mutex::new(inner_session)),
+                false,
+                crate::compaction::ResolvedCompactionSettings::default(),
+            );
+
+            let mut config = Config::default();
+            config.compaction = Some(crate::config::CompactionSettings {
+                enabled: Some(true),
+                reserve_tokens: Some(2),
+                keep_recent_tokens: Some(0),
+            });
+
+            let auth_dir = tempfile::tempdir().expect("tempdir");
+            let auth = AuthStorage::load(auth_dir.path().join("auth.json")).expect("auth load");
+            let options = RpcOptions {
+                config,
+                resources: ResourceLoader::empty(false),
+                available_models: vec![model],
+                scoped_models: Vec::new(),
+                cli_api_key: None,
+                auth,
+                runtime_handle,
+            };
+
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(16);
+            maybe_auto_compact(
+                Arc::new(Mutex::new(agent_session)),
+                options,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                out_tx,
+            )
+            .await;
+
+            let events = out_rx
+                .try_iter()
+                .map(|line| serde_json::from_str::<Value>(&line).expect("event json"))
+                .collect::<Vec<_>>();
+            let start_idx = events
+                .iter()
+                .position(|event| event["type"] == "auto_compaction_start")
+                .expect("auto_compaction_start");
+            let end_idx = events
+                .iter()
+                .position(|event| event["type"] == "auto_compaction_end")
+                .expect("auto_compaction_end");
+            assert!(start_idx < end_idx, "unexpected event order: {events:?}");
+
+            let end = &events[end_idx];
+            assert_eq!(end["aborted"], false);
+            assert_eq!(end["willRetry"], false);
+            assert_eq!(end["errorMessage"], "Missing API key for compaction");
+            assert!(
+                end.get("result").is_none(),
+                "failed auto_compaction_end must omit absent result: {end}"
+            );
+        });
+    }
+
     // -----------------------------------------------------------------------
     // rpc_flatten_content_blocks
     // -----------------------------------------------------------------------
