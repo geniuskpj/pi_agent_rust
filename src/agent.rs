@@ -6284,7 +6284,12 @@ impl AgentSession {
             }
 
             if let Some(compaction) = before_outcome.compaction {
-                let result_value = compaction.details.clone();
+                let result_value = Some(Self::auto_compaction_result_payload(
+                    compaction.summary.clone(),
+                    compaction.first_kept_entry_id.clone(),
+                    compaction.tokens_before,
+                    compaction.details.clone(),
+                ));
                 self.extensions_is_compacting
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let apply_result = self
@@ -6352,6 +6357,25 @@ impl AgentSession {
         Ok(runtime_handle)
     }
 
+    fn auto_compaction_result_payload(
+        summary: String,
+        first_kept_entry_id: String,
+        tokens_before: u64,
+        details: Option<Value>,
+    ) -> Value {
+        let mut payload = serde_json::Map::new();
+        payload.insert("summary".to_string(), Value::String(summary));
+        payload.insert(
+            "firstKeptEntryId".to_string(),
+            Value::String(first_kept_entry_id),
+        );
+        payload.insert("tokensBefore".to_string(), Value::from(tokens_before));
+        if let Some(details) = details {
+            payload.insert("details".to_string(), details);
+        }
+        Value::Object(payload)
+    }
+
     async fn apply_compaction_entry(
         &self,
         summary: String,
@@ -6414,8 +6438,13 @@ impl AgentSession {
         result: compaction::CompactionResult,
         on_event: AgentEventHandler,
     ) -> Result<()> {
-        let details = compaction::compaction_details_to_value(&result.details).ok();
-        let result_value = details.clone();
+        let details = Some(compaction::compaction_details_to_value(&result.details)?);
+        let result_value = Some(Self::auto_compaction_result_payload(
+            result.summary.clone(),
+            result.first_kept_entry_id.clone(),
+            result.tokens_before,
+            details.clone(),
+        ));
 
         self.apply_compaction_entry(
             result.summary,
@@ -6476,7 +6505,12 @@ impl AgentSession {
             }
 
             if let Some(compaction) = before_outcome.compaction {
-                let result_value = compaction.details.clone();
+                let result_value = Some(Self::auto_compaction_result_payload(
+                    compaction.summary.clone(),
+                    compaction.first_kept_entry_id.clone(),
+                    compaction.tokens_before,
+                    compaction.details.clone(),
+                ));
                 self.extensions_is_compacting
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 let apply_result = self
@@ -8889,8 +8923,66 @@ mod tests {
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "auto_compaction_end");
-        assert!(json["result"].is_null());
+        assert!(json.get("result").is_none());
         assert_eq!(json["errorMessage"], "compaction failed");
+    }
+
+    #[test]
+    fn apply_compaction_result_emits_structured_result_payload() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let provider = Arc::new(SilentProvider);
+            let tools = ToolRegistry::new(&[], Path::new("."), None);
+            let agent = Agent::new(provider, tools, AgentConfig::default());
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let agent_session =
+                AgentSession::new(agent, session, false, ResolvedCompactionSettings::default());
+
+            let events: Arc<std::sync::Mutex<Vec<AgentEvent>>> =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = Arc::clone(&events);
+            let on_event: AgentEventHandler = Arc::new(move |event| {
+                sink.lock().expect("lock compaction events").push(event);
+            });
+
+            let result = compaction::CompactionResult {
+                summary: "Compacted 10 messages into 2".to_string(),
+                first_kept_entry_id: "entry-5".to_string(),
+                tokens_before: 12_000,
+                details: compaction::CompactionDetails {
+                    read_files: vec!["src/main.rs".to_string()],
+                    modified_files: vec!["src/agent.rs".to_string()],
+                },
+            };
+
+            agent_session
+                .apply_compaction_result(result, on_event)
+                .await
+                .expect("apply compaction result");
+
+            let payload = {
+                let guard = events.lock().expect("lock captured events");
+                guard
+                    .iter()
+                    .find_map(|event| match event {
+                        AgentEvent::AutoCompactionEnd {
+                            result: Some(result),
+                            ..
+                        } => Some(result.clone()),
+                        _ => None,
+                    })
+                    .expect("auto compaction end payload")
+            };
+
+            assert_eq!(payload["summary"], "Compacted 10 messages into 2");
+            assert_eq!(payload["firstKeptEntryId"], "entry-5");
+            assert_eq!(payload["tokensBefore"], 12_000);
+            assert_eq!(payload["details"]["readFiles"], json!(["src/main.rs"]));
+            assert_eq!(payload["details"]["modifiedFiles"], json!(["src/agent.rs"]));
+        });
     }
 
     #[test]
