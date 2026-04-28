@@ -8,6 +8,8 @@ legacy_pi_mono_code/
 .bench_round3/
 .bv/
 .ntm/
+ubuntu-review*/
+codex*/
 codex_extindex_review/
 codex_extindex_review_test/
 fuzz/

@@ -1,5 +1,9 @@
 ubuntu/
 ubuntu/**
+ubuntu-review*/
+ubuntu-review*/**
+codex*/
+codex*/**
 codex/
 codex/**
 codex-audit/

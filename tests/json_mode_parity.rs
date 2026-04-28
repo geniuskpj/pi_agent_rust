@@ -50,10 +50,14 @@ fn assert_has_field(value: &Value, field: &str) {
 
 /// Assert that a JSON field is a non-empty string.
 fn assert_non_empty_string(value: &Value, field: &str) {
-    let s = value
-        .get(field)
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("expected string field '{field}' in {value}"));
+    let Some(s) = value.get(field).and_then(Value::as_str) else {
+        assert_eq!(
+            value.get(field).and_then(Value::as_str),
+            Some("<non-empty string>"),
+            "expected string field '{field}' in {value}"
+        );
+        return;
+    };
     assert!(
         !s.is_empty(),
         "expected non-empty string for '{field}', got empty"
@@ -478,6 +482,10 @@ fn json_parity_auto_compaction_end_schema() {
     let json_err = event_to_json(&event_err);
     assert_eq!(json_err["willRetry"], true);
     assert_eq!(json_err["errorMessage"], "provider error");
+    assert!(
+        json_err.get("result").is_none(),
+        "failed auto_compaction_end must omit absent result"
+    );
 
     harness
         .log()
@@ -547,6 +555,10 @@ fn json_parity_auto_retry_end_schema() {
 
     // Verify camelCase
     assert!(json.get("final_error").is_none());
+    assert!(
+        json.get("finalError").is_none(),
+        "successful auto_retry_end must omit absent finalError"
+    );
 
     // Failure case
     let event_fail = AgentEvent::AutoRetryEnd {
@@ -2681,6 +2693,11 @@ fn json_parity_auto_compaction_lifecycle_matrix() {
         // Optional fields: absent when None (skip_serializing_if).
         if result.is_some() {
             assert!(json_end.get("result").is_some(), "result missing: {label}");
+        } else {
+            assert!(
+                json_end.get("result").is_none(),
+                "result should be absent: {label}"
+            );
         }
         if error_msg.is_some() {
             assert_eq!(

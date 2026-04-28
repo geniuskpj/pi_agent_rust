@@ -67,32 +67,32 @@
       "gap_id": "gap-json-auto-lifecycle-events",
       "priority_rank": 3,
       "area": "json-mode",
-      "mismatch_kind": "event_schema_and_ordering",
-      "severity": "high",
+      "mismatch_kind": "resolved",
+      "severity": "resolved",
+      "status": "resolved",
+      "resolution_date": "2026-04-28T04:30:15Z",
       "sources": [
         "docs/dropin-feature-inventory-matrix.json#row:json.events.auto_lifecycle",
         "docs/dropin-112-feature-inventory-matrix.md#summary:agent-events-auto-compaction-auto-retry"
       ],
-      "current_state": "base event variants were added via bd-2ilgm, but end-to-end schema/order parity still needs closure",
-      "user_impact": "Automation consuming JSON streams can mis-handle retries/compaction lifecycle transitions.",
-      "owner_issue_primary": "bd-2my4b",
+      "final_state": "Auto-compaction and auto-retry lifecycle events serialize through AgentEvent in JSON/RPC paths, preserving camelCase fields and omitting absent optional payloads. Focused parity tests cover schema, ordering, retry success omission, and compaction missing-key failure omission.",
+      "owner_issue_primary": "bd-3b9mx",
       "owner_issue_supporting": [
+        "bd-2my4b",
         "bd-2ilgm",
         "bd-38v5y"
       ],
       "closure_path": [
-        "Ensure event payload shape and ordering match TS behavior in bd-2my4b.",
-        "Align command-path triggers in bd-38v5y.",
-        "Publish replayable transcript evidence in JSON-mode fixture suites."
+        "Emit auto_compaction_* and auto_retry_* JSON events via AgentEvent serialization.",
+        "Verify optional fields are absent instead of null when no result/finalError exists.",
+        "Backstop RPC auto-compaction and auto-retry runtime paths with focused regression tests."
       ],
       "verification_evidence": [
-        "Golden JSON transcript diff with no semantic mismatch",
-        "Schema validation for auto_compaction_* and auto_retry_* events",
-        "Command/event integration test for retry and compaction toggles"
+        "tests/json_mode_parity.rs: json_parity_auto_* schema and lifecycle matrix tests",
+        "src/rpc.rs: rpc_auto_retry_retries_then_succeeds asserts successful auto_retry_end omits finalError",
+        "src/rpc.rs: auto_compaction_missing_api_key_omits_absent_result_field asserts start/end ordering and failed auto_compaction_end omits result"
       ],
-      "blocked_by": [
-        "bd-3eb4d"
-      ]
+      "blocked_by": []
     },
     {
       "gap_id": "gap-json-rpc-command-semantic-coverage",
@@ -129,14 +129,15 @@
       "gap_id": "gap-json-tool-and-extension-ui-events",
       "priority_rank": 5,
       "area": "json-mode",
-      "mismatch_kind": "unverified_extension_ui_event_parity",
-      "severity": "high",
+      "mismatch_kind": "resolved",
+      "severity": "resolved",
+      "status": "resolved",
+      "resolution_date": "2026-04-28T04:30:15Z",
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:11-rpc-events-responses",
         "docs/dropin-112-feature-inventory-matrix.md#section:15-extension-api-surface-ui"
       ],
-      "current_state": "tool execution event names and extension_ui_request/response round-trips are now validated by deterministic test evidence; parity closure tracked by bd-359pl",
-      "user_impact": "Extension-driven UX flows can diverge or fail in JSON/RPC integrations.",
+      "final_state": "Tool execution event names and extension_ui_request/response round-trips are validated by deterministic test evidence. The parity closure bead bd-359pl is closed with targeted RPC and json_mode_parity coverage.",
       "owner_issue_primary": "bd-359pl",
       "owner_issue_supporting": [
         "bd-2my4b",
@@ -431,7 +432,7 @@
       },
       {
         "row_id": "json.events.auto_lifecycle",
-        "status": "in_progress_parity_hardening",
+        "status": "resolved",
         "ledger_gap_id": "gap-json-auto-lifecycle-events"
       },
       {
@@ -484,10 +485,11 @@
   "rollup": {
     "entry_count": 14,
     "severity_counts": {
-      "critical": 3,
-      "high": 6,
-      "medium": 4,
-      "low": 1
+      "high": 1,
+      "medium": 3,
+      "low": 1,
+      "resolved": 8,
+      "retired": 1
     },
     "top_unblockers": [
       "bd-35t7i",
