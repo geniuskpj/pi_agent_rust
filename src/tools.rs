@@ -1887,6 +1887,12 @@ pub struct BashRunResult {
     pub truncation: Option<TruncationResult>,
 }
 
+#[derive(Debug)]
+enum BashPipeFrame {
+    Chunk(Vec<u8>),
+    Error(String),
+}
+
 #[allow(clippy::unnecessary_lazy_evaluations)] // lazy eval needed on unix for signal()
 fn exit_status_code(status: std::process::ExitStatus) -> i32 {
     status.code().unwrap_or_else(|| {
@@ -1974,7 +1980,7 @@ pub(crate) async fn run_bash_command(
     // the pump threads will block on send(), which stops them from reading from the OS pipe.
     // The OS pipe buffer will fill up, causing the child's `write()` calls to block.
     // This correctly pauses the child until we catch up, preventing unbounded memory growth (OOM).
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1024);
+    let (tx, rx) = mpsc::sync_channel::<BashPipeFrame>(1024);
     let tx_stdout = tx.clone();
 
     // Design Decision (bd-xdcrh.4.3):
@@ -1984,8 +1990,8 @@ pub(crate) async fn run_bash_command(
     // or servers) could easily exhaust the pool's thread limit, starving the rest of the application
     // of threads needed for short-lived blocking I/O (e.g., SQLite transactions or filesystem metadata).
     // Dedicated threads cleanly isolate this unbounded blocking risk.
-    let stdout_thread = thread::spawn(move || pump_stream(stdout, &tx_stdout));
-    let stderr_thread = thread::spawn(move || pump_stream(stderr, &tx));
+    let stdout_thread = thread::spawn(move || pump_stream(stdout, "stdout", &tx_stdout));
+    let stderr_thread = thread::spawn(move || pump_stream(stderr, "stderr", &tx));
 
     let max_chunks_bytes = DEFAULT_MAX_BYTES.saturating_mul(2);
     let mut bash_output = BashOutputState::new(max_chunks_bytes);
@@ -2005,8 +2011,11 @@ pub(crate) async fn run_bash_command(
     let tick = Duration::from_millis(10);
     loop {
         let mut updated = false;
-        while let Ok(chunk) = rx.try_recv() {
-            ingest_bash_chunk(chunk, &mut bash_output).await?;
+        while let Ok(frame) = rx.try_recv() {
+            if let Err(err) = ingest_bash_pipe_frame(frame, &mut bash_output).await {
+                let _ = guard.kill();
+                return Err(err);
+            }
             updated = true;
         }
 
@@ -2055,12 +2064,12 @@ pub(crate) async fn run_bash_command(
         sleep(now, tick).await;
     }
 
-    // With an unbounded channel the pump threads never block on send(), so
-    // they will reach EOF and exit as soon as the child closes its pipe ends.
-    // Drain any remaining chunks while waiting for the pump threads to finish.
-    // This guarantees all pipe data is captured before we build the result.
-    // The 5-second cap is a safety net for pathological cases (e.g. the child
-    // spawned a grandchild that inherited the pipe fd and is still running).
+    // Drain any remaining channel frames while waiting for the pump threads
+    // to observe EOF and exit. Because the channel is bounded, they may still
+    // be blocked on send() until we consume the buffered output after the child
+    // closes its pipe ends. The 5-second cap is a safety net for pathological
+    // cases (e.g. the child spawned a grandchild that inherited the pipe fd
+    // and is still running).
     {
         let drain_start = cx
             .cx()
@@ -2071,8 +2080,11 @@ pub(crate) async fn run_bash_command(
         loop {
             // Drain everything currently available in the channel.
             let mut got_data = false;
-            while let Ok(chunk) = rx.try_recv() {
-                ingest_bash_chunk(chunk, &mut bash_output).await?;
+            while let Ok(frame) = rx.try_recv() {
+                if let Err(err) = ingest_bash_pipe_frame(frame, &mut bash_output).await {
+                    let _ = guard.kill();
+                    return Err(err);
+                }
                 got_data = true;
             }
             if got_data {
@@ -2084,8 +2096,11 @@ pub(crate) async fn run_bash_command(
             if stdout_thread.is_finished() && stderr_thread.is_finished() {
                 // One final drain in case they sent items between our last
                 // try_recv loop and the is_finished check.
-                while let Ok(chunk) = rx.try_recv() {
-                    ingest_bash_chunk(chunk, &mut bash_output).await?;
+                while let Ok(frame) = rx.try_recv() {
+                    if let Err(err) = ingest_bash_pipe_frame(frame, &mut bash_output).await {
+                        let _ = guard.kill();
+                        return Err(err);
+                    }
                 }
                 break;
             }
@@ -4601,20 +4616,67 @@ fn rg_available() -> bool {
     find_rg_binary().is_some()
 }
 
-fn pump_stream<R: Read + Send + 'static>(mut reader: R, tx: &mpsc::SyncSender<Vec<u8>>) {
+fn pump_stream<R: Read + Send + 'static>(
+    mut reader: R,
+    stream_name: &'static str,
+    tx: &mpsc::SyncSender<BashPipeFrame>,
+) {
     let mut buf = vec![0u8; 8192];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if tx.send(buf[..n].to_vec()).is_err() {
+                if tx.send(BashPipeFrame::Chunk(buf[..n].to_vec())).is_err() {
                     break;
                 }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => break,
+            Err(err) => {
+                let _ = tx.send(BashPipeFrame::Error(format!(
+                    "Failed to read bash {stream_name}: {err}"
+                )));
+                break;
+            }
         }
     }
+}
+
+async fn ingest_bash_pipe_frame(frame: BashPipeFrame, state: &mut BashOutputState) -> Result<()> {
+    match frame {
+        BashPipeFrame::Chunk(chunk) => ingest_bash_chunk(chunk, state).await,
+        BashPipeFrame::Error(message) => {
+            let error_message = bash_capture_error_message(&message, state);
+            state.abandon_spill_file();
+            Err(Error::tool("bash", error_message))
+        }
+    }
+}
+
+fn bash_capture_error_message(message: &str, state: &BashOutputState) -> String {
+    let raw = concat_chunks(&state.chunks);
+    if raw.is_empty() {
+        return message.to_string();
+    }
+
+    let full_text = String::from_utf8_lossy(&raw).into_owned();
+    let truncation = truncate_tail(full_text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES);
+    let mut error_message = message.to_string();
+    let partial_output = if truncation.content.is_empty() {
+        "(no output)".to_string()
+    } else {
+        truncation.content
+    };
+    let _ = write!(
+        error_message,
+        "\n\nPartial output before failure:\n{partial_output}"
+    );
+    if truncation.truncated || state.total_bytes > state.chunks_bytes {
+        let _ = write!(
+            error_message,
+            "\n\n[Partial output truncated before failure]"
+        );
+    }
+    error_message
 }
 
 /// Read from a subprocess pipe until EOF while retaining only the first
@@ -4651,7 +4713,7 @@ pub(crate) fn read_to_end_capped_and_drain<R: Read>(
 // surrounding future non-Send.
 #[allow(clippy::needless_pass_by_ref_mut)]
 async fn drain_bash_output(
-    rx: &mut mpsc::Receiver<Vec<u8>>,
+    rx: &mut mpsc::Receiver<BashPipeFrame>,
     bash_output: &mut BashOutputState,
     cx: &AgentCx,
     drain_deadline: asupersync::Time,
@@ -4660,7 +4722,7 @@ async fn drain_bash_output(
 ) -> Result<bool> {
     loop {
         match rx.try_recv() {
-            Ok(chunk) => ingest_bash_chunk(chunk, bash_output).await?,
+            Ok(frame) => ingest_bash_pipe_frame(frame, bash_output).await?,
             Err(mpsc::TryRecvError::Empty) => {
                 let now = cx
                     .cx()
@@ -7027,6 +7089,34 @@ mod tests {
     // Bash Tool Tests
     // ========================================================================
 
+    struct FailingReader {
+        responses: std::collections::VecDeque<std::io::Result<Vec<u8>>>,
+    }
+
+    impl FailingReader {
+        fn new(responses: impl IntoIterator<Item = std::io::Result<Vec<u8>>>) -> Self {
+            Self {
+                responses: responses.into_iter().collect(),
+            }
+        }
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.responses.pop_front().unwrap_or_else(|| Ok(Vec::new())) {
+                Ok(bytes) => {
+                    assert!(
+                        bytes.len() <= buf.len(),
+                        "test reader only supports single-chunk reads"
+                    );
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Err(err) => Err(err),
+            }
+        }
+    }
+
     #[test]
     fn test_bash_simple_command() {
         asupersync::test_utils::run_test(|| async {
@@ -7209,9 +7299,39 @@ mod tests {
     }
 
     #[test]
+    fn test_bash_pump_stream_emits_io_error_frame_after_partial_output() {
+        let reader = FailingReader::new([
+            Ok(b"partial stdout".to_vec()),
+            Err(std::io::Error::other("simulated stdout failure")),
+        ]);
+        let (tx, rx) = mpsc::sync_channel::<BashPipeFrame>(4);
+
+        pump_stream(reader, "stdout", &tx);
+
+        match rx.recv().expect("partial chunk") {
+            BashPipeFrame::Chunk(chunk) => assert_eq!(chunk, b"partial stdout"),
+            BashPipeFrame::Error(message) => {
+                unreachable!("expected output chunk before error, got error frame: {message}")
+            }
+        }
+
+        match rx.recv().expect("io error frame") {
+            BashPipeFrame::Chunk(chunk) => {
+                unreachable!("expected io error after partial chunk, got chunk: {chunk:?}")
+            }
+            BashPipeFrame::Error(message) => {
+                assert!(message.contains("Failed to read bash stdout"));
+                assert!(message.contains("simulated stdout failure"));
+            }
+        }
+
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
     fn test_drain_bash_output_ignores_cancellation_after_process_exit() {
         asupersync::test_utils::run_test(|| async {
-            let (tx, mut rx) = mpsc::sync_channel::<Vec<u8>>(1);
+            let (tx, mut rx) = mpsc::sync_channel::<BashPipeFrame>(1);
             let mut bash_output = BashOutputState::new(DEFAULT_MAX_BYTES);
 
             let ambient_cx = asupersync::Cx::for_testing();
@@ -7245,9 +7365,48 @@ mod tests {
     }
 
     #[test]
+    fn test_drain_bash_output_returns_pipe_read_error() {
+        asupersync::test_utils::run_test(|| async {
+            let (tx, mut rx) = mpsc::sync_channel::<BashPipeFrame>(2);
+            tx.send(BashPipeFrame::Chunk(b"partial stderr".to_vec()))
+                .expect("queue partial output");
+            tx.send(BashPipeFrame::Error(
+                "Failed to read bash stderr: simulated stderr failure".to_string(),
+            ))
+            .expect("queue error frame");
+            drop(tx);
+
+            let mut bash_output = BashOutputState::new(DEFAULT_MAX_BYTES);
+            let cx = AgentCx::for_current_or_request();
+            let now = cx
+                .cx()
+                .timer_driver()
+                .map_or_else(wall_now, |timer| timer.now());
+
+            let err = drain_bash_output(
+                &mut rx,
+                &mut bash_output,
+                &cx,
+                now + std::time::Duration::from_millis(10),
+                std::time::Duration::from_millis(1),
+                false,
+            )
+            .await
+            .expect_err("pipe read failures must surface as errors");
+
+            let message = err.to_string();
+            assert!(message.contains("Failed to read bash stderr"));
+            assert!(message.contains("simulated stderr failure"));
+            assert!(message.contains("Partial output before failure"));
+            assert!(message.contains("partial stderr"));
+            assert_eq!(bash_output.total_bytes, "partial stderr".len());
+        });
+    }
+
+    #[test]
     fn test_drain_bash_output_honors_cancellation_while_process_still_active() {
         asupersync::test_utils::run_test(|| async {
-            let (_tx, mut rx) = mpsc::sync_channel::<Vec<u8>>(1);
+            let (_tx, mut rx) = mpsc::sync_channel::<BashPipeFrame>(1);
             let mut bash_output = BashOutputState::new(DEFAULT_MAX_BYTES);
 
             let ambient_cx = asupersync::Cx::for_testing();

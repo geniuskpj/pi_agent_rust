@@ -3595,6 +3595,34 @@ mod retry_tests {
         });
     }
 
+    struct RpcFailingReader {
+        responses: std::collections::VecDeque<std::io::Result<Vec<u8>>>,
+    }
+
+    impl RpcFailingReader {
+        fn new(responses: impl IntoIterator<Item = std::io::Result<Vec<u8>>>) -> Self {
+            Self {
+                responses: responses.into_iter().collect(),
+            }
+        }
+    }
+
+    impl std::io::Read for RpcFailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.responses.pop_front().unwrap_or_else(|| Ok(Vec::new())) {
+                Ok(bytes) => {
+                    assert!(
+                        bytes.len() <= buf.len(),
+                        "test reader only supports single-chunk reads"
+                    );
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Err(err) => Err(err),
+            }
+        }
+    }
+
     #[test]
     fn run_bash_rpc_large_output_completes_without_deadlock() {
         asupersync::test_utils::run_test(|| async {
@@ -3615,6 +3643,103 @@ mod retry_tests {
             assert!(
                 result.truncated,
                 "large RPC bash output should truncate instead of blocking"
+            );
+        });
+    }
+
+    #[test]
+    fn run_bash_rpc_pump_stream_emits_io_error_frame_after_partial_output() {
+        let reader = RpcFailingReader::new([
+            Ok(b"partial stdout".to_vec()),
+            Err(std::io::Error::other("simulated stdout failure")),
+        ]);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<BashRpcStreamFrame>(4);
+
+        pump_bash_rpc_stream(reader, tx, "stdout");
+
+        match rx.recv().expect("partial chunk") {
+            BashRpcStreamFrame::Chunk(chunk) => assert_eq!(chunk, b"partial stdout"),
+            BashRpcStreamFrame::Error(message) => {
+                unreachable!("expected output chunk before error, got error frame: {message}")
+            }
+        }
+
+        match rx.recv().expect("io error frame") {
+            BashRpcStreamFrame::Chunk(chunk) => {
+                unreachable!("expected io error after partial chunk, got chunk: {chunk:?}")
+            }
+            BashRpcStreamFrame::Error(message) => {
+                assert!(message.contains("Failed to read bash stdout"));
+                assert!(message.contains("simulated stdout failure"));
+            }
+        }
+
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty | std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn run_bash_rpc_ingest_frame_returns_pipe_read_error() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let spill_path = tmp.path().join("partial-rpc-bash.log");
+            std::fs::write(&spill_path, b"partial output").expect("write spill file");
+
+            let mut chunks = VecDeque::new();
+            let mut chunks_bytes = 0usize;
+            let mut total_bytes = 0usize;
+            let mut total_lines = 0usize;
+            let mut last_byte_was_newline = false;
+            let mut temp_file = None;
+            let mut temp_file_path = Some(spill_path.clone());
+            let mut spill_failed = false;
+
+            ingest_bash_rpc_frame(
+                BashRpcStreamFrame::Chunk(b"partial stderr".to_vec()),
+                &mut chunks,
+                &mut chunks_bytes,
+                &mut total_bytes,
+                &mut total_lines,
+                &mut last_byte_was_newline,
+                &mut temp_file,
+                &mut temp_file_path,
+                &mut spill_failed,
+                DEFAULT_MAX_BYTES,
+            )
+            .await
+            .expect("partial output should ingest");
+
+            let err = ingest_bash_rpc_frame(
+                BashRpcStreamFrame::Error(
+                    "Failed to read bash stderr: simulated stderr failure".to_string(),
+                ),
+                &mut chunks,
+                &mut chunks_bytes,
+                &mut total_bytes,
+                &mut total_lines,
+                &mut last_byte_was_newline,
+                &mut temp_file,
+                &mut temp_file_path,
+                &mut spill_failed,
+                DEFAULT_MAX_BYTES,
+            )
+            .await
+            .expect_err("pipe read failures must surface as errors");
+
+            let message = err.to_string();
+            assert!(message.contains("Failed to read bash stderr"));
+            assert!(message.contains("simulated stderr failure"));
+            assert!(message.contains("Partial output before failure"));
+            assert!(message.contains("partial stderr"));
+            assert!(spill_failed);
+            assert!(temp_file.is_none());
+            assert!(temp_file_path.is_none());
+            assert_eq!(total_bytes, "partial stderr".len());
+            assert!(
+                !spill_path.exists(),
+                "errored RPC spill files should be discarded"
             );
         });
     }
@@ -4182,6 +4307,38 @@ struct BashRpcResult {
     full_output_path: Option<String>,
 }
 
+enum BashRpcStreamFrame {
+    Chunk(Vec<u8>),
+    Error(String),
+}
+
+fn pump_bash_rpc_stream(
+    mut reader: impl std::io::Read,
+    tx: std::sync::mpsc::SyncSender<BashRpcStreamFrame>,
+    stream_name: &'static str,
+) {
+    let mut buf = [0u8; 8192];
+    loop {
+        let read = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                let _ = tx.send(BashRpcStreamFrame::Error(format!(
+                    "Failed to read bash {stream_name}: {err}"
+                )));
+                break;
+            }
+        };
+        if tx
+            .send(BashRpcStreamFrame::Chunk(buf[..read].to_vec()))
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
 fn abandon_bash_rpc_spill_file(
     temp_file: &mut Option<asupersync::fs::File>,
     temp_file_path: &mut Option<PathBuf>,
@@ -4372,45 +4529,83 @@ async fn ingest_bash_rpc_chunk(
     }
 }
 
+async fn ingest_bash_rpc_frame(
+    frame: BashRpcStreamFrame,
+    chunks: &mut VecDeque<Vec<u8>>,
+    chunks_bytes: &mut usize,
+    total_bytes: &mut usize,
+    total_lines: &mut usize,
+    last_byte_was_newline: &mut bool,
+    temp_file: &mut Option<asupersync::fs::File>,
+    temp_file_path: &mut Option<PathBuf>,
+    spill_failed: &mut bool,
+    max_chunks_bytes: usize,
+) -> Result<()> {
+    match frame {
+        BashRpcStreamFrame::Chunk(bytes) => {
+            ingest_bash_rpc_chunk(
+                bytes,
+                chunks,
+                chunks_bytes,
+                total_bytes,
+                total_lines,
+                last_byte_was_newline,
+                temp_file,
+                temp_file_path,
+                spill_failed,
+                max_chunks_bytes,
+            )
+            .await;
+            Ok(())
+        }
+        BashRpcStreamFrame::Error(message) => {
+            let error_message = bash_rpc_capture_error_message(
+                &message,
+                chunks,
+                *total_bytes,
+                *chunks_bytes,
+            );
+            abandon_bash_rpc_spill_file(temp_file, temp_file_path, spill_failed);
+            Err(Error::tool("bash", error_message))
+        }
+    }
+}
+
+fn bash_rpc_capture_error_message(
+    message: &str,
+    chunks: &VecDeque<Vec<u8>>,
+    total_bytes: usize,
+    chunks_bytes: usize,
+) -> String {
+    let mut raw = Vec::with_capacity(chunks_bytes);
+    for chunk in chunks {
+        raw.extend_from_slice(chunk);
+    }
+    if raw.is_empty() {
+        return message.to_string();
+    }
+
+    let full_text = String::from_utf8_lossy(&raw).into_owned();
+    let truncation = truncate_tail(full_text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES);
+    let mut error_message = message.to_string();
+    let partial_output = if truncation.content.is_empty() {
+        "(no output)".to_string()
+    } else {
+        truncation.content
+    };
+    error_message.push_str("\n\nPartial output before failure:\n");
+    error_message.push_str(&partial_output);
+    if truncation.truncated || total_bytes > chunks_bytes {
+        error_message.push_str("\n\n[Partial output truncated before failure]");
+    }
+    error_message
+}
+
 async fn run_bash_rpc(
     cwd: &std::path::Path,
     command: &str,
     mut abort_rx: oneshot::Receiver<()>,
 ) -> Result<BashRpcResult> {
-    #[derive(Clone, Copy)]
-    enum StreamKind {
-        Stdout,
-        Stderr,
-    }
-
-    struct StreamChunk {
-        kind: StreamKind,
-        bytes: Vec<u8>,
-    }
-
-    fn pump_stream(
-        mut reader: impl std::io::Read,
-        tx: std::sync::mpsc::SyncSender<StreamChunk>,
-        kind: StreamKind,
-    ) {
-        let mut buf = [0u8; 8192];
-        loop {
-            let read = match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(read) => read,
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            };
-            let chunk = StreamChunk {
-                kind,
-                bytes: buf[..read].to_vec(),
-            };
-            if tx.send(chunk).is_err() {
-                break;
-            }
-        }
-    }
-
     let shell = ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())
@@ -4446,11 +4641,11 @@ async fn run_bash_rpc(
     // the pump threads will block on send(), which stops them from reading from the OS pipe.
     // The OS pipe buffer will fill up, causing the child's `write()` calls to block.
     // This correctly pauses the child until we catch up, preventing unbounded memory growth (OOM).
-    let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(1024);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<BashRpcStreamFrame>(1024);
     let tx_stdout = tx.clone();
     let _stdout_handle =
-        std::thread::spawn(move || pump_stream(stdout, tx_stdout, StreamKind::Stdout));
-    let _stderr_handle = std::thread::spawn(move || pump_stream(stderr, tx, StreamKind::Stderr));
+        std::thread::spawn(move || pump_bash_rpc_stream(stdout, tx_stdout, "stdout"));
+    let _stderr_handle = std::thread::spawn(move || pump_bash_rpc_stream(stderr, tx, "stderr"));
 
     let tick = Duration::from_millis(10);
     let cx = asupersync::Cx::current().unwrap_or_else(asupersync::Cx::for_request);
@@ -4469,9 +4664,9 @@ async fn run_bash_rpc(
     let mut spill_failed = false;
 
     let exit_code = loop {
-        while let Ok(chunk) = rx.try_recv() {
-            ingest_bash_rpc_chunk(
-                chunk.bytes,
+        while let Ok(frame) = rx.try_recv() {
+            if let Err(err) = ingest_bash_rpc_frame(
+                frame,
                 &mut chunks,
                 &mut chunks_bytes,
                 &mut total_bytes,
@@ -4482,7 +4677,11 @@ async fn run_bash_rpc(
                 &mut spill_failed,
                 max_chunks_bytes,
             )
-            .await;
+            .await
+            {
+                let _ = guard.kill();
+                return Err(err);
+            }
         }
 
         if !cancelled && abort_rx.try_recv().is_ok() {
@@ -4521,9 +4720,9 @@ async fn run_bash_rpc(
     let mut drain_timed_out = false;
     loop {
         match rx.try_recv() {
-            Ok(chunk) => {
-                ingest_bash_rpc_chunk(
-                    chunk.bytes,
+            Ok(frame) => {
+                if let Err(err) = ingest_bash_rpc_frame(
+                    frame,
                     &mut chunks,
                     &mut chunks_bytes,
                     &mut total_bytes,
@@ -4534,7 +4733,11 @@ async fn run_bash_rpc(
                     &mut spill_failed,
                     max_chunks_bytes,
                 )
-                .await;
+                .await
+                {
+                    let _ = guard.kill();
+                    return Err(err);
+                }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 let now = cx.timer_driver().map_or_else(wall_now, |timer| timer.now());
@@ -5299,7 +5502,7 @@ mod tests {
         loop {
             let line = recv_line(out_rx, label)
                 .await
-                .unwrap_or_else(|err| panic!("{err}"));
+                .unwrap_or_else(|err| unreachable!("{err}"));
             let value = parse_response(&line);
 
             match value.get("type").and_then(Value::as_str) {
@@ -5333,7 +5536,7 @@ mod tests {
         in_tx
             .send(&cx, cmd.to_string())
             .await
-            .unwrap_or_else(|_| panic!("send {label}"));
+            .unwrap_or_else(|_| unreachable!("send {label}"));
         recv_response(out_rx, label).await
     }
 
@@ -5369,7 +5572,7 @@ mod tests {
                     }
                 }
                 Err(TryRecvError::Disconnected) => {
-                    panic!(
+                    unreachable!(
                         "{label}: output channel disconnected while waiting for extension_ui_request"
                     );
                 }
