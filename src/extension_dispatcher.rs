@@ -56,6 +56,180 @@ fn extension_wait_sleep(duration: Duration) -> asupersync::time::Sleep {
     sleep(extension_wait_now(), duration)
 }
 
+#[derive(Clone, Copy)]
+enum ExecPipeKind {
+    Stdout,
+    Stderr,
+}
+
+enum ExecStreamFrame {
+    Stdout(String),
+    Stderr(String),
+    Final { code: i32, killed: bool },
+    Error(String),
+}
+
+enum ExecCaptureFrame {
+    Chunk { kind: ExecPipeKind, bytes: Vec<u8> },
+    Error(String),
+}
+
+fn send_exec_stream_text(
+    tx: &std::sync::mpsc::SyncSender<ExecStreamFrame>,
+    kind: ExecPipeKind,
+    text: String,
+) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+
+    let frame = match kind {
+        ExecPipeKind::Stdout => ExecStreamFrame::Stdout(text),
+        ExecPipeKind::Stderr => ExecStreamFrame::Stderr(text),
+    };
+    tx.send(frame).is_ok()
+}
+
+fn pump_exec_stream_text<R: std::io::Read>(
+    mut reader: R,
+    tx: &std::sync::mpsc::SyncSender<ExecStreamFrame>,
+    kind: ExecPipeKind,
+) {
+    let mut buf = [0u8; 4096];
+    let mut partial = Vec::new();
+
+    loop {
+        let read = match reader.read(&mut buf) {
+            Ok(0) => 0,
+            Ok(n) => n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                if !partial.is_empty()
+                    && !send_exec_stream_text(
+                        tx,
+                        kind,
+                        String::from_utf8_lossy(&partial).to_string(),
+                    )
+                {
+                    return;
+                }
+                let _ = tx.send(ExecStreamFrame::Error(err.to_string()));
+                return;
+            }
+        };
+        if read == 0 {
+            // EOF. Flush partial if any (lossy).
+            if !partial.is_empty() {
+                let _ =
+                    send_exec_stream_text(tx, kind, String::from_utf8_lossy(&partial).to_string());
+            }
+            break;
+        }
+
+        let chunk = &buf[..read];
+
+        // If we have partial data, we must append the new chunk and process the combined buffer.
+        // If partial is empty, we can process the chunk directly (fast path).
+        if partial.is_empty() {
+            let mut processed = 0;
+            loop {
+                match std::str::from_utf8(&chunk[processed..]) {
+                    Ok(s) => {
+                        if !send_exec_stream_text(tx, kind, s.to_string()) {
+                            return;
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        let valid_len = e.valid_up_to();
+                        if valid_len > 0 {
+                            let s = std::str::from_utf8(&chunk[processed..processed + valid_len])
+                                .expect("valid utf8 prefix");
+                            if !send_exec_stream_text(tx, kind, s.to_string()) {
+                                return;
+                            }
+                            processed += valid_len;
+                        }
+
+                        if let Some(len) = e.error_len() {
+                            if !send_exec_stream_text(tx, kind, "\u{FFFD}".to_string()) {
+                                return;
+                            }
+                            processed += len;
+                        } else {
+                            partial.extend_from_slice(&chunk[processed..]);
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            partial.extend_from_slice(chunk);
+            let mut processed = 0;
+            loop {
+                match std::str::from_utf8(&partial[processed..]) {
+                    Ok(s) => {
+                        if !send_exec_stream_text(tx, kind, s.to_string()) {
+                            return;
+                        }
+                        partial.clear();
+                        break;
+                    }
+                    Err(e) => {
+                        let valid_len = e.valid_up_to();
+                        if valid_len > 0 {
+                            let s = std::str::from_utf8(&partial[processed..processed + valid_len])
+                                .expect("valid utf8 prefix");
+                            if !send_exec_stream_text(tx, kind, s.to_string()) {
+                                return;
+                            }
+                            processed += valid_len;
+                        }
+
+                        if let Some(len) = e.error_len() {
+                            if !send_exec_stream_text(tx, kind, "\u{FFFD}".to_string()) {
+                                return;
+                            }
+                            processed += len;
+                        } else {
+                            let remaining = partial.len() - processed;
+                            partial.copy_within(processed.., 0);
+                            partial.truncate(remaining);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn pump_exec_capture_bytes<R: std::io::Read>(
+    mut reader: R,
+    tx: &std::sync::mpsc::SyncSender<ExecCaptureFrame>,
+    kind: ExecPipeKind,
+) {
+    let mut buf = [0u8; 8192];
+    loop {
+        let read = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                let _ = tx.send(ExecCaptureFrame::Error(err.to_string()));
+                break;
+            }
+        };
+        let chunk = ExecCaptureFrame::Chunk {
+            kind,
+            bytes: buf[..read].to_vec(),
+        };
+        if tx.send(chunk).is_err() {
+            break;
+        }
+    }
+}
+
 /// Coordinates hostcall dispatch between the JS extension runtime and Rust handlers.
 pub struct ExtensionDispatcher<C: SchedulerClock = WallClock> {
     /// Runtime bridge used by the dispatcher.
@@ -2508,164 +2682,6 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
         use std::sync::mpsc;
 
-        enum ExecStreamFrame {
-            Stdout(String),
-            Stderr(String),
-            Final { code: i32, killed: bool },
-            Error(String),
-        }
-
-        fn pump_stream<R: std::io::Read>(
-            mut reader: R,
-            tx: &std::sync::mpsc::SyncSender<ExecStreamFrame>,
-            stdout: bool,
-        ) -> std::result::Result<(), String> {
-            let mut buf = [0u8; 4096];
-            let mut partial = Vec::new();
-
-            loop {
-                let read = match reader.read(&mut buf) {
-                    Ok(0) => 0,
-                    Ok(n) => n,
-                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(err) => return Err(err.to_string()),
-                };
-                if read == 0 {
-                    // EOF. Flush partial if any (lossy).
-                    if !partial.is_empty() {
-                        let text = String::from_utf8_lossy(&partial).to_string();
-                        let frame = if stdout {
-                            ExecStreamFrame::Stdout(text)
-                        } else {
-                            ExecStreamFrame::Stderr(text)
-                        };
-                        let _ = tx.send(frame);
-                    }
-                    break;
-                }
-
-                let chunk = &buf[..read];
-
-                // If we have partial data, we must append the new chunk and process the combined buffer.
-                // If partial is empty, we can process the chunk directly (fast path).
-                if partial.is_empty() {
-                    let mut processed = 0;
-                    loop {
-                        match std::str::from_utf8(&chunk[processed..]) {
-                            Ok(s) => {
-                                if !s.is_empty() {
-                                    let frame = if stdout {
-                                        ExecStreamFrame::Stdout(s.to_string())
-                                    } else {
-                                        ExecStreamFrame::Stderr(s.to_string())
-                                    };
-                                    if tx.send(frame).is_err() {
-                                        return Ok(());
-                                    }
-                                }
-                                break;
-                            }
-                            Err(e) => {
-                                let valid_len = e.valid_up_to();
-                                if valid_len > 0 {
-                                    let s = std::str::from_utf8(
-                                        &chunk[processed..processed + valid_len],
-                                    )
-                                    .expect("valid utf8 prefix");
-                                    let frame = if stdout {
-                                        ExecStreamFrame::Stdout(s.to_string())
-                                    } else {
-                                        ExecStreamFrame::Stderr(s.to_string())
-                                    };
-                                    if tx.send(frame).is_err() {
-                                        return Ok(());
-                                    }
-                                    processed += valid_len;
-                                }
-
-                                if let Some(len) = e.error_len() {
-                                    // Invalid sequence: emit replacement and skip
-                                    let frame = if stdout {
-                                        ExecStreamFrame::Stdout("\u{FFFD}".to_string())
-                                    } else {
-                                        ExecStreamFrame::Stderr("\u{FFFD}".to_string())
-                                    };
-                                    if tx.send(frame).is_err() {
-                                        return Ok(());
-                                    }
-                                    processed += len;
-                                } else {
-                                    // Incomplete at end: buffer the remainder
-                                    partial.extend_from_slice(&chunk[processed..]);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    partial.extend_from_slice(chunk);
-                    let mut processed = 0;
-                    loop {
-                        match std::str::from_utf8(&partial[processed..]) {
-                            Ok(s) => {
-                                if !s.is_empty() {
-                                    let frame = if stdout {
-                                        ExecStreamFrame::Stdout(s.to_string())
-                                    } else {
-                                        ExecStreamFrame::Stderr(s.to_string())
-                                    };
-                                    if tx.send(frame).is_err() {
-                                        return Ok(());
-                                    }
-                                }
-                                partial.clear();
-                                break;
-                            }
-                            Err(e) => {
-                                let valid_len = e.valid_up_to();
-                                if valid_len > 0 {
-                                    let s = std::str::from_utf8(
-                                        &partial[processed..processed + valid_len],
-                                    )
-                                    .expect("valid utf8 prefix");
-                                    let frame = if stdout {
-                                        ExecStreamFrame::Stdout(s.to_string())
-                                    } else {
-                                        ExecStreamFrame::Stderr(s.to_string())
-                                    };
-                                    if tx.send(frame).is_err() {
-                                        return Ok(());
-                                    }
-                                    processed += valid_len;
-                                }
-
-                                if let Some(len) = e.error_len() {
-                                    // Invalid sequence
-                                    let frame = if stdout {
-                                        ExecStreamFrame::Stdout("\u{FFFD}".to_string())
-                                    } else {
-                                        ExecStreamFrame::Stderr("\u{FFFD}".to_string())
-                                    };
-                                    if tx.send(frame).is_err() {
-                                        return Ok(());
-                                    }
-                                    processed += len;
-                                } else {
-                                    // Incomplete at end
-                                    // Move remaining bytes to start of partial
-                                    let remaining = partial.len() - processed;
-                                    partial.copy_within(processed.., 0);
-                                    partial.truncate(remaining);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-
         #[allow(clippy::unnecessary_lazy_evaluations)] // lazy eval needed on unix for signal()
         fn exit_status_code(status: std::process::ExitStatus) -> i32 {
             status.code().unwrap_or_else(|| {
@@ -2753,10 +2769,12 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
                     let stdout_tx = tx.clone();
                     let stderr_tx = tx.clone();
-                    let stdout_handle =
-                        thread::spawn(move || pump_stream(stdout, &stdout_tx, true));
-                    let stderr_handle =
-                        thread::spawn(move || pump_stream(stderr, &stderr_tx, false));
+                    let stdout_handle = thread::spawn(move || {
+                        pump_exec_stream_text(stdout, &stdout_tx, ExecPipeKind::Stdout);
+                    });
+                    let stderr_handle = thread::spawn(move || {
+                        pump_exec_stream_text(stderr, &stderr_tx, ExecPipeKind::Stderr);
+                    });
 
                     let start = Instant::now();
                     let mut killed = false;
@@ -2897,40 +2915,6 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
         let call_id_for_error = call_id.to_string();
 
         thread::spawn(move || {
-            #[derive(Clone, Copy)]
-            enum StreamKind {
-                Stdout,
-                Stderr,
-            }
-
-            struct StreamChunk {
-                kind: StreamKind,
-                bytes: Vec<u8>,
-            }
-
-            fn pump_stream(
-                mut reader: impl std::io::Read,
-                tx: &std::sync::mpsc::SyncSender<StreamChunk>,
-                kind: StreamKind,
-            ) {
-                let mut buf = [0u8; 8192];
-                loop {
-                    let read = match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(read) => read,
-                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
-                    };
-                    let chunk = StreamChunk {
-                        kind,
-                        bytes: buf[..read].to_vec(),
-                    };
-                    if tx.send(chunk).is_err() {
-                        break;
-                    }
-                }
-            }
-
             let result: std::result::Result<serde_json::Value, String> = (|| {
                 let mut command = Command::new(&cmd);
                 command
@@ -2947,12 +2931,14 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 let stdout = child.stdout.take().ok_or("Missing stdout pipe")?;
                 let stderr = child.stderr.take().ok_or("Missing stderr pipe")?;
 
-                let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(1024);
+                let (tx, rx) = std::sync::mpsc::sync_channel::<ExecCaptureFrame>(1024);
                 let tx_stdout = tx.clone();
-                let _stdout_handle =
-                    thread::spawn(move || pump_stream(stdout, &tx_stdout, StreamKind::Stdout));
-                let _stderr_handle =
-                    thread::spawn(move || pump_stream(stderr, &tx, StreamKind::Stderr));
+                let _stdout_handle = thread::spawn(move || {
+                    pump_exec_capture_bytes(stdout, &tx_stdout, ExecPipeKind::Stdout);
+                });
+                let _stderr_handle = thread::spawn(move || {
+                    pump_exec_capture_bytes(stderr, &tx, ExecPipeKind::Stderr);
+                });
 
                 let start = Instant::now();
                 let mut killed = false;
@@ -2963,8 +2949,8 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 let mut stdout_bytes_len = 0usize;
                 let mut stderr_bytes_len = 0usize;
 
-                let mut ingest_chunk = |kind: StreamKind, bytes: Vec<u8>| match kind {
-                    StreamKind::Stdout => {
+                let mut ingest_chunk = |kind: ExecPipeKind, bytes: Vec<u8>| match kind {
+                    ExecPipeKind::Stdout => {
                         stdout_bytes_len += bytes.len();
                         stdout_chunks.push_back(bytes);
                         while stdout_bytes_len > max_bytes && stdout_chunks.len() > 1 {
@@ -2973,7 +2959,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                             }
                         }
                     }
-                    StreamKind::Stderr => {
+                    ExecPipeKind::Stderr => {
                         stderr_bytes_len += bytes.len();
                         stderr_chunks.push_back(bytes);
                         while stderr_bytes_len > max_bytes && stderr_chunks.len() > 1 {
@@ -2984,10 +2970,28 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                     }
                 };
 
+                let mut handle_capture =
+                    |frame: ExecCaptureFrame| -> std::result::Result<(), String> {
+                        match frame {
+                            ExecCaptureFrame::Chunk { kind, bytes } => {
+                                ingest_chunk(kind, bytes);
+                                Ok(())
+                            }
+                            ExecCaptureFrame::Error(message) => Err(message),
+                        }
+                    };
+
                 let status = loop {
                     // Drain available
-                    while let Ok(chunk) = rx.try_recv() {
-                        ingest_chunk(chunk.kind, chunk.bytes);
+                    while let Ok(frame) = rx.try_recv() {
+                        if let Err(message) = handle_capture(frame) {
+                            if !killed {
+                                crate::tools::kill_process_group_tree(Some(pid));
+                                let _ = child.kill();
+                            }
+                            let _ = child.wait();
+                            return Err(message);
+                        }
                     }
 
                     if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
@@ -3010,15 +3014,28 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         }
                     }
 
-                    if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(10)) {
-                        ingest_chunk(chunk.kind, chunk.bytes);
+                    if let Ok(frame) = rx.recv_timeout(Duration::from_millis(10)) {
+                        if let Err(message) = handle_capture(frame) {
+                            if !killed {
+                                crate::tools::kill_process_group_tree(Some(pid));
+                                let _ = child.kill();
+                            }
+                            let _ = child.wait();
+                            return Err(message);
+                        }
                     }
                 };
 
                 let drain_deadline = Instant::now() + Duration::from_secs(2);
                 loop {
                     match rx.try_recv() {
-                        Ok(chunk) => ingest_chunk(chunk.kind, chunk.bytes),
+                        Ok(frame) => {
+                            if let Err(message) = handle_capture(frame) {
+                                drop(rx);
+                                let _ = child.wait();
+                                return Err(message);
+                            }
+                        }
                         Err(std::sync::mpsc::TryRecvError::Empty) => {
                             if Instant::now() >= drain_deadline {
                                 break;
@@ -4758,6 +4775,94 @@ mod tests {
                 .await
                 .expect("verify error");
         });
+    }
+
+    #[derive(Default)]
+    struct ScriptedIoReader {
+        steps: std::collections::VecDeque<std::io::Result<Vec<u8>>>,
+    }
+
+    impl std::io::Read for ScriptedIoReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.steps.is_empty() {
+                return Ok(0);
+            }
+
+            match self.steps.pop_front().expect("checked non-empty queue") {
+                Ok(bytes) => {
+                    let len = bytes.len().min(buf.len());
+                    buf[..len].copy_from_slice(&bytes[..len]);
+                    Ok(len)
+                }
+                Err(err) => Err(err),
+            }
+        }
+    }
+
+    #[test]
+    fn pump_exec_stream_text_emits_io_error_frame() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        pump_exec_stream_text(
+            ScriptedIoReader {
+                steps: vec![
+                    Ok(b"hello".to_vec()),
+                    Err(std::io::Error::other("stdout pipe failed")),
+                ]
+                .into(),
+            },
+            &tx,
+            ExecPipeKind::Stdout,
+        );
+        drop(tx);
+
+        let frames = rx.into_iter().collect::<Vec<_>>();
+        assert!(
+            matches!(frames.first(), Some(ExecStreamFrame::Stdout(chunk)) if chunk == "hello"),
+            "expected stdout chunk before error, got {frames_len} frames",
+            frames_len = frames.len()
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ExecStreamFrame::Error(message) if message.contains("stdout pipe failed"))),
+            "expected io error frame, got {} frames",
+            frames.len()
+        );
+    }
+
+    #[test]
+    fn pump_exec_capture_bytes_emits_io_error_frame() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        pump_exec_capture_bytes(
+            ScriptedIoReader {
+                steps: vec![
+                    Ok(vec![1_u8, 2, 3]),
+                    Err(std::io::Error::other("stderr pipe failed")),
+                ]
+                .into(),
+            },
+            &tx,
+            ExecPipeKind::Stderr,
+        );
+        drop(tx);
+
+        let frames = rx.into_iter().collect::<Vec<_>>();
+        assert!(
+            matches!(
+                frames.first(),
+                Some(ExecCaptureFrame::Chunk { kind: ExecPipeKind::Stderr, bytes })
+                    if bytes == &vec![1_u8, 2, 3]
+            ),
+            "expected stderr bytes before error, got {} frames",
+            frames.len()
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ExecCaptureFrame::Error(message) if message.contains("stderr pipe failed"))),
+            "expected io error frame, got {} frames",
+            frames.len()
+        );
     }
 
     #[test]
@@ -9758,7 +9863,7 @@ mod tests {
                     );
                 }
                 HostcallOutcome::Success(_) | HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
             }
         });
@@ -9784,10 +9889,10 @@ mod tests {
                     );
                 }
                 HostcallOutcome::Success(_) => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
                 HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
             }
         });
@@ -9814,10 +9919,10 @@ mod tests {
                     assert_eq!(code, "invalid_request");
                 }
                 HostcallOutcome::Success(_) => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
                 HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
             }
         });
@@ -9840,10 +9945,10 @@ mod tests {
                     assert_eq!(code, "invalid_request");
                 }
                 HostcallOutcome::Success(_) => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
                 HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
             }
         });
@@ -9866,10 +9971,10 @@ mod tests {
                     assert_eq!(code, "invalid_request");
                 }
                 HostcallOutcome::Success(_) => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
                 HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
             }
         });
@@ -9899,10 +10004,10 @@ mod tests {
                     );
                 }
                 HostcallOutcome::Success(_) => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
                 HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected hostcall outcome");
                 }
             }
         });
@@ -10019,10 +10124,10 @@ mod tests {
                         assert_eq!(code, "io", "session IO error for op '{op}' must be 'io'");
                     }
                     HostcallOutcome::Success(_) => {
-                        panic!();
+                        unreachable!("unexpected hostcall outcome");
                     }
                     HostcallOutcome::StreamChunk { .. } => {
-                        panic!();
+                        unreachable!("unexpected hostcall outcome");
                     }
                 }
             }
@@ -10106,7 +10211,7 @@ mod tests {
                             "alias pair ({snake}, {camel}) should produce same output"
                         );
                     }
-                    _ => panic!(),
+                    _ => unreachable!("unexpected hostcall outcome"),
                 }
             }
         });
@@ -10240,7 +10345,7 @@ mod tests {
                     );
                     assert!(result.error.is_none(), "success should not include error");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -10308,7 +10413,7 @@ mod tests {
                         Value::String("invalid_request".to_string())
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -10367,7 +10472,7 @@ mod tests {
                         Value::Number(serde_json::Number::from(1))
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -10396,10 +10501,10 @@ mod tests {
                     assert_eq!(value, serde_json::json!({ "events": [] }));
                 }
                 HostcallOutcome::Error { code, message } => {
-                    panic!();
+                    unreachable!("unexpected error outcome: {code}: {message}");
                 }
                 HostcallOutcome::StreamChunk { .. } => {
-                    panic!();
+                    unreachable!("unexpected stream outcome");
                 }
             }
         });
@@ -10805,7 +10910,7 @@ mod tests {
                         error.message
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -11401,7 +11506,7 @@ mod tests {
                 assert_eq!(plain_error.message, traced_error.message);
                 assert_eq!(plain_error.retryable, traced_error.retryable);
             }
-            _ => panic!(),
+            _ => unreachable!("unexpected hostcall protocol result"),
         }
     }
 
@@ -11818,7 +11923,7 @@ mod tests {
                     assert!(!result.is_error, "expected success: {result:?}");
                     assert!(result.output.is_object());
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -11863,7 +11968,7 @@ mod tests {
                         error.message
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -11903,7 +12008,7 @@ mod tests {
                     let error = result.error.expect("error");
                     assert_eq!(error.code, HostCallErrorCode::InvalidRequest);
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -11958,7 +12063,7 @@ mod tests {
                 ExtensionBody::HostResult(result) => {
                     assert!(!result.is_error, "expected success: {result:?}");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -12004,7 +12109,7 @@ mod tests {
                 ExtensionBody::HostResult(result) => {
                     assert!(!result.is_error, "expected success: {result:?}");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -12049,7 +12154,7 @@ mod tests {
                         error.message
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -12094,7 +12199,7 @@ mod tests {
                         error.message
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -12132,7 +12237,7 @@ mod tests {
                 ExtensionBody::HostResult(result) => {
                     assert!(!result.is_error, "log dispatch should succeed: {result:?}");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected protocol response: {other:?}"),
             }
         });
     }
@@ -13009,7 +13114,7 @@ mod tests {
                         "unexpected cancellation message: {message}"
                     );
                 }
-                other => panic!(),
+                other => unreachable!("unexpected hostcall outcome: {other:?}"),
             }
         });
     }
