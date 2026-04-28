@@ -6479,7 +6479,6 @@ export default function init(pi) {
         runtime.block_on(async move {
             let mut model = dummy_entry("test-model", false);
             model.model.provider = "test-provider".to_string();
-            model.model.context_window = 1;
 
             let agent = Agent::new(
                 Arc::new(NoopProvider),
@@ -6489,14 +6488,13 @@ export default function init(pi) {
             let mut inner_session = Session::in_memory();
             inner_session.header.provider = Some("test-provider".to_string());
             inner_session.header.model_id = Some("test-model".to_string());
-            let long_text = "a".repeat(400_000);
             inner_session.append_message(crate::session::SessionMessage::User {
-                content: UserContent::Text(long_text.clone()),
+                content: UserContent::Text("older user turn".to_string()),
                 timestamp: Some(0),
             });
             inner_session.append_message(crate::session::SessionMessage::Assistant {
                 message: AssistantMessage {
-                    content: vec![ContentBlock::Text(TextContent::new(long_text.clone()))],
+                    content: vec![ContentBlock::Text(TextContent::new("older assistant turn"))],
                     api: "test-api".to_string(),
                     provider: "test-provider".to_string(),
                     model: "test-model".to_string(),
@@ -6510,12 +6508,12 @@ export default function init(pi) {
                 },
             });
             inner_session.append_message(crate::session::SessionMessage::User {
-                content: UserContent::Text(long_text.clone()),
+                content: UserContent::Text("newer user turn".to_string()),
                 timestamp: Some(0),
             });
             inner_session.append_message(crate::session::SessionMessage::Assistant {
                 message: AssistantMessage {
-                    content: vec![ContentBlock::Text(TextContent::new(long_text))],
+                    content: vec![ContentBlock::Text(TextContent::new("newer assistant turn"))],
                     api: "test-api".to_string(),
                     provider: "test-provider".to_string(),
                     model: "test-model".to_string(),
@@ -6544,7 +6542,7 @@ export default function init(pi) {
             config.compaction = Some(crate::config::CompactionSettings {
                 enabled: Some(true),
                 reserve_tokens: Some(2),
-                keep_recent_tokens: Some(100),
+                keep_recent_tokens: Some(1),
             });
 
             let auth_dir = tempfile::tempdir().expect("tempdir");
