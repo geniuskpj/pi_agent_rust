@@ -4559,12 +4559,8 @@ async fn ingest_bash_rpc_frame(
             Ok(())
         }
         BashRpcStreamFrame::Error(message) => {
-            let error_message = bash_rpc_capture_error_message(
-                &message,
-                chunks,
-                *total_bytes,
-                *chunks_bytes,
-            );
+            let error_message =
+                bash_rpc_capture_error_message(&message, chunks, *total_bytes, *chunks_bytes);
             abandon_bash_rpc_spill_file(temp_file, temp_file_path, spill_failed);
             Err(Error::tool("bash", error_message))
         }
