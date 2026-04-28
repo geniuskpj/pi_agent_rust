@@ -1291,7 +1291,7 @@ const REGIME_CUSUM_DRIFT: f64 = 0.03;
 const REGIME_CUSUM_THRESHOLD: f64 = 1.6;
 const REGIME_BOCPD_HAZARD: f64 = 0.08;
 const REGIME_POSTERIOR_DECAY: f64 = 0.92;
-const REGIME_POSTERIOR_THRESHOLD: f64 = 0.45;
+const REGIME_POSTERIOR_THRESHOLD: f64 = 0.35;
 const REGIME_COOLDOWN_OBSERVATIONS: usize = 32;
 const REGIME_CONFIRMATION_STREAK: usize = 2;
 const REGIME_FALLBACK_QUEUE_DEPTH: f64 = 1.0;
@@ -1463,6 +1463,9 @@ struct RegimeObservation {
     upper_cusum: f64,
     lower_cusum: f64,
     change_posterior: f64,
+    cusum_triggered: bool,
+    posterior_triggered: bool,
+    regime_shift_candidate: bool,
     transition: Option<RegimeTransition>,
     mode: RegimeAdaptationMode,
     fallback_triggered: bool,
@@ -1638,6 +1641,9 @@ impl RegimeShiftDetector {
             upper_cusum: self.upper_cusum,
             lower_cusum: self.lower_cusum,
             change_posterior: self.change_posterior,
+            cusum_triggered,
+            posterior_triggered,
+            regime_shift_candidate: candidate_shift,
             transition,
             mode: self.mode,
             fallback_triggered,
@@ -12501,6 +12507,123 @@ mod tests {
         assert_eq!(
             detector.current_mode(),
             RegimeAdaptationMode::SequentialFastPath
+        );
+    }
+
+    fn synthetic_cusum_score_signal(score: f64) -> RegimeSignal {
+        RegimeSignal {
+            queue_depth: 0.0,
+            service_time_us: (score / 0.35) * 5_000.0,
+            opcode_entropy: 0.0,
+            llc_miss_rate: 0.0,
+        }
+    }
+
+    fn synthetic_cusum_score(index: usize, shift_score: f64) -> f64 {
+        const BASELINE_SCORE: f64 = 0.2;
+        const SIGMA_SCORE: f64 = 0.05;
+
+        let stationary_jitter = match index % 5 {
+            0 => -SIGMA_SCORE,
+            1 => -0.5 * SIGMA_SCORE,
+            2 => 0.0,
+            3 => 0.5 * SIGMA_SCORE,
+            _ => SIGMA_SCORE,
+        };
+        BASELINE_SCORE + stationary_jitter + shift_score
+    }
+
+    const SYNTHETIC_PRE_SHIFT_SAMPLES: usize = 500;
+    const SYNTHETIC_TOTAL_SAMPLES: usize = 1_000;
+
+    fn synthetic_cusum_detection_delay(k_sigma: f64) -> (usize, Option<usize>) {
+        const SIGMA_SCORE: f64 = 0.05;
+
+        let mut detector = RegimeShiftDetector::default();
+        let mut pre_shift_candidates = 0_usize;
+        let mut first_post_shift_delay = None;
+
+        for index in 0..SYNTHETIC_TOTAL_SAMPLES {
+            let shift_score = if index >= SYNTHETIC_PRE_SHIFT_SAMPLES {
+                k_sigma * SIGMA_SCORE
+            } else {
+                0.0
+            };
+            let observation = detector.observe(synthetic_cusum_score_signal(
+                synthetic_cusum_score(index, shift_score),
+            ));
+
+            if index < SYNTHETIC_PRE_SHIFT_SAMPLES {
+                assert!(
+                    !observation.cusum_triggered || !observation.posterior_triggered,
+                    "stationary prefix must not satisfy both CUSUM and posterior gates at index {index}: {observation:?}",
+                );
+                if observation.regime_shift_candidate {
+                    pre_shift_candidates = pre_shift_candidates.saturating_add(1);
+                }
+            } else if observation.regime_shift_candidate && first_post_shift_delay.is_none() {
+                first_post_shift_delay = Some(index - SYNTHETIC_PRE_SHIFT_SAMPLES + 1);
+            }
+        }
+
+        (pre_shift_candidates, first_post_shift_delay)
+    }
+
+    #[test]
+    fn cusum_regime_shift_detector_flags_synthetic_mean_shift_with_bounded_false_positives() {
+        // This pins the CUSUM+posterior candidate gate on sustained mean shifts
+        // while keeping the stationary prefix below the joint alarm threshold.
+        let (pre_shift_candidates_1sigma, delay_1sigma) = synthetic_cusum_detection_delay(1.0);
+        let (pre_shift_candidates_2sigma, delay_2sigma) = synthetic_cusum_detection_delay(2.0);
+        let (pre_shift_candidates_3sigma, delay_3sigma) = synthetic_cusum_detection_delay(3.0);
+        let (pre_shift_candidates_4sigma, delay_4sigma) = synthetic_cusum_detection_delay(4.0);
+
+        for (k_sigma, pre_shift_candidates) in [
+            (1.0, pre_shift_candidates_1sigma),
+            (2.0, pre_shift_candidates_2sigma),
+            (3.0, pre_shift_candidates_3sigma),
+            (4.0, pre_shift_candidates_4sigma),
+        ] {
+            assert!(
+                pre_shift_candidates <= SYNTHETIC_PRE_SHIFT_SAMPLES / 20,
+                "{k_sigma}σ case exceeded 5% pre-shift false-positive budget: {pre_shift_candidates}/{SYNTHETIC_PRE_SHIFT_SAMPLES}",
+            );
+        }
+
+        assert!(
+            delay_1sigma.is_some(),
+            "1σ sustained shift should trigger CUSUM candidate"
+        );
+        assert!(
+            delay_2sigma.is_some(),
+            "2σ sustained shift should trigger CUSUM candidate"
+        );
+        assert!(
+            delay_3sigma.is_some(),
+            "3σ sustained shift should trigger CUSUM candidate"
+        );
+        assert!(
+            delay_4sigma.is_some(),
+            "4σ sustained shift should trigger CUSUM candidate"
+        );
+        let delay_1sigma = delay_1sigma.unwrap_or(usize::MAX);
+        let delay_2sigma = delay_2sigma.unwrap_or(usize::MAX);
+        let delay_3sigma = delay_3sigma.unwrap_or(usize::MAX);
+        let delay_4sigma = delay_4sigma.unwrap_or(usize::MAX);
+
+        assert!(
+            delay_1sigma <= 128,
+            "1σ sustained shift should be detected within 128 samples, got {delay_1sigma}",
+        );
+        assert!(
+            delay_2sigma <= 64,
+            "2σ sustained shift should be detected within 64 samples, got {delay_2sigma}",
+        );
+        assert!(
+            delay_4sigma <= delay_3sigma
+                && delay_3sigma <= delay_2sigma
+                && delay_2sigma <= delay_1sigma,
+            "larger shifts should not detect later: 1σ={delay_1sigma}, 2σ={delay_2sigma}, 3σ={delay_3sigma}, 4σ={delay_4sigma}",
         );
     }
 

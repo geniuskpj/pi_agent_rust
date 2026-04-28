@@ -6282,17 +6282,21 @@ pub fn extract_import_names(source: &str, specifier: &str) -> Vec<String> {
 
 /// Parse a comma-separated list of import names, skipping `type`-only imports.
 fn parse_import_list(raw: &str, out: &mut Vec<String>) {
-    for token in raw.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
+    for import_item in raw.split(',') {
+        let import_item = import_item.trim();
+        if import_item.is_empty() {
             continue;
         }
         // Skip `type Foo` (TypeScript type-only import)
-        if token.starts_with("type ") || token.starts_with("type\t") {
+        if import_item.starts_with("type ") || import_item.starts_with("type\t") {
             continue;
         }
         // Handle `X as Y` — we export the original name `X`.
-        let name = token.split_whitespace().next().unwrap_or(token).trim();
+        let name = import_item
+            .split_whitespace()
+            .next()
+            .unwrap_or(import_item)
+            .trim();
         if !name.is_empty() {
             out.push(name.to_string());
         }
@@ -6444,27 +6448,27 @@ impl BindingScanner {
         false
     }
 
-    fn advance_state(&mut self, token: &str, name: &str) -> bool {
+    fn advance_state(&mut self, word: &str, name: &str) -> bool {
         self.state = match self.state {
-            DeclState::None => match token {
+            DeclState::None => match word {
                 "export" => DeclState::AfterExport,
                 "const" | "let" | "var" | "function" | "class" => DeclState::AfterDeclKeyword,
                 _ => DeclState::None,
             },
-            DeclState::AfterExport => match token {
+            DeclState::AfterExport => match word {
                 "const" | "let" | "var" | "function" | "class" => DeclState::AfterDeclKeyword,
                 "async" => DeclState::AfterAsync,
                 _ => DeclState::None,
             },
             DeclState::AfterAsync => {
-                if token == "function" {
+                if word == "function" {
                     DeclState::AfterDeclKeyword
                 } else {
                     DeclState::None
                 }
             }
             DeclState::AfterDeclKeyword => {
-                if token == name {
+                if word == name {
                     return true;
                 }
                 DeclState::None
@@ -6536,8 +6540,8 @@ fn source_declares_binding(source: &str, name: &str) -> bool {
         }
 
         if is_js_ident_start(b) {
-            let token = consume_js_identifier(source, bytes, &mut i);
-            if scanner.brace_depth == 0 && scanner.advance_state(token, name) {
+            let identifier = consume_js_identifier(source, bytes, &mut i);
+            if scanner.brace_depth == 0 && scanner.advance_state(identifier, name) {
                 return true;
             }
             if scanner.brace_depth > 0 {
@@ -9027,6 +9031,18 @@ export function spawn(command, args = [], options = {}) {
   const execOptions = {};
   if (opts.cwd !== undefined) execOptions.cwd = opts.cwd;
   if (opts.timeoutMs !== undefined) execOptions.timeout = opts.timeoutMs;
+  execOptions.stream = true;
+  execOptions.onChunk = (chunk) => {
+    if (child.__pi_done || !chunk || typeof chunk !== "object") {
+      return;
+    }
+    if (child.stdout && chunk.stdout !== undefined && chunk.stdout !== null && chunk.stdout !== "") {
+      child.stdout.emit("data", String(chunk.stdout));
+    }
+    if (child.stderr && chunk.stderr !== undefined && chunk.stderr !== null && chunk.stderr !== "") {
+      child.stderr.emit("data", String(chunk.stderr));
+    }
+  };
   const execPromise = pi.exec(cmd, argv, execOptions).then(
     (result) => ({ kind: "result", result }),
     (error) => ({ kind: "error", error }),
@@ -9041,12 +9057,6 @@ export function spawn(command, args = [], options = {}) {
 
     if (outcome.kind === "result") {
       const result = outcome.result || {};
-      if (child.stdout && result.stdout !== undefined && result.stdout !== null && result.stdout !== "") {
-        child.stdout.emit("data", String(result.stdout));
-      }
-      if (child.stderr && result.stderr !== undefined && result.stderr !== null && result.stderr !== "") {
-        child.stderr.emit("data", String(result.stderr));
-      }
       if (result.killed) {
         child.killed = true;
       }
@@ -23060,11 +23070,11 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                         );
                         return;
                     }
-                    other => panic!("unexpected hostcall at step {step}: {other:?}"),
+                    other => unreachable!("unexpected hostcall at step {step}: {other:?}"),
                 }
             }
 
-            panic!("did not observe a width-change reflow frame");
+            unreachable!("did not observe a width-change reflow frame");
         });
     }
 
@@ -24671,6 +24681,7 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn pijs_child_process_spawn_emits_data_and_close() {
         futures::executor::block_on(async {
             let clock = Arc::new(DeterministicClock::new(0));
@@ -24730,15 +24741,50 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 "unexpected hostcall kind: {:?}",
                 request.kind
             );
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
 
+            let call_id = request.call_id;
             runtime.complete_hostcall(
-                request.call_id,
-                HostcallOutcome::Success(serde_json::json!({
-                    "stdout": "line-1\n",
-                    "stderr": "warn-1\n",
-                    "code": 0,
-                    "killed": false
-                })),
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({ "stdout": "line-1\n" }),
+                    is_final: false,
+                },
+            );
+            assert!(runtime.tick().await.is_ok(), "tick stdout chunk 0");
+            runtime.complete_hostcall(
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 1,
+                    chunk: serde_json::json!({ "stderr": "warn-1\n" }),
+                    is_final: false,
+                },
+            );
+            assert!(runtime.tick().await.is_ok(), "tick stderr chunk 1");
+            runtime.complete_hostcall(
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 2,
+                    chunk: serde_json::json!({ "stdout": "line-2\n" }),
+                    is_final: false,
+                },
+            );
+            assert!(runtime.tick().await.is_ok(), "tick stdout chunk 2");
+            runtime.complete_hostcall(
+                call_id,
+                HostcallOutcome::StreamChunk {
+                    sequence: 3,
+                    chunk: serde_json::json!({
+                        "stdout": "line-final\n",
+                        "code": 0,
+                        "killed": false
+                    }),
+                    is_final: true,
+                },
             );
 
             drain_until_idle(&runtime, &clock).await;
@@ -24747,17 +24793,21 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(r["code"], serde_json::json!(0));
             assert_eq!(r["exitCode"], serde_json::json!(0));
             assert_eq!(r["exitSignal"], serde_json::Value::Null);
-            assert_eq!(r["stdout"], serde_json::json!("line-1\n"));
+            assert_eq!(
+                r["stdout"],
+                serde_json::json!("line-1\nline-2\nline-final\n")
+            );
             assert_eq!(r["stderr"], serde_json::json!("warn-1\n"));
             assert_eq!(r["killed"], serde_json::json!(false));
             assert_eq!(
                 r["events"],
-                serde_json::json!(["stdout", "stderr", "exit", "close"])
+                serde_json::json!(["stdout", "stderr", "stdout", "stdout", "exit", "close"])
             );
         });
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn pijs_child_process_spawn_forwards_timeout_option_to_hostcall() {
         futures::executor::block_on(async {
             let clock = Arc::new(DeterministicClock::new(0));
@@ -24799,15 +24849,21 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 Some(250),
                 "spawn timeout should be forwarded to hostcall options"
             );
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
 
             runtime.complete_hostcall(
                 request.call_id,
-                HostcallOutcome::Success(serde_json::json!({
-                    "stdout": "",
-                    "stderr": "",
-                    "code": 0,
-                    "killed": true
-                })),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({
+                        "code": 0,
+                        "killed": true
+                    }),
+                    is_final: true,
+                },
             );
 
             drain_until_idle(&runtime, &clock).await;
@@ -24819,6 +24875,7 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn pijs_child_process_exec_returns_child_and_forwards_timeout() {
         futures::executor::block_on(async {
             let clock = Arc::new(DeterministicClock::new(0));
@@ -24861,15 +24918,40 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 serde_json::json!(["-c", "echo hello-exec"])
             );
             assert_eq!(request.payload["options"]["timeout"].as_i64(), Some(321));
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
 
+            let call_id = request.call_id;
             runtime.complete_hostcall(
-                request.call_id,
-                HostcallOutcome::Success(serde_json::json!({
-                    "stdout": "hello-exec\n",
-                    "stderr": "",
-                    "code": 0,
-                    "killed": false
-                })),
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({ "stdout": "hello-" }),
+                    is_final: false,
+                },
+            );
+            assert!(runtime.tick().await.is_ok(), "tick exec stdout chunk 0");
+            runtime.complete_hostcall(
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 1,
+                    chunk: serde_json::json!({ "stdout": "exec\n" }),
+                    is_final: false,
+                },
+            );
+            assert!(runtime.tick().await.is_ok(), "tick exec stdout chunk 1");
+            runtime.complete_hostcall(
+                call_id,
+                HostcallOutcome::StreamChunk {
+                    sequence: 2,
+                    chunk: serde_json::json!({
+                        "code": 0,
+                        "killed": false
+                    }),
+                    is_final: true,
+                },
             );
 
             drain_until_idle(&runtime, &clock).await;
@@ -24885,6 +24967,7 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn pijs_child_process_exec_file_returns_child_and_forwards_timeout() {
         futures::executor::block_on(async {
             let clock = Arc::new(DeterministicClock::new(0));
@@ -24921,15 +25004,31 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             );
             assert_eq!(request.payload["args"], serde_json::json!(["hello-file"]));
             assert_eq!(request.payload["options"]["timeout"].as_i64(), Some(222));
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
 
+            let call_id = request.call_id;
             runtime.complete_hostcall(
-                request.call_id,
-                HostcallOutcome::Success(serde_json::json!({
-                    "stdout": "hello-file\n",
-                    "stderr": "",
-                    "code": 0,
-                    "killed": false
-                })),
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({ "stdout": "hello-file\n" }),
+                    is_final: false,
+                },
+            );
+            assert!(runtime.tick().await.is_ok(), "tick execFile stdout chunk");
+            runtime.complete_hostcall(
+                call_id,
+                HostcallOutcome::StreamChunk {
+                    sequence: 1,
+                    chunk: serde_json::json!({
+                        "code": 0,
+                        "killed": false
+                    }),
+                    is_final: true,
+                },
             );
 
             drain_until_idle(&runtime, &clock).await;
@@ -24944,6 +25043,7 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn pijs_child_process_process_kill_targets_spawned_pid() {
         futures::executor::block_on(async {
             let clock = Arc::new(DeterministicClock::new(0));
@@ -24982,14 +25082,20 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             let mut requests = runtime.drain_hostcall_requests();
             assert_eq!(requests.len(), 1);
             let request = requests.pop_front().expect("exec hostcall");
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
             runtime.complete_hostcall(
                 request.call_id,
-                HostcallOutcome::Success(serde_json::json!({
-                    "stdout": "",
-                    "stderr": "",
-                    "code": 0,
-                    "killed": false
-                })),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({
+                        "code": 0,
+                        "killed": false
+                    }),
+                    is_final: true,
+                },
             );
 
             drain_until_idle(&runtime, &clock).await;
@@ -25002,6 +25108,7 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn pijs_child_process_denied_exec_emits_error_and_close() {
         futures::executor::block_on(async {
             let clock = Arc::new(DeterministicClock::new(0));
@@ -25036,6 +25143,10 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             let mut requests = runtime.drain_hostcall_requests();
             assert_eq!(requests.len(), 1);
             let request = requests.pop_front().expect("exec hostcall");
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
             runtime.complete_hostcall(
                 request.call_id,
                 HostcallOutcome::Error {
