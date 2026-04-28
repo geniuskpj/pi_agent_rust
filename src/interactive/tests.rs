@@ -280,3 +280,64 @@ fn render_header_uses_cycle_thinking_binding_hint() {
     assert!(header.contains("shift+tab: thinking"), "header: {header}");
     assert!(!header.contains("ctrl+t: thinking"), "header: {header}");
 }
+
+#[test]
+fn enter_accepts_highlighted_autocomplete_item() {
+    // Regression for issue #61: with the slash dropdown open and an entry
+    // highlighted (e.g. user pressed Down to select `/model`), pressing Enter
+    // must accept the highlighted item — matching the dropdown's own footer
+    // hint "Enter/Tab accept" — not submit the raw `/` typed so far.
+    use crate::autocomplete::{AutocompleteItem, AutocompleteItemKind};
+    use bubbletea::{KeyMsg, KeyType, Message, Model as BubbleteaModel};
+
+    let dir = tempdir();
+    let mut app = build_test_app(dir.path().to_path_buf());
+
+    app.input.set_value("/");
+    app.autocomplete.open = true;
+    app.autocomplete.items = vec![AutocompleteItem {
+        kind: AutocompleteItemKind::SlashCommand,
+        label: "/model".to_string(),
+        insert: "/model ".to_string(),
+        description: None,
+    }];
+    app.autocomplete.selected = Some(0);
+    app.autocomplete.replace_range = 0..1;
+
+    let _ = app.update(Message::new(KeyMsg::from_type(KeyType::Enter)));
+
+    assert_eq!(
+        app.input.value(),
+        "/model ",
+        "Enter with a highlighted dropdown entry must accept the item"
+    );
+    assert!(
+        !app.autocomplete.open,
+        "Accepting via Enter should close the dropdown"
+    );
+}
+
+#[test]
+fn enter_submits_when_no_autocomplete_item_highlighted() {
+    // The dual contract for issue #61: when the dropdown is open but the
+    // user has not navigated to any item (selected.is_none()), Enter must
+    // still submit the raw editor contents — i.e. behavior is unchanged
+    // for users who never pressed Down.
+    use bubbletea::{KeyMsg, KeyType, Message, Model as BubbleteaModel};
+
+    let dir = tempdir();
+    let mut app = build_test_app(dir.path().to_path_buf());
+
+    app.input.set_value("/foo");
+    app.autocomplete.open = true;
+    app.autocomplete.items.clear();
+    app.autocomplete.selected = None;
+    app.autocomplete.replace_range = 0..4;
+
+    let _ = app.update(Message::new(KeyMsg::from_type(KeyType::Enter)));
+
+    assert!(
+        !app.autocomplete.open,
+        "Enter with no selection should still close the dropdown"
+    );
+}

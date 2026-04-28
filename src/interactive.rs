@@ -3111,7 +3111,13 @@ impl PiApp {
 
             // Handle autocomplete navigation when dropdown is open.
             //
-            // IMPORTANT: Enter submits the current editor contents; Tab accepts autocomplete.
+            // Tab always accepts the highlighted item (selecting the first item
+            // first when nothing is highlighted yet). Enter accepts only when
+            // the user has actively navigated to a specific item — matching
+            // the dropdown footer hint "Enter/Tab accept" and the convention
+            // used by fzf, vim completion, Slack/IRC slash menus, etc. With
+            // no active highlight, Enter falls through to submit the raw
+            // editor contents as before.
             if self.autocomplete.open {
                 match key.key_type {
                     KeyType::Up => {
@@ -3123,12 +3129,9 @@ impl PiApp {
                         return None;
                     }
                     KeyType::Tab => {
-                        // If nothing is selected yet, select the first item
-                        // so Tab always accepts something when the popup is open.
                         if self.autocomplete.selected.is_none() {
                             self.autocomplete.select_next();
                         }
-                        // Accept the selected item
                         if let Some(item) = self.autocomplete.selected_item().cloned() {
                             self.accept_autocomplete(&item);
                         }
@@ -3136,7 +3139,11 @@ impl PiApp {
                         return None;
                     }
                     KeyType::Enter => {
-                        // Close autocomplete and allow Enter to submit.
+                        if let Some(item) = self.autocomplete.selected_item().cloned() {
+                            self.accept_autocomplete(&item);
+                            self.autocomplete.close();
+                            return None;
+                        }
                         self.autocomplete.close();
                     }
                     KeyType::Esc => {
