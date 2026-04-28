@@ -102,6 +102,16 @@ fn get_extension_flag_fixtures() -> Vec<ExtensionFlagFixture> {
     ]
 }
 
+fn assert_extension_flag(parsed: &pi::cli::ParsedCli, name: &str, value: Option<&str>) {
+    assert!(
+        parsed
+            .extension_flags
+            .iter()
+            .any(|flag| flag.name == name && flag.value.as_deref() == value),
+        "missing extension flag {name}={value:?}"
+    );
+}
+
 #[test]
 fn test_extension_flag_passthrough_fixtures() {
     let fixtures = get_extension_flag_fixtures();
@@ -122,90 +132,35 @@ fn test_extension_flag_passthrough_fixtures() {
             "mixed_builtin_and_extension_flags" => {
                 assert_eq!(parsed.cli.model.as_deref(), Some("claude-sonnet-4"));
                 assert_eq!(parsed.cli.thinking.as_deref(), Some("medium"));
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "debug" && f.value == Some("true".to_string()))
-                );
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "custom-flag" && f.value == Some("value".to_string()))
-                );
+                assert_extension_flag(&parsed, "debug", Some("true"));
+                assert_extension_flag(&parsed, "custom-flag", Some("value"));
             }
             "boolean_extension_flags_mixed_with_builtin" => {
                 assert!(parsed.cli.print);
                 assert_eq!(parsed.cli.tools, "grep,edit");
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "unknown-flag" && f.value.is_none())
-                );
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "dry-run" && f.value.is_none())
-                );
+                assert_extension_flag(&parsed, "unknown-flag", None);
+                assert_extension_flag(&parsed, "dry-run", None);
             }
             "equals_syntax_extension_flags" => {
                 assert_eq!(parsed.cli.model.as_deref(), Some("gpt-4"));
                 assert!(parsed.cli.r#continue);
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "level" && f.value == Some("debug".to_string()))
-                );
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "format" && f.value == Some("json".to_string()))
-                );
+                assert_extension_flag(&parsed, "level", Some("debug"));
+                assert_extension_flag(&parsed, "format", Some("json"));
             }
             "edge_case_flag_ordering" => {
                 assert_eq!(parsed.cli.model.as_deref(), Some("claude-opus-4"));
                 assert_eq!(parsed.cli.thinking.as_deref(), Some("high"));
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "custom-first" && f.value.is_none())
-                );
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "custom-middle" && f.value == Some("value".to_string()))
-                );
+                assert_extension_flag(&parsed, "custom-first", None);
+                assert_extension_flag(&parsed, "custom-middle", Some("value"));
                 // Note: custom-last might not be parsed if it appears after message args start
             }
             "complex_mixed_scenario" => {
                 assert!(parsed.cli.resume);
                 assert_eq!(parsed.cli.provider.as_deref(), Some("anthropic"));
                 assert!(parsed.cli.no_tools);
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "ext-level" && f.value == Some("trace".to_string()))
-                );
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "ext-timeout" && f.value == Some("30".to_string()))
-                );
-                assert!(
-                    parsed
-                        .extension_flags
-                        .iter()
-                        .any(|f| f.name == "ext-format" && f.value.is_none())
-                );
+                assert_extension_flag(&parsed, "ext-level", Some("trace"));
+                assert_extension_flag(&parsed, "ext-timeout", Some("30"));
+                assert_extension_flag(&parsed, "ext-format", None);
             }
             _ => panic!("Unknown fixture: {}", fixture.name),
         }
