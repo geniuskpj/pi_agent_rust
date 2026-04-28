@@ -869,12 +869,9 @@ fn extract_import_specifiers_simple(line: &str) -> Vec<String> {
 /// Extract a single or double quoted string from the start of text.
 fn extract_quoted_string(text: &str) -> Option<String> {
     let trimmed = text.trim();
-    let (quote, rest) = if let Some(rest) = trimmed.strip_prefix('"') {
-        ('"', rest)
-    } else if let Some(rest) = trimmed.strip_prefix('\'') {
-        ('\'', rest)
-    } else {
-        return None;
+    let (quote, rest) = match trimmed.strip_prefix('"') {
+        Some(rest) => ('"', rest),
+        None => ('\'', trimmed.strip_prefix('\'')?),
     };
 
     rest.find(quote).map(|end| rest[..end].to_string())

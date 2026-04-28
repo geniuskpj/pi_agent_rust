@@ -1824,7 +1824,6 @@ impl PackageManager {
                     repo: _,
                     host,
                     path,
-                    r#ref: _,
                     ..
                 } => {
                     // Offload git_install_path

@@ -27351,11 +27351,8 @@ impl ExtensionManager {
         let dec = decision?;
 
         if let Some(range) = &dec.version_range {
-            if let Some(version) = extension_version {
-                if !check_version_constraint(&version, range) {
-                    return None;
-                }
-            } else {
+            let version = extension_version?;
+            if !check_version_constraint(&version, range) {
                 return None;
             }
         }
