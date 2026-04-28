@@ -230,6 +230,144 @@ fn pump_exec_capture_bytes<R: std::io::Read>(
     }
 }
 
+fn exec_capture_error_message(
+    message: &str,
+    stdout_chunks: &VecDeque<Vec<u8>>,
+    stdout_total_bytes: usize,
+    stderr_chunks: &VecDeque<Vec<u8>>,
+    stderr_total_bytes: usize,
+) -> String {
+    let stdout = exec_capture_error_section(stdout_chunks, stdout_total_bytes);
+    let stderr = exec_capture_error_section(stderr_chunks, stderr_total_bytes);
+    if stdout.is_none() && stderr.is_none() {
+        return message.to_string();
+    }
+
+    let mut error_message = message.to_string();
+    error_message.push_str("\n\nPartial output before failure:");
+
+    if let Some((content, truncated)) = stdout {
+        error_message.push_str("\n\n[stdout]\n");
+        error_message.push_str(&content);
+        if truncated {
+            error_message.push_str("\n[stdout partial output truncated before failure]");
+        }
+    }
+
+    if let Some((content, truncated)) = stderr {
+        error_message.push_str("\n\n[stderr]\n");
+        error_message.push_str(&content);
+        if truncated {
+            error_message.push_str("\n[stderr partial output truncated before failure]");
+        }
+    }
+
+    error_message
+}
+
+fn exec_capture_error_section(
+    chunks: &VecDeque<Vec<u8>>,
+    total_bytes: usize,
+) -> Option<(String, bool)> {
+    if total_bytes == 0 {
+        return None;
+    }
+
+    let retained_bytes: usize = chunks.iter().map(std::vec::Vec::len).sum();
+    let mut raw = Vec::with_capacity(retained_bytes);
+    for chunk in chunks {
+        raw.extend_from_slice(chunk);
+    }
+
+    let full_text = String::from_utf8_lossy(&raw).into_owned();
+    let truncation = crate::tools::truncate_tail(
+        full_text,
+        crate::tools::DEFAULT_MAX_LINES,
+        crate::tools::DEFAULT_MAX_BYTES,
+    );
+    let content = if truncation.content.is_empty() {
+        "(no output)".to_string()
+    } else {
+        truncation.content
+    };
+    Some((
+        content,
+        truncation.truncated || total_bytes > retained_bytes,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ingest_exec_capture_chunk(
+    kind: ExecPipeKind,
+    bytes: Vec<u8>,
+    stdout_chunks: &mut VecDeque<Vec<u8>>,
+    stdout_total_bytes: &mut usize,
+    stdout_bytes_len: &mut usize,
+    stderr_chunks: &mut VecDeque<Vec<u8>>,
+    stderr_total_bytes: &mut usize,
+    stderr_bytes_len: &mut usize,
+    max_bytes: usize,
+) {
+    match kind {
+        ExecPipeKind::Stdout => {
+            *stdout_total_bytes += bytes.len();
+            *stdout_bytes_len += bytes.len();
+            stdout_chunks.push_back(bytes);
+            while *stdout_bytes_len > max_bytes && stdout_chunks.len() > 1 {
+                if let Some(front) = stdout_chunks.pop_front() {
+                    *stdout_bytes_len -= front.len();
+                }
+            }
+        }
+        ExecPipeKind::Stderr => {
+            *stderr_total_bytes += bytes.len();
+            *stderr_bytes_len += bytes.len();
+            stderr_chunks.push_back(bytes);
+            while *stderr_bytes_len > max_bytes && stderr_chunks.len() > 1 {
+                if let Some(front) = stderr_chunks.pop_front() {
+                    *stderr_bytes_len -= front.len();
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_exec_capture_frame(
+    frame: ExecCaptureFrame,
+    stdout_chunks: &mut VecDeque<Vec<u8>>,
+    stdout_total_bytes: &mut usize,
+    stdout_bytes_len: &mut usize,
+    stderr_chunks: &mut VecDeque<Vec<u8>>,
+    stderr_total_bytes: &mut usize,
+    stderr_bytes_len: &mut usize,
+    max_bytes: usize,
+) -> std::result::Result<(), String> {
+    match frame {
+        ExecCaptureFrame::Chunk { kind, bytes } => {
+            ingest_exec_capture_chunk(
+                kind,
+                bytes,
+                stdout_chunks,
+                stdout_total_bytes,
+                stdout_bytes_len,
+                stderr_chunks,
+                stderr_total_bytes,
+                stderr_bytes_len,
+                max_bytes,
+            );
+            Ok(())
+        }
+        ExecCaptureFrame::Error(message) => Err(exec_capture_error_message(
+            &message,
+            stdout_chunks,
+            *stdout_total_bytes,
+            stderr_chunks,
+            *stderr_total_bytes,
+        )),
+    }
+}
+
 /// Coordinates hostcall dispatch between the JS extension runtime and Rust handlers.
 pub struct ExtensionDispatcher<C: SchedulerClock = WallClock> {
     /// Runtime bridge used by the dispatcher.
@@ -2946,45 +3084,24 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
 
                 let mut stdout_chunks = std::collections::VecDeque::new();
                 let mut stderr_chunks = std::collections::VecDeque::new();
+                let mut stdout_total_bytes = 0usize;
+                let mut stderr_total_bytes = 0usize;
                 let mut stdout_bytes_len = 0usize;
                 let mut stderr_bytes_len = 0usize;
-
-                let mut ingest_chunk = |kind: ExecPipeKind, bytes: Vec<u8>| match kind {
-                    ExecPipeKind::Stdout => {
-                        stdout_bytes_len += bytes.len();
-                        stdout_chunks.push_back(bytes);
-                        while stdout_bytes_len > max_bytes && stdout_chunks.len() > 1 {
-                            if let Some(front) = stdout_chunks.pop_front() {
-                                stdout_bytes_len -= front.len();
-                            }
-                        }
-                    }
-                    ExecPipeKind::Stderr => {
-                        stderr_bytes_len += bytes.len();
-                        stderr_chunks.push_back(bytes);
-                        while stderr_bytes_len > max_bytes && stderr_chunks.len() > 1 {
-                            if let Some(front) = stderr_chunks.pop_front() {
-                                stderr_bytes_len -= front.len();
-                            }
-                        }
-                    }
-                };
-
-                let mut handle_capture =
-                    |frame: ExecCaptureFrame| -> std::result::Result<(), String> {
-                        match frame {
-                            ExecCaptureFrame::Chunk { kind, bytes } => {
-                                ingest_chunk(kind, bytes);
-                                Ok(())
-                            }
-                            ExecCaptureFrame::Error(message) => Err(message),
-                        }
-                    };
 
                 let status = loop {
                     // Drain available
                     while let Ok(frame) = rx.try_recv() {
-                        if let Err(message) = handle_capture(frame) {
+                        if let Err(message) = handle_exec_capture_frame(
+                            frame,
+                            &mut stdout_chunks,
+                            &mut stdout_total_bytes,
+                            &mut stdout_bytes_len,
+                            &mut stderr_chunks,
+                            &mut stderr_total_bytes,
+                            &mut stderr_bytes_len,
+                            max_bytes,
+                        ) {
                             if !killed {
                                 crate::tools::kill_process_group_tree(Some(pid));
                                 let _ = child.kill();
@@ -3015,7 +3132,16 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                     }
 
                     if let Ok(frame) = rx.recv_timeout(Duration::from_millis(10)) {
-                        if let Err(message) = handle_capture(frame) {
+                        if let Err(message) = handle_exec_capture_frame(
+                            frame,
+                            &mut stdout_chunks,
+                            &mut stdout_total_bytes,
+                            &mut stdout_bytes_len,
+                            &mut stderr_chunks,
+                            &mut stderr_total_bytes,
+                            &mut stderr_bytes_len,
+                            max_bytes,
+                        ) {
                             if !killed {
                                 crate::tools::kill_process_group_tree(Some(pid));
                                 let _ = child.kill();
@@ -3030,7 +3156,16 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 loop {
                     match rx.try_recv() {
                         Ok(frame) => {
-                            if let Err(message) = handle_capture(frame) {
+                            if let Err(message) = handle_exec_capture_frame(
+                                frame,
+                                &mut stdout_chunks,
+                                &mut stdout_total_bytes,
+                                &mut stdout_bytes_len,
+                                &mut stderr_chunks,
+                                &mut stderr_total_bytes,
+                                &mut stderr_bytes_len,
+                                max_bytes,
+                            ) {
                                 drop(rx);
                                 let _ = child.wait();
                                 return Err(message);
@@ -4863,6 +4998,49 @@ mod tests {
             "expected io error frame, got {} frames",
             frames.len()
         );
+    }
+
+    #[test]
+    fn exec_capture_error_message_includes_stdout_and_stderr_tail() {
+        let stdout_chunks = VecDeque::from([b"partial stdout".to_vec()]);
+        let stderr_chunks = VecDeque::from([b"partial stderr".to_vec()]);
+
+        let message = exec_capture_error_message(
+            "stdout pipe failed",
+            &stdout_chunks,
+            b"partial stdout".len(),
+            &stderr_chunks,
+            b"partial stderr".len(),
+        );
+
+        assert!(message.contains("stdout pipe failed"));
+        assert!(message.contains("Partial output before failure"));
+        assert!(message.contains("[stdout]"));
+        assert!(message.contains("partial stdout"));
+        assert!(message.contains("[stderr]"));
+        assert!(message.contains("partial stderr"));
+        assert!(!message.contains("truncated before failure"));
+    }
+
+    #[test]
+    fn exec_capture_error_message_marks_truncated_stream_tails() {
+        let stdout_chunks = VecDeque::from([b"stdout tail".to_vec()]);
+        let stderr_chunks = VecDeque::from([b"stderr tail".to_vec()]);
+
+        let message = exec_capture_error_message(
+            "stderr pipe failed",
+            &stdout_chunks,
+            b"stdout tail".len() + 17,
+            &stderr_chunks,
+            b"stderr tail".len() + 23,
+        );
+
+        assert!(message.contains("[stdout]"));
+        assert!(message.contains("stdout tail"));
+        assert!(message.contains("[stdout partial output truncated before failure]"));
+        assert!(message.contains("[stderr]"));
+        assert!(message.contains("stderr tail"));
+        assert!(message.contains("[stderr partial output truncated before failure]"));
     }
 
     #[test]
