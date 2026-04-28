@@ -297,9 +297,10 @@ struct RpcDifferentialTester {
 impl RpcDifferentialTester {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = tempfile::tempdir()?;
-        let rust_pi_path = std::env::var("CARGO_TARGET_DIR")
-            .map(|dir| format!("{}/debug/pi", dir))
-            .unwrap_or_else(|_| "target/debug/pi".to_string());
+        let rust_pi_path = std::env::var("CARGO_TARGET_DIR").map_or_else(
+            |_| "target/debug/pi".to_string(),
+            |dir| format!("{dir}/debug/pi"),
+        );
 
         Ok(Self {
             temp_dir,
@@ -316,7 +317,7 @@ impl RpcDifferentialTester {
             .spawn()?;
 
         let stdin = child.stdin.as_mut().unwrap();
-        writeln!(stdin, "{}", input)?;
+        writeln!(stdin, "{input}")?;
         drop(child.stdin.take());
 
         let output = child.wait_with_output()?;
@@ -329,10 +330,11 @@ impl RpcDifferentialTester {
         }
 
         // Return error response if parsing fails
+        let stderr = String::from_utf8_lossy(&output.stderr);
         Ok(json!({
             "type": "response",
             "success": false,
-            "error": format!("Failed to parse response: {}", String::from_utf8_lossy(&output.stderr))
+            "error": format!("Failed to parse response: {stderr}")
         }))
     }
 
@@ -369,12 +371,11 @@ fn g05_rpc_differential_basic_command_execution() {
 
     let cargo_target_dir =
         std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let rust_pi_path = format!("{}/debug/pi", cargo_target_dir);
+    let rust_pi_path = format!("{cargo_target_dir}/debug/pi");
 
     if !std::path::Path::new(&rust_pi_path).exists() {
         eprintln!(
-            "Warning: Rust pi binary not found at {}. Skipping differential test.",
-            rust_pi_path
+            "Warning: Rust pi binary not found at {rust_pi_path}. Skipping differential test."
         );
         return;
     }
@@ -382,19 +383,16 @@ fn g05_rpc_differential_basic_command_execution() {
     let tester = match RpcDifferentialTester::new() {
         Ok(t) => t,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to create differential tester: {}. Skipping test.",
-                e
-            );
+            eprintln!("Warning: Failed to create differential tester: {e}. Skipping test.");
             return;
         }
     };
 
-    let mut successful_scenarios = 0;
-    let mut total_scenarios = 0;
+    let mut successful_scenarios = 0u32;
+    let mut total_scenarios = 0u32;
 
     // Test all command scenarios
-    for scenario in command_scenarios.iter() {
+    for scenario in command_scenarios {
         total_scenarios += 1;
         let scenario_id = scenario["id"].as_str().unwrap_or("unknown");
 
@@ -403,17 +401,20 @@ fn g05_rpc_differential_basic_command_execution() {
                 if success {
                     successful_scenarios += 1;
                 }
-                println!(
-                    "Scenario '{}': {}",
-                    scenario_id,
-                    if success { "PASS" } else { "FAIL" }
-                );
+                let status = if success { "PASS" } else { "FAIL" };
+                println!("Scenario '{scenario_id}': {status}");
             }
             Err(e) => {
-                println!("Scenario '{}': ERROR - {}", scenario_id, e);
+                println!("Scenario '{scenario_id}': ERROR - {e}");
             }
         }
     }
+
+    assert!(
+        total_scenarios > 0,
+        "Should have tested at least one scenario"
+    );
+    let success_rate = f64::from(successful_scenarios) / f64::from(total_scenarios);
 
     println!(
         "\n=== RPC Basic Differential Test Summary ===\n\
@@ -422,17 +423,10 @@ fn g05_rpc_differential_basic_command_execution() {
          Success rate: {:.1}%\n",
         total_scenarios,
         successful_scenarios,
-        (successful_scenarios as f64 / total_scenarios as f64) * 100.0
-    );
-
-    // Verify that we tested scenarios and most passed
-    assert!(
-        total_scenarios > 0,
-        "Should have tested at least one scenario"
+        success_rate * 100.0
     );
 
     // Require at least 80% success rate for the differential test to pass
-    let success_rate = successful_scenarios as f64 / total_scenarios as f64;
     assert!(
         success_rate >= 0.8,
         "RPC differential test success rate too low: {:.1}% (need >= 80%)",
@@ -453,7 +447,7 @@ fn g05_rpc_differential_basic_command_execution() {
 /// The canonicalization process ensures deterministic comparisons by:
 ///
 /// 1. **Volatile field removal**: Strips timestamp, sessionId, durationMs, pid, requestId fields
-/// 2. **Tool execution sorting**: Sorts parallel tool_execution events by toolCallId
+/// 2. **Tool execution sorting**: Sorts parallel `tool_execution` events by toolCallId
 /// 3. **Text delta normalization**: Preserves content while normalizing chunking format
 /// 4. **Recursive object canonicalization**: Applies canonicalization recursively to nested structures
 /// 5. **Stable transformation**: Ensures canonicalize(canonicalize(x)) == canonicalize(x)
@@ -467,12 +461,11 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
 
     let cargo_target_dir =
         std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let rust_pi_path = format!("{}/debug/pi", cargo_target_dir);
+    let rust_pi_path = format!("{cargo_target_dir}/debug/pi");
 
     if !std::path::Path::new(&rust_pi_path).exists() {
         eprintln!(
-            "Warning: Rust pi binary not found at {}. Skipping comprehensive differential test.",
-            rust_pi_path
+            "Warning: Rust pi binary not found at {rust_pi_path}. Skipping comprehensive differential test."
         );
         return;
     }
@@ -480,15 +473,12 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
     let tester = match RpcDifferentialTester::new() {
         Ok(t) => t,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to create differential tester: {}. Skipping test.",
-                e
-            );
+            eprintln!("Warning: Failed to create differential tester: {e}. Skipping test.");
             return;
         }
     };
 
-    let mut successful_scenarios = 0;
+    let mut successful_scenarios = 0usize;
     let mut failed_scenarios = Vec::new();
     let total_scenarios = command_scenarios.len();
 
@@ -500,24 +490,29 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
         match tester.run_command_scenario(scenario) {
             Ok(true) => {
                 successful_scenarios += 1;
-                println!("✓ {}: {} - PASS", scenario_id, command);
+                println!("✓ {scenario_id}: {command} - PASS");
             }
             Ok(false) => {
                 failed_scenarios.push(format!(
-                    "{}: {} - Response structure mismatch",
-                    scenario_id, command
+                    "{scenario_id}: {command} - Response structure mismatch"
                 ));
-                println!("✗ {}: {} - FAIL", scenario_id, command);
+                println!("✗ {scenario_id}: {command} - FAIL");
             }
             Err(e) => {
-                failed_scenarios.push(format!(
-                    "{}: {} - Execution error: {}",
-                    scenario_id, command, e
-                ));
-                println!("✗ {}: {} - ERROR: {}", scenario_id, command, e);
+                failed_scenarios.push(format!("{scenario_id}: {command} - Execution error: {e}"));
+                println!("✗ {scenario_id}: {command} - ERROR: {e}");
             }
         }
     }
+
+    assert!(
+        total_scenarios > 0,
+        "Should have tested at least one command scenario"
+    );
+    let successful_scenarios_u32 =
+        u32::try_from(successful_scenarios).expect("successful scenario count fits in u32");
+    let total_scenarios_u32 = u32::try_from(total_scenarios).expect("scenario count fits in u32");
+    let success_rate = f64::from(successful_scenarios_u32) / f64::from(total_scenarios_u32);
 
     println!(
         "\n=== G05 RPC Comprehensive Differential Test Summary ===\n\
@@ -528,25 +523,23 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
         total_scenarios,
         successful_scenarios,
         failed_scenarios.len(),
-        (successful_scenarios as f64 / total_scenarios as f64) * 100.0
+        success_rate * 100.0
     );
 
     if !failed_scenarios.is_empty() {
         println!("Failed scenarios:");
         for failure in &failed_scenarios {
-            println!("  - {}", failure);
+            println!("  - {failure}");
         }
     }
 
     // Verify we covered the expected number of scenarios
     assert_eq!(
         total_scenarios, 29,
-        "Expected to test 29 command scenarios as per surface diff, got {}",
-        total_scenarios
+        "Expected to test 29 command scenarios as per surface diff, got {total_scenarios}"
     );
 
     // Require high success rate for comprehensive coverage
-    let success_rate = successful_scenarios as f64 / total_scenarios as f64;
     assert!(
         success_rate >= 0.75,
         "RPC comprehensive differential test success rate too low: {:.1}% (need >= 75%)",
@@ -554,8 +547,7 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
     );
 
     println!(
-        "✅ G05 RPC differential harness: {} scenarios with {:.1}% success rate",
-        total_scenarios,
+        "✅ G05 RPC differential harness: {total_scenarios} scenarios with {:.1}% success rate",
         success_rate * 100.0
     );
 }

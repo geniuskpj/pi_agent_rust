@@ -306,12 +306,7 @@ fn test_complex_mixed_scenarios() -> std::result::Result<(), Box<dyn std::error:
 
     // Check message (including args after --)
     assert!(parsed.cli.message_args().contains(&"Analyze"));
-    assert!(
-        parsed
-            .cli
-            .message_args()
-            .contains(&"--not-parsed-as-flag")
-    );
+    assert!(parsed.cli.message_args().contains(&"--not-parsed-as-flag"));
 
     Ok(())
 }
