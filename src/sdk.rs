@@ -1410,7 +1410,7 @@ impl AgentSessionHandle {
     /// Persists for the lifetime of the in-process handle only; not written
     /// to session metadata. Pass `None` to fall back to the provider's
     /// default cap.
-    pub fn set_max_tokens(&mut self, max_tokens: Option<u32>) {
+    pub const fn set_max_tokens(&mut self, max_tokens: Option<u32>) {
         self.session.agent.stream_options_mut().max_tokens = max_tokens;
     }
 
