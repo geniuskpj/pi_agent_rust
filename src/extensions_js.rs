@@ -4597,6 +4597,10 @@ enum HostcallCompletion {
     Unknown,
 }
 
+struct HostcallCancellation {
+    timer_id: Option<u64>,
+}
+
 impl HostcallTracker {
     fn clear(&mut self) {
         self.pending.clear();
@@ -4631,8 +4635,8 @@ impl HostcallTracker {
         self.pending.contains(call_id) && !self.cancelled.contains(call_id)
     }
 
-    fn cancel(&mut self, call_id: &str) -> Option<u64> {
-        if !self.pending.contains(call_id) {
+    fn cancel(&mut self, call_id: &str) -> Option<HostcallCancellation> {
+        if !self.pending.contains(call_id) || self.cancelled.contains(call_id) {
             return None;
         }
         self.cancelled.insert(call_id.to_string());
@@ -4640,7 +4644,7 @@ impl HostcallTracker {
         if let Some(timer_id) = timer_id {
             self.timer_to_call.remove(&timer_id);
         }
-        timer_id
+        Some(HostcallCancellation { timer_id })
     }
 
     fn record_stream_seq(&mut self, call_id: &str, sequence: u64) {
@@ -9007,21 +9011,27 @@ export function spawn(command, args = [], options = {}) {
   child.exitCode = null;
   child.signalCode = null;
   child.__pi_done = false;
-  child.__pi_kill_resolver = null;
+  child.__pi_call_id = null;
   child.stdout = opts.stdio[1] === "pipe" ? __makeEmitter() : null;
   child.stderr = opts.stdio[2] === "pipe" ? __makeEmitter() : null;
   child.stdin = opts.stdio[0] === "pipe" ? __makeEmitter() : null;
 
   child.kill = (signal = "SIGTERM") => {
     if (child.__pi_done) return false;
-    child.killed = true;
-    if (typeof child.__pi_kill_resolver === "function") {
-      child.__pi_kill_resolver({
-        kind: "killed",
-        signal: String(signal || "SIGTERM"),
-      });
-      child.__pi_kill_resolver = null;
+    if (
+      child.__pi_call_id === null ||
+      typeof __pi_cancel_hostcall_native !== "function"
+    ) {
+      return false;
     }
+    try {
+      if (!__pi_cancel_hostcall_native(child.__pi_call_id)) {
+        return false;
+      }
+    } catch (_) {
+      return false;
+    }
+    child.killed = true;
     __emitCloseOnce(child, null, String(signal || "SIGTERM"));
     return true;
   };
@@ -9043,16 +9053,23 @@ export function spawn(command, args = [], options = {}) {
       child.stderr.emit("data", String(chunk.stderr));
     }
   };
-  const execPromise = pi.exec(cmd, argv, execOptions).then(
+  const onChunk = execOptions.onChunk;
+  delete execOptions.onChunk;
+  const execPromise = new Promise((resolve, reject) => {
+    const callId = __pi_exec_native(cmd, argv, execOptions);
+    child.__pi_call_id = callId;
+    __pi_pending_hostcalls.set(callId, {
+      onChunk,
+      resolve,
+      reject,
+      extensionId: __pi_current_extension_id,
+    });
+  }).then(
     (result) => ({ kind: "result", result }),
-    (error) => ({ kind: "error", error }),
+    (error) => ({ kind: "error", error })
   );
 
-  const killPromise = new Promise((resolve) => {
-    child.__pi_kill_resolver = resolve;
-  });
-
-  Promise.race([execPromise, killPromise]).then((outcome) => {
+  execPromise.then((outcome) => {
     if (!outcome || child.__pi_done) return;
 
     if (outcome.kind === "result") {
@@ -14919,11 +14936,11 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
     pub fn cancel_hostcall(&self, call_id: &str) -> bool {
         let (timer_id, next_seq) = {
             let mut tracker = self.hostcall_tracker.borrow_mut();
-            let Some(timer_id) = tracker.cancel(call_id) else {
+            let Some(cancelled) = tracker.cancel(call_id) else {
                 return false;
             };
             let next_seq = tracker.stream_next_seq(call_id);
-            (Some(timer_id), next_seq)
+            (cancelled.timer_id, next_seq)
         };
 
         if let Some(timer_id) = timer_id {
@@ -15711,11 +15728,11 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                         move |_ctx: Ctx<'_>, call_id: String| -> rquickjs::Result<bool> {
                             let (timer_id, next_seq) = {
                                 let mut tracker = tracker.borrow_mut();
-                                let Some(timer_id) = tracker.cancel(&call_id) else {
+                                let Some(cancelled) = tracker.cancel(&call_id) else {
                                     return Ok(false);
                                 };
                                 let next_seq = tracker.stream_next_seq(&call_id);
-                                (Some(timer_id), next_seq)
+                                (cancelled.timer_id, next_seq)
                             };
 
                             if let Some(timer_id) = timer_id {
@@ -20131,8 +20148,50 @@ if (typeof globalThis.Bun === 'undefined') {
         const execOptions = {};
         if (spawnOptions.cwd !== undefined) execOptions.cwd = spawnOptions.cwd;
         if (spawnOptions.timeout !== undefined) execOptions.timeout = spawnOptions.timeout;
-        const execPromise = pi.exec(command, args, execOptions);
+        execOptions.stream = true;
         let killed = false;
+        let settled = false;
+        let callId = null;
+        let stdoutChunks = [];
+        let stderrChunks = [];
+        const execPromise = new Promise((resolve, reject) => {
+            callId = __pi_exec_native(command, args, execOptions);
+            __pi_pending_hostcalls.set(callId, {
+                onChunk(chunk) {
+                    if (!chunk || typeof chunk !== 'object') {
+                        return;
+                    }
+                    if (chunk.stdout !== undefined && chunk.stdout !== null && chunk.stdout !== '') {
+                        stdoutChunks.push(String(chunk.stdout));
+                    }
+                    if (chunk.stderr !== undefined && chunk.stderr !== null && chunk.stderr !== '') {
+                        stderrChunks.push(String(chunk.stderr));
+                    }
+                },
+                resolve(finalChunk) {
+                    settled = true;
+                    const result =
+                        finalChunk && typeof finalChunk === 'object' ? finalChunk : {};
+                    if (result.killed) {
+                        killed = true;
+                    }
+                    resolve({
+                        code:
+                            typeof result.code === 'number' && Number.isFinite(result.code)
+                                ? result.code
+                                : null,
+                        killed,
+                        stdout: stdoutChunks.join(''),
+                        stderr: stderrChunks.join(''),
+                    });
+                },
+                reject(error) {
+                    settled = true;
+                    reject(error);
+                },
+                extensionId: __pi_current_extension_id,
+            });
+        });
 
         const exited = execPromise.then(
             (result) => (killed ? null : (Number(result && result.code) || 0)),
@@ -20160,8 +20219,21 @@ if (typeof globalThis.Bun === 'undefined') {
             }),
             exited,
             kill() {
-                killed = true;
-                return true;
+                if (settled || killed) {
+                    return false;
+                }
+                if (callId !== null && typeof __pi_cancel_hostcall_native === 'function') {
+                    try {
+                        const cancelled = __pi_cancel_hostcall_native(callId);
+                        if (cancelled) {
+                            killed = true;
+                        }
+                        return cancelled;
+                    } catch (_) {
+                        return false;
+                    }
+                }
+                return false;
             },
             ref() { return this; },
             unref() { return this; },
@@ -25179,34 +25251,25 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                             globalThis.childKillResult.killErrorCode = String((err && err.code) || '');
                             globalThis.childKillResult.killErrorMessage = String((err && err.message) || err || '');
                         }
+                    }).catch((err) => {
+                        globalThis.childKillResult.importError =
+                            String((err && err.message) || err || '');
                     });
                     ",
                 )
                 .await
                 .expect("eval child_process kill script");
+            runtime
+                .drain_microtasks()
+                .await
+                .expect("drain child_process import microtasks");
 
-            let mut requests = runtime.drain_hostcall_requests();
-            assert_eq!(requests.len(), 1);
-            let request = requests.pop_front().expect("exec hostcall");
-            assert_eq!(
-                request.payload["options"]["stream"],
-                serde_json::json!(true)
-            );
-            runtime.complete_hostcall(
-                request.call_id,
-                HostcallOutcome::StreamChunk {
-                    sequence: 0,
-                    chunk: serde_json::json!({
-                        "code": 0,
-                        "killed": false
-                    }),
-                    is_final: true,
-                },
-            );
+            let _ = runtime.drain_hostcall_requests();
 
             drain_until_idle(&runtime, &clock).await;
+            assert_eq!(runtime.pending_hostcall_count(), 0);
             let r = get_global_json(&runtime, "childKillResult").await;
-            assert_eq!(r["killOk"], serde_json::json!(true));
+            assert_eq!(r["killOk"], serde_json::json!(true), "childKillResult: {r}");
             assert_eq!(r["killed"], serde_json::json!(true));
             assert_eq!(r["code"], serde_json::Value::Null);
             assert_eq!(r["done"], serde_json::json!(true));
@@ -25312,6 +25375,152 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 )
             );
             assert_eq!(runtime.drain_hostcall_requests().len(), 0);
+        });
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn pijs_bun_spawn_fallback_kill_cancels_streaming_exec() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.require = undefined;
+                    globalThis.bunFallbackResult = {};
+                    const proc = Bun.spawn(['pi', '--version']);
+                    globalThis.bunFallbackProc = proc;
+                    globalThis.bunFallbackResult.pid = proc.pid;
+                    proc.exited.then((code) => {
+                        globalThis.bunFallbackResult.code = code;
+                        globalThis.bunFallbackResult.exitedDone = true;
+                    });
+                    proc.stdout.text().then((stdout) => {
+                        globalThis.bunFallbackResult.stdout = stdout;
+                        globalThis.bunFallbackResult.stdoutDone = true;
+                    });
+                    proc.stderr.text().then((stderr) => {
+                        globalThis.bunFallbackResult.stderr = stderr;
+                        globalThis.bunFallbackResult.stderrDone = true;
+                    });
+                    ",
+                )
+                .await
+                .expect("eval bun fallback spawn script");
+
+            let mut requests = runtime.drain_hostcall_requests();
+            assert_eq!(requests.len(), 1);
+            let request = requests.pop_front().expect("bun fallback exec hostcall");
+            assert!(
+                matches!(&request.kind, HostcallKind::Exec { cmd } if cmd == "pi"),
+                "unexpected hostcall kind: {:?}",
+                request.kind
+            );
+            assert_eq!(
+                request.payload["options"]["stream"],
+                serde_json::json!(true)
+            );
+
+            let call_id = request.call_id;
+            runtime.complete_hostcall(
+                call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!({ "stdout": "bun-fallback\n" }),
+                    is_final: false,
+                },
+            );
+            assert!(
+                runtime.tick().await.is_ok(),
+                "tick bun fallback stdout chunk"
+            );
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.bunFallbackResult.killOk =
+                      globalThis.bunFallbackProc.kill('SIGTERM');
+                    ",
+                )
+                .await
+                .expect("kill bun fallback process");
+
+            drain_until_idle(&runtime, &clock).await;
+            let r = get_global_json(&runtime, "bunFallbackResult").await;
+            assert_eq!(r["pid"], serde_json::json!(0));
+            assert_eq!(r["killOk"], serde_json::json!(true));
+            assert_eq!(r["code"], serde_json::Value::Null);
+            assert_eq!(r["exitedDone"], serde_json::json!(true));
+            assert_eq!(r["stdout"], serde_json::json!("bun-fallback\n"));
+            assert_eq!(r["stdoutDone"], serde_json::json!(true));
+            assert_eq!(r["stderr"], serde_json::json!(""));
+            assert_eq!(r["stderrDone"], serde_json::json!(true));
+
+            runtime.complete_hostcall(
+                call_id,
+                HostcallOutcome::Error {
+                    code: "internal".to_string(),
+                    message: "exec task cancelled".to_string(),
+                },
+            );
+            drain_until_idle(&runtime, &clock).await;
+            let r = get_global_json(&runtime, "bunFallbackResult").await;
+            assert_eq!(r["code"], serde_json::Value::Null);
+            assert_eq!(r["stdout"], serde_json::json!("bun-fallback\n"));
+        });
+    }
+
+    #[test]
+    fn pijs_cancel_hostcall_without_timer_is_single_use() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.cancelWithoutTimerStream = [];
+                    globalThis.cancelWithoutTimerDone = false;
+                    (async () => {
+                        for await (const chunk of pi.exec('pi', ['--version'], { stream: true })) {
+                            globalThis.cancelWithoutTimerStream.push(chunk);
+                        }
+                        globalThis.cancelWithoutTimerDone = true;
+                    })();
+                    ",
+                )
+                .await
+                .expect("eval cancel without timer script");
+
+            let mut requests = runtime.drain_hostcall_requests();
+            assert_eq!(requests.len(), 1);
+            let request = requests.pop_front().expect("streaming exec request");
+            assert!(runtime.is_hostcall_pending(&request.call_id));
+            assert_eq!(runtime.pending_hostcall_count(), 1);
+
+            assert!(
+                runtime.cancel_hostcall(&request.call_id),
+                "first cancellation should succeed"
+            );
+            assert!(
+                !runtime.cancel_hostcall(&request.call_id),
+                "duplicate cancellation should fail"
+            );
+
+            drain_until_idle(&runtime, &clock).await;
+            assert_eq!(runtime.pending_hostcall_count(), 0);
+            assert!(!runtime.is_hostcall_pending(&request.call_id));
+
+            let chunks = get_global_json(&runtime, "cancelWithoutTimerStream").await;
+            assert_eq!(chunks, serde_json::json!([]));
+            let done = get_global_json(&runtime, "cancelWithoutTimerDone").await;
+            assert_eq!(done, serde_json::json!(true));
         });
     }
 
