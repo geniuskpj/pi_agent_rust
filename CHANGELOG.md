@@ -12,6 +12,75 @@ Repository: <https://github.com/Dicklesworthstone/pi_agent_rust>
 
 ---
 
+## [v0.1.14] — 2026-04-28 — Release
+
+### Bug Fixes
+
+- **Slash dropdown Enter accepts highlighted entry** — When the autocomplete
+  dropdown is open with a highlighted item (the user pressed Down to navigate
+  to a specific entry), Enter now accepts the highlight and runs the selected
+  command, matching the dropdown's own footer hint "Enter/Tab accept" and the
+  convention used by fzf, vim completion, Slack/IRC slash menus, etc. The
+  prior behavior — Enter submits the raw editor contents regardless of the
+  highlight — is preserved when no item is highlighted, so users who never
+  navigated keep the existing escape-hatch behavior.
+  Fixes [#61](https://github.com/Dicklesworthstone/pi_agent_rust/issues/61).
+  Regression tests in
+  `src/interactive/tests.rs::enter_accepts_highlighted_autocomplete_item` and
+  `enter_submits_when_no_autocomplete_item_highlighted`.
+
+- **File mode bits preserved on session rewrite and tool write** — earlier
+  release notes (51b7776d) for write-time mode preservation. Bug fix preserves
+  permissions across session rewrites that previously stomped them.
+
+### Features
+
+- **User-overridable model list** — Drop a JSON file at
+  `<config_dir>/pi/models-override.json` (or set `PI_MODELS_OVERRIDE` to point
+  pi at a path elsewhere) to extend the bundled model snapshot at runtime. The
+  override file uses the same shape as the bundled snapshot:
+
+  ```json
+  {
+    "anthropic": ["claude-opus-4-7"],
+    "openrouter": ["anthropic/claude-opus-4-7"]
+  }
+  ```
+
+  Override entries union with the bundled snapshot (set semantics, deduped).
+  Missing/blank/malformed files log a warning and are treated as empty so a
+  typo never breaks startup. The model catalog cache fingerprint folds in a
+  CRC of the override file so memoized consumers refresh correctly when the
+  override changes. Documented in `docs/models.md`. Fixes
+  [#60](https://github.com/Dicklesworthstone/pi_agent_rust/issues/60). This
+  obsoletes the recurring one-line PRs that just add new model IDs to the
+  bundled snapshot — drop them in your config instead.
+
+- **claude-opus-4-7 in anthropic snapshot** — Anthropic shipped Opus 4.7 on
+  2026-04-28; surfaced in `/model` autocomplete. Mirrors PR
+  [#59](https://github.com/Dicklesworthstone/pi_agent_rust/pull/59) (closed in
+  favor of independent implementation per project policy).
+
+### Internal
+
+- Refactor the snapshot ↔ override merge into a `merge_provider_model_ids`
+  helper for testability.
+- Address three nightly clippy lints in `package_manager.rs`,
+  `extension_preflight.rs`, and `extensions.rs` that were blocking the
+  `cargo clippy --all-targets -- -D warnings` CI gate.
+- (Concurrent agent work also merged this cycle — see git log between
+  v0.1.13 and v0.1.14 for the full set, including RPC lifecycle event
+  refactors and permission recovery test probes.)
+
+### Known Issues
+
+- Seven pre-existing test failures in `src/app.rs::tests::select_model_*`,
+  `src/rpc.rs::tests::auto_compaction_*`, and
+  `src/session.rs::tests::test_continue_recent_*` predate this release. Tracked
+  in beads `bd-d8v93` for follow-up.
+
+---
+
 ## [v0.1.12] — 2026-04-23 — Release
 
 ### Bug Fixes
