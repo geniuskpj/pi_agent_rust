@@ -506,7 +506,7 @@ From:
 - `tests/e2e_results/20260423T053902Z/evidence_contract.json` (run `20260423T053902Z-unsharded`)
 - `docs/evidence/dropin-certification-verdict.json` (generated `2026-04-23T05:30:00Z`)
 
-- Drop-in certification status: **12/12 gates PASS** - `CERTIFIED` *(from docs/evidence/dropin-certification-verdict.json)*
+- Strict drop-in status: **12/12 gates PASS** - `CERTIFIED` *(from docs/evidence/dropin-certification-verdict.json; strict replacement wording is allowed only while this verdict remains `CERTIFIED` and the contract hard gates stay PASS)*
 - Release evidence gate validation: `28/28` tests passed *(from tests/release_evidence_gate.rs)*
 - Performance budget compliance: All CI-enforced budgets within thresholds *(from tests/perf/reports/budget_summary.json)*
 - Extension conformance: `224/224` extensions validated *(from evidence_contract.json)*
@@ -572,7 +572,7 @@ bash tests/installer_regression.sh
 
 For migration adoption, packaging and invocation compatibility follows this contract:
 
-- This section covers packaging/invocation behavior only; functional parity and certification status are tracked in `docs/dropin-certification-contract.json`.
+- This section covers packaging/invocation behavior only; functional parity and certification status are tracked in `docs/contracts/dropin-certification-contract.json`.
 
 - Canonical executable name is `pi` across release assets and installer-managed installs.
 - Installer-managed installs also create an `rpi` compatibility launcher when no conflicting `rpi` command already exists on your PATH.
@@ -2470,8 +2470,8 @@ Each entry below includes the document name, purpose, bottom-line takeaway, and 
 - `docs/non-mock-rubric.json` - Purpose: rubric defining non-mock testing expectations. Bottom line: use this to gate real-behavior evidence quality. Link: [View](docs/non-mock-rubric.json)
 - `docs/packages.md` - Purpose: package installation and package-content conventions. Bottom line: package usage and structure are defined here. Link: [View](docs/packages.md)
 - `docs/asupersync-leverage-inventory.md` - Purpose: implementation-grade inventory of where additional Asupersync leverage is genuinely high-value in Pi core surfaces. Bottom line: start here before threading inherited `AgentCx` or replacing raw thread islands. Link: [View](docs/asupersync-leverage-inventory.md)
-- `docs/dropin-certification-contract.json` - Purpose: strict drop-in certification contract and gate thresholds. Bottom line: strict replacement messaging is controlled by this contract and its hard gates. Link: [View](docs/dropin-certification-contract.json)
-- `docs/dropin-parity-gap-ledger.json` - Purpose: machine-readable ledger of known drop-in parity gaps and severity. Bottom line: unresolved critical/high gaps block strict replacement messaging. Link: [View](docs/dropin-parity-gap-ledger.json)
+- `docs/contracts/dropin-certification-contract.json` - Purpose: strict drop-in certification contract and gate thresholds. Bottom line: strict replacement messaging is controlled by this contract and its hard gates. Link: [View](docs/contracts/dropin-certification-contract.json)
+- `docs/evidence/dropin-parity-gap-ledger.json` - Purpose: machine-readable ledger of known drop-in parity gaps and severity. Bottom line: unresolved critical/high gaps block strict replacement messaging. Link: [View](docs/evidence/dropin-parity-gap-ledger.json)
 - `docs/integrator-migration-playbook.md` - Purpose: operator/integrator migration and rollback playbook for moving from TypeScript Pi to Rust Pi. Bottom line: use this to run staged, evidence-backed migrations. Link: [View](docs/integrator-migration-playbook.md)
 - `docs/parity-certification.json` - Purpose: machine-readable parity progress snapshot. Bottom line: informational status only; strict replacement release claims remain controlled by the drop-in contract and parity-gap closure status. Link: [View](docs/parity-certification.json)
 - `docs/program-governance.md` - Purpose: governance model for roadmap, gates, and ownership. Bottom line: governance decisions and responsibilities are defined here. Link: [View](docs/program-governance.md)
