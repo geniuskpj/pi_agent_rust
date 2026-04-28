@@ -288,7 +288,7 @@ fn enter_accepts_highlighted_autocomplete_item() {
     // must accept the highlighted item — matching the dropdown's own footer
     // hint "Enter/Tab accept" — not submit the raw `/` typed so far.
     use crate::autocomplete::{AutocompleteItem, AutocompleteItemKind};
-    use bubbletea::{KeyMsg, KeyType, Message, Model as BubbleteaModel};
+    use bubbletea::{KeyMsg, KeyType, Message};
 
     let dir = tempdir();
     let mut app = build_test_app(dir.path().to_path_buf());
@@ -323,7 +323,7 @@ fn enter_submits_when_no_autocomplete_item_highlighted() {
     // user has not navigated to any item (selected.is_none()), Enter must
     // still submit the raw editor contents — i.e. behavior is unchanged
     // for users who never pressed Down.
-    use bubbletea::{KeyMsg, KeyType, Message, Model as BubbleteaModel};
+    use bubbletea::{KeyMsg, KeyType, Message};
 
     let dir = tempdir();
     let mut app = build_test_app(dir.path().to_path_buf());
