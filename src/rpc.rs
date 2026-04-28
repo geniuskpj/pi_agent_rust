@@ -2182,13 +2182,12 @@ async fn run_prompt_with_retry(
         let error_message = final_error
             .clone()
             .unwrap_or_else(|| "Request error".to_string());
-        let _ = out_tx.send(event(&json!({
-            "type": "auto_retry_start",
-            "attempt": retry_count,
-            "maxAttempts": max_retries,
-            "delayMs": delay_ms,
-            "errorMessage": error_message,
-        })));
+        let _ = out_tx.send(agent_event(AgentEvent::AutoRetryStart {
+            attempt: retry_count,
+            max_attempts: max_retries,
+            delay_ms: u64::from(delay_ms),
+            error_message,
+        }));
 
         let delay = Duration::from_millis(delay_ms as u64);
         let start = std::time::Instant::now();
@@ -2221,12 +2220,11 @@ async fn run_prompt_with_retry(
     }
 
     if retry_count > 0 {
-        let _ = out_tx.send(event(&json!({
-            "type": "auto_retry_end",
-            "success": success,
-            "attempt": retry_count,
-            "finalError": if success { Value::Null } else { json!(final_error.clone()) },
-        })));
+        let _ = out_tx.send(agent_event(AgentEvent::AutoRetryEnd {
+            success,
+            attempt: retry_count,
+            final_error: if success { None } else { final_error.clone() },
+        }));
     }
 
     is_streaming.store(false, Ordering::SeqCst);
@@ -2370,6 +2368,16 @@ fn response_error_with_hints(id: Option<String>, command: &str, error: &Error) -
 
 fn event(value: &Value) -> String {
     value.to_string()
+}
+
+fn agent_event(event: AgentEvent) -> String {
+    serde_json::to_string(&event).unwrap_or_else(|err| {
+        json!({
+            "type": "event_serialize_error",
+            "error": err.to_string(),
+        })
+        .to_string()
+    })
 }
 
 fn rpc_emit_extension_ui_request(
@@ -3076,6 +3084,7 @@ mod retry_tests {
 
             let mut saw_retry_start = false;
             let mut saw_retry_end_success = false;
+            let mut retry_end_value = None;
 
             for line in out_rx.try_iter() {
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -3091,6 +3100,7 @@ mod retry_tests {
                     "auto_retry_end"
                         if value.get("success").and_then(Value::as_bool) == Some(true) =>
                     {
+                        retry_end_value = Some(value.clone());
                         saw_retry_end_success = true;
                     }
                     _ => {}
@@ -3101,6 +3111,11 @@ mod retry_tests {
             assert!(
                 saw_retry_end_success,
                 "missing successful auto_retry_end event"
+            );
+            let retry_end_value = retry_end_value.expect("retry end event value");
+            assert!(
+                retry_end_value.get("finalError").is_none(),
+                "successful auto_retry_end must omit absent finalError: {retry_end_value}"
             );
         });
     }
@@ -3731,10 +3746,9 @@ async fn maybe_auto_compact(
         return;
     }
 
-    let _ = out_tx.send(event(&json!({
-        "type": "auto_compaction_start",
-        "reason": "threshold",
-    })));
+    let _ = out_tx.send(agent_event(AgentEvent::AutoCompactionStart {
+        reason: "threshold".to_string(),
+    }));
     is_compacting.store(true, Ordering::SeqCst);
 
     let (provider, key) = {
@@ -3744,13 +3758,12 @@ async fn maybe_auto_compact(
         };
         let Some(key) = guard.agent.stream_options().api_key.clone() else {
             is_compacting.store(false, Ordering::SeqCst);
-            let _ = out_tx.send(event(&json!({
-                "type": "auto_compaction_end",
-                "result": Value::Null,
-                "aborted": false,
-                "willRetry": false,
-                "errorMessage": "Missing API key for compaction",
-            })));
+            let _ = out_tx.send(agent_event(AgentEvent::AutoCompactionEnd {
+                result: None,
+                aborted: false,
+                will_retry: false,
+                error_message: Some("Missing API key for compaction".to_string()),
+            }));
             return;
         };
         (guard.agent.provider(), key)
@@ -3764,13 +3777,12 @@ async fn maybe_auto_compact(
             let details_value = match compaction_details_to_value(&result.details) {
                 Ok(value) => value,
                 Err(err) => {
-                    let _ = out_tx.send(event(&json!({
-                        "type": "auto_compaction_end",
-                        "result": Value::Null,
-                        "aborted": false,
-                        "willRetry": false,
-                        "errorMessage": err.to_string(),
-                    })));
+                    let _ = out_tx.send(agent_event(AgentEvent::AutoCompactionEnd {
+                        result: None,
+                        aborted: false,
+                        will_retry: false,
+                        error_message: Some(err.to_string()),
+                    }));
                     return;
                 }
             };
@@ -3795,26 +3807,25 @@ async fn maybe_auto_compact(
             guard.agent.replace_messages(messages);
             drop(guard);
 
-            let _ = out_tx.send(event(&json!({
-                "type": "auto_compaction_end",
-                "result": {
+            let _ = out_tx.send(agent_event(AgentEvent::AutoCompactionEnd {
+                result: Some(json!({
                     "summary": result.summary,
                     "firstKeptEntryId": result.first_kept_entry_id,
                     "tokensBefore": result.tokens_before,
                     "details": details_value,
-                },
-                "aborted": false,
-                "willRetry": false,
-            })));
+                })),
+                aborted: false,
+                will_retry: false,
+                error_message: None,
+            }));
         }
         Err(err) => {
-            let _ = out_tx.send(event(&json!({
-                "type": "auto_compaction_end",
-                "result": Value::Null,
-                "aborted": false,
-                "willRetry": false,
-                "errorMessage": err.to_string(),
-            })));
+            let _ = out_tx.send(agent_event(AgentEvent::AutoCompactionEnd {
+                result: None,
+                aborted: false,
+                will_retry: false,
+                error_message: Some(err.to_string()),
+            }));
         }
     }
 }
