@@ -325,17 +325,14 @@ fn test_subcommand_edge_cases() {
     ]);
 
     // This might fail parsing due to subcommand, but extension flags should be extracted
-    match parsed {
-        Ok(p) => {
-            // Verify extension flags were processed
-            assert!(p.extension_flags.iter().any(|f| f.name == "global-flag"));
-            // Verify subcommand was recognized
-            matches!(p.cli.command, Some(Commands::Install { .. }));
-        }
-        Err(_) => {
-            // If parsing fails, that's expected behavior for complex subcommand scenarios
-            // The important thing is that preprocessing works correctly
-        }
+    if let Ok(p) = parsed {
+        // Verify extension flags were processed
+        assert!(p.extension_flags.iter().any(|f| f.name == "global-flag"));
+        // Verify subcommand was recognized
+        assert!(matches!(p.cli.command, Some(Commands::Install { .. })));
+    } else {
+        // If parsing fails, that's expected behavior for complex subcommand scenarios.
+        // The important thing is that preprocessing works correctly.
     }
 }
 
@@ -379,7 +376,7 @@ fn test_long_arguments() {
         "--system-prompt".to_string(),
         long_value.clone(),
         "--custom-flag".to_string(),
-        long_value.clone(),
+        long_value,
         long_message.trim().to_string(),
     ])
     .expect("Should handle very long arguments");
@@ -412,19 +409,19 @@ fn test_repeated_flags() {
     .expect("Should handle repeated extension flags");
 
     // Should have all repeated flags
-    let custom_flags: Vec<_> = parsed
+    let custom_flags = parsed
         .extension_flags
         .iter()
         .filter(|f| f.name == "custom-flag")
-        .collect();
-    assert_eq!(custom_flags.len(), 2);
+        .count();
+    assert_eq!(custom_flags, 2);
 
-    let another_flags: Vec<_> = parsed
+    let another_flags = parsed
         .extension_flags
         .iter()
         .filter(|f| f.name == "another-flag")
-        .collect();
-    assert_eq!(another_flags.len(), 2);
+        .count();
+    assert_eq!(another_flags, 2);
 }
 
 /// Test flag aliases and short forms.
@@ -450,10 +447,10 @@ fn test_empty_string_arguments() {
     let parsed = parse_with_extension_flags(vec![
         "pi".to_string(),
         "--system-prompt".to_string(),
-        "".to_string(), // Empty string
+        String::new(), // Empty string
         "--custom-flag".to_string(),
-        "".to_string(), // Empty value
-        "".to_string(), // Empty message part
+        String::new(), // Empty value
+        String::new(), // Empty message part
         "real message".to_string(),
     ])
     .expect("Should handle empty string arguments");
@@ -889,7 +886,7 @@ fn test_pathological_inputs() {
         "pi".to_string(),
         "--=value".to_string(), // Empty flag name with equals
         "--".to_string(),       // Lone separator
-        "".to_string(),         // Empty string
+        String::new(),          // Empty string
         "   ".to_string(),      // Whitespace only
         "\n\t\r".to_string(),   // Control characters
     ])
@@ -1023,12 +1020,12 @@ fn test_boolean_flag_variations() {
         .expect("Should have debug");
     assert_eq!(debug_flag.value, Some("true".to_string()));
 
-    let enable2_flag = parsed
+    let secondary_enable_flag = parsed
         .extension_flags
         .iter()
         .find(|f| f.name == "enable")
         .expect("Should have enable");
-    assert_eq!(enable2_flag.value, Some("not-a-value".to_string()));
+    assert_eq!(secondary_enable_flag.value, Some("not-a-value".to_string()));
 }
 
 /// Test complex @file and flag interleaving.
@@ -1154,8 +1151,8 @@ fn test_massive_argument_list() {
 
     // Add 100 extension flags
     for i in 0..100 {
-        args.push(format!("--flag{}", i));
-        args.push(format!("value{}", i));
+        args.push(format!("--flag{i}"));
+        args.push(format!("value{i}"));
     }
 
     // Add some regular flags mixed in
