@@ -3296,6 +3296,28 @@ impl Tool for WriteTool {
         let path = resolve_path(&input.path, &self.cwd);
         let path = enforce_cwd_scope(&path, &self.cwd, "write")?;
 
+        if let Ok(meta) = asupersync::fs::metadata(&path).await {
+            if !meta.is_file() {
+                return Err(Error::tool(
+                    "write",
+                    format!("Path {} is not a regular file", path.display()),
+                ));
+            }
+            if let Err(err) = asupersync::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .await
+            {
+                let message = match err.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        format!("Permission denied: {}", input.path)
+                    }
+                    _ => format!("Failed to open file for writing: {err}"),
+                };
+                return Err(Error::tool("write", message));
+            }
+        }
+
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             asupersync::fs::create_dir_all(parent)

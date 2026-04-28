@@ -401,6 +401,41 @@ mod write_hardened {
             );
         });
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_readonly_existing_file_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        asupersync::test_utils::run_test(|| async {
+            let h = TestHarness::new("write_readonly_existing_file_fails");
+            let path = h.create_file("readonly-write.txt", b"old content");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+            let tool = pi::tools::WriteTool::new(h.temp_dir());
+            let input = serde_json::json!({
+                "path": path.to_string_lossy(),
+                "content": "new content"
+            });
+            let err = tool
+                .execute("h-write-8", input, None)
+                .await
+                .expect_err("write should fail on readonly existing file");
+            let msg = err.to_string().to_lowercase();
+            h.log().info("verify", format!("error={msg}"));
+            assert!(
+                msg.contains("permission") || msg.contains("denied"),
+                "should report permission error: {msg}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "old content",
+                "readonly file must remain unchanged"
+            );
+
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        });
+    }
 }
 
 // ===========================================================================

@@ -121,6 +121,7 @@ fn save_jsonl_full_rewrite_blocking(
     let _lock = lock_session_persistence(path)?;
     let (header_to_write, entries_to_write) =
         prepare_jsonl_full_rewrite(path, header, entries, persisted_entry_count, header_dirty)?;
+    let original_perms = std::fs::metadata(path).ok().map(|meta| meta.permissions());
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
     {
@@ -137,6 +138,12 @@ fn save_jsonl_full_rewrite_blocking(
         .as_file_mut()
         .sync_all()
         .map_err(|e| crate::Error::Io(Box::new(e)))?;
+    if let Some(perms) = original_perms {
+        temp_file
+            .as_file()
+            .set_permissions(perms)
+            .map_err(|e| crate::Error::Io(Box::new(e)))?;
+    }
     temp_file
         .persist(path)
         .map_err(|e| crate::Error::Io(Box::new(e.error)))?;
@@ -9976,6 +9983,29 @@ mod tests {
         let loaded =
             run_async(async { Session::open(path.to_string_lossy().as_ref()).await }).unwrap();
         assert_eq!(loaded.entries.len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn crash_full_rewrite_preserves_existing_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut session = Session::create();
+        session.session_dir = Some(temp_dir.path().to_path_buf());
+
+        session.append_message(make_test_message("original"));
+        run_async(async { session.save().await }).unwrap();
+        let path = session.path.clone().unwrap();
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        session.set_model_header(Some("new-provider".to_string()), None, None);
+        session.append_message(make_test_message("second"));
+        run_async(async { session.save().await }).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o444, "full rewrite must preserve existing mode bits");
     }
 
     #[test]
