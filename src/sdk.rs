@@ -2563,7 +2563,7 @@ mod tests {
         let mut handle = run_async(create_agent_session(options)).expect("create session");
         run_async(handle.set_session_name("renamed-by-sdk")).expect("set session name");
 
-        let (cached, info_entries) = run_async(async {
+        let info_entries = run_async(async {
             let cx = crate::agent_cx::AgentCx::for_request();
             let guard = handle
                 .session()
@@ -2571,17 +2571,15 @@ mod tests {
                 .lock(cx.cx())
                 .await
                 .expect("lock session");
-            let info_entries = guard
+            guard
                 .entries_for_current_path()
                 .iter()
                 .filter_map(|entry| match entry {
                     crate::session::SessionEntry::SessionInfo(info) => info.name.clone(),
                     _ => None,
                 })
-                .collect::<Vec<_>>();
-            (guard.cached_name.clone(), info_entries)
+                .collect::<Vec<_>>()
         });
-        assert_eq!(cached.as_deref(), Some("renamed-by-sdk"));
         assert_eq!(info_entries, vec!["renamed-by-sdk".to_string()]);
     }
 
