@@ -6489,24 +6489,48 @@ export default function init(pi) {
             let mut inner_session = Session::in_memory();
             inner_session.header.provider = Some("test-provider".to_string());
             inner_session.header.model_id = Some("test-model".to_string());
+            let long_text = "a".repeat(400_000);
             inner_session.append_message(crate::session::SessionMessage::User {
-                content: UserContent::Text("hello".to_string()),
+                content: UserContent::Text(long_text.clone()),
                 timestamp: Some(0),
             });
             inner_session.append_message(crate::session::SessionMessage::Assistant {
                 message: AssistantMessage {
-                    content: vec![ContentBlock::Text(TextContent::new("world"))],
+                    content: vec![ContentBlock::Text(TextContent::new(long_text.clone()))],
                     api: "test-api".to_string(),
                     provider: "test-provider".to_string(),
                     model: "test-model".to_string(),
                     usage: Usage {
-                        total_tokens: 10,
+                        total_tokens: 200_000,
                         ..Usage::default()
                     },
                     stop_reason: StopReason::Stop,
                     error_message: None,
                     timestamp: 0,
                 },
+            });
+            inner_session.append_message(crate::session::SessionMessage::User {
+                content: UserContent::Text(long_text.clone()),
+                timestamp: Some(0),
+            });
+            inner_session.append_message(crate::session::SessionMessage::Assistant {
+                message: AssistantMessage {
+                    content: vec![ContentBlock::Text(TextContent::new(long_text))],
+                    api: "test-api".to_string(),
+                    provider: "test-provider".to_string(),
+                    model: "test-model".to_string(),
+                    usage: Usage {
+                        total_tokens: 250_000,
+                        ..Usage::default()
+                    },
+                    stop_reason: StopReason::Stop,
+                    error_message: None,
+                    timestamp: 0,
+                },
+            });
+            inner_session.append_message(crate::session::SessionMessage::User {
+                content: UserContent::Text("recent".to_string()),
+                timestamp: Some(0),
             });
 
             let agent_session = AgentSession::new(
@@ -6520,7 +6544,7 @@ export default function init(pi) {
             config.compaction = Some(crate::config::CompactionSettings {
                 enabled: Some(true),
                 reserve_tokens: Some(2),
-                keep_recent_tokens: Some(0),
+                keep_recent_tokens: Some(100),
             });
 
             let auth_dir = tempfile::tempdir().expect("tempdir");
@@ -6559,8 +6583,8 @@ export default function init(pi) {
             assert!(start_idx < end_idx, "unexpected event order: {events:?}");
 
             let end = &events[end_idx];
-            assert_eq!(end["aborted"], false);
-            assert_eq!(end["willRetry"], false);
+            assert_eq!(end["aborted"].as_bool(), Some(false));
+            assert_eq!(end["willRetry"].as_bool(), Some(false));
             assert_eq!(end["errorMessage"], "Missing API key for compaction");
             assert!(
                 end.get("result").is_none(),
