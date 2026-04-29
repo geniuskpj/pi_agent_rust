@@ -1975,9 +1975,8 @@ fn looks_like_api_key_env_var(value: &str) -> bool {
         return false;
     }
     let mut chars = prefix.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return false,
+    let Some(first) = chars.next() else {
+        return false;
     };
     if !first.is_ascii_uppercase() {
         return false;
