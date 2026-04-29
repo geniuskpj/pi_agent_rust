@@ -1073,9 +1073,11 @@ fn evaluate_candidate_freshness(
     let Ok(parsed) = DateTime::parse_from_rfc3339(raw) else {
         return Some(VoiSkipReason::MissingTelemetry);
     };
-    let minutes = now
-        .signed_duration_since(parsed.with_timezone(&Utc))
-        .num_minutes();
+    let observed_at = parsed.with_timezone(&Utc);
+    if observed_at > now {
+        return Some(VoiSkipReason::MissingTelemetry);
+    }
+    let minutes = now.signed_duration_since(observed_at).num_minutes();
     if minutes > stale_after_minutes {
         Some(VoiSkipReason::StaleEvidence)
     } else {
@@ -3020,6 +3022,29 @@ mod tests {
         }));
         assert!(plan.skipped.iter().any(|entry| {
             entry.id == "missing-telemetry" && entry.reason == VoiSkipReason::MissingTelemetry
+        }));
+    }
+
+    #[test]
+    fn voi_planner_rejects_future_telemetry_timestamps() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 10, 0, 0, 0).unwrap();
+        let config = VoiPlannerConfig {
+            enabled: true,
+            overhead_budget_ms: 20,
+            max_candidates: None,
+            stale_after_minutes: Some(60),
+            min_utility_score: Some(0.0),
+        };
+        let candidates = vec![
+            voi_candidate("fresh", 6.0, 2, Some("2026-01-09T23:30:00Z")),
+            voi_candidate("future", 99.0, 1, Some("2026-01-10T01:00:00Z")),
+        ];
+
+        let plan = plan_voi_candidates(&candidates, now, &config);
+        assert_eq!(plan.selected.len(), 1);
+        assert_eq!(plan.selected[0].id, "fresh");
+        assert!(plan.skipped.iter().any(|entry| {
+            entry.id == "future" && entry.reason == VoiSkipReason::MissingTelemetry
         }));
     }
 

@@ -486,8 +486,8 @@ This project validates extension compatibility with a three-track pipeline:
 These runs compile many crates and can be disk-heavy. Point Cargo artifacts and temp files to a large volume:
 
 ```bash
-export CARGO_TARGET_DIR="/data/tmp/pi_agent_rust/${USER:-agent}"
-export TMPDIR="/data/tmp/pi_agent_rust/${USER:-agent}/tmp"
+export CARGO_TARGET_DIR="/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target"
+export TMPDIR="/data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp"
 mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
 ```
 
@@ -2252,15 +2252,23 @@ A: Yes. Point any provider at a custom base URL via `models.json`. Pi normalizes
 ### Building
 
 ```bash
-rch exec -- cargo build           # Debug build (remote offload)
-rch exec -- cargo build --release # Release build (optimized, remote offload)
-rch exec -- cargo test            # Run tests (remote offload)
+./scripts/cargo_headroom.sh build           # Debug build (remote offload)
+./scripts/cargo_headroom.sh build --release # Release build (optimized, remote offload)
+./scripts/cargo_headroom.sh test --all-targets # Full test run with disk preflight
 # Lint checks (remote-safe split to avoid rch clippy timeout fail-open)
-rch exec -- cargo clippy --lib --bins -- -D warnings
-rch exec -- cargo clippy --tests -- -D warnings
-rch exec -- cargo clippy --benches -- -D warnings
-rch exec -- cargo clippy --examples -- -D warnings
+./scripts/cargo_headroom.sh clippy --lib --bins -- -D warnings
+./scripts/cargo_headroom.sh clippy --tests -- -D warnings
+./scripts/cargo_headroom.sh clippy --benches -- -D warnings
+./scripts/cargo_headroom.sh clippy --examples -- -D warnings
 ```
+
+When those variables are unset, `cargo_headroom.sh` defaults `CARGO_TARGET_DIR`
+and `TMPDIR` to a per-agent directory under `/data/tmp/pi_agent_rust_cargo/...`,
+writes a `CACHEDIR.TAG`, rejects accidental repo-root target directories, and
+fails before compilation if the target or temp mount has insufficient free
+space. Set `PI_CARGO_RUNNER=local` for a local-only run,
+`PI_CARGO_BUILD_ROOT=<dir>` for a different large volume, or
+`PI_CARGO_HEADROOM_MIN_FREE_MB=<mb>` for smaller focused checks.
 
 ### Testing
 
@@ -2279,14 +2287,14 @@ rch exec -- cargo clippy --examples -- -D warnings
 # Set CARGO_TARGET_DIR explicitly if you want a custom shared or isolated target.
 
 # All tests
-rch exec -- cargo test
+./scripts/cargo_headroom.sh test --all-targets
 
 # Specific module
-rch exec -- cargo test tools::tests
-rch exec -- cargo test sse::tests
+./scripts/cargo_headroom.sh test tools::tests
+./scripts/cargo_headroom.sh test sse::tests
 
 # Conformance tests
-rch exec -- cargo test conformance
+./scripts/cargo_headroom.sh test conformance
 ```
 
 Focused validation tools:

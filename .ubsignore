@@ -12,6 +12,8 @@ ubuntu-review*/
 codex*/
 codex_extindex_review/
 codex_extindex_review_test/
+bd-*/
+bd-*/**
 fuzz/
 release_artifacts/
 pane*/

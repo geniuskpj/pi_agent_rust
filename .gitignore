@@ -61,6 +61,10 @@ _target-*/
 # Per-agent remote build directories created by rch
 .rch-target-*/
 
+# Root-level bead-named cargo target directories accidentally created by a
+# relative CARGO_TARGET_DIR (for example bd-fl0p3-7/).
+/bd-*/
+
 # Benchmark result directories
 .bench*/
 

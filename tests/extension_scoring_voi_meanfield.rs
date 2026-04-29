@@ -39,6 +39,13 @@ fn stale_timestamp() -> String {
         .to_rfc3339()
 }
 
+fn future_timestamp() -> String {
+    Utc.with_ymd_and_hms(2026, 2, 16, 12, 10, 0)
+        .single()
+        .expect("valid timestamp")
+        .to_rfc3339()
+}
+
 fn candidate(id: &str, utility: f64, overhead_ms: u32) -> VoiCandidate {
     VoiCandidate {
         id: id.to_string(),
@@ -216,6 +223,19 @@ fn voi_skips_missing_telemetry() {
     no_timestamp.last_seen_at = None;
 
     let plan = plan_voi_candidates(&[no_timestamp], fixed_now(), &config);
+
+    assert!(plan.selected.is_empty());
+    assert_eq!(plan.skipped.len(), 1);
+    assert_eq!(plan.skipped[0].reason, VoiSkipReason::MissingTelemetry);
+}
+
+#[test]
+fn voi_skips_future_telemetry() {
+    let config = VoiPlannerConfig::default();
+    let mut future_candidate = candidate("future", 10.0, 5);
+    future_candidate.last_seen_at = Some(future_timestamp());
+
+    let plan = plan_voi_candidates(&[future_candidate], fixed_now(), &config);
 
     assert!(plan.selected.is_empty());
     assert_eq!(plan.skipped.len(), 1);
