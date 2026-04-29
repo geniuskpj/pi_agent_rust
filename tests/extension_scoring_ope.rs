@@ -118,3 +118,96 @@ fn ope_gate_approved_integration() {
     assert!(report.gate.passed);
     assert_eq!(report.diagnostics.valid_samples, samples.len());
 }
+
+fn target_policy_reward(context: f64) -> f64 {
+    context.mul_add(0.5, 0.25)
+}
+
+fn behavior_only_reward(context: f64) -> f64 {
+    context.mul_add(0.2, 0.10)
+}
+
+fn deterministic_ope_trace(sample_count: u32) -> Vec<OpeTraceSample> {
+    (0..sample_count)
+        .map(|idx| {
+            let context = f64::from(idx) / f64::from(sample_count);
+            let target_action = idx % 2 == 0;
+            let action = if target_action { "target" } else { "behavior" };
+            let target_reward = target_policy_reward(context);
+            let outcome = if target_action {
+                target_reward
+            } else {
+                behavior_only_reward(context)
+            };
+
+            sample(
+                action,
+                0.5,
+                if target_action { 1.0 } else { 0.0 },
+                outcome,
+                0.5,
+                target_reward,
+            )
+        })
+        .collect()
+}
+
+fn estimator_rmse(estimate: f64, expected_value: f64) -> f64 {
+    (estimate - expected_value).abs()
+}
+
+fn ope_estimator_errors(sample_count: u32) -> [f64; 3] {
+    let config = OpeEvaluatorConfig {
+        max_importance_weight: 10.0,
+        min_effective_sample_size: 40.0,
+        max_standard_error: 1.0,
+        confidence_z: 1.96,
+        max_regret_delta: 1.0,
+    };
+    let samples = deterministic_ope_trace(sample_count);
+    let report = evaluate_off_policy(&samples, &config);
+    let expected_value = 0.5;
+
+    assert_eq!(report.gate.reason, OpeGateReason::Approved);
+    assert!(report.gate.passed);
+    assert_eq!(
+        report.diagnostics.valid_samples,
+        usize::try_from(sample_count).expect("sample count fits usize")
+    );
+    assert_eq!(report.diagnostics.skipped_invalid_samples, 0);
+    assert_eq!(report.diagnostics.direct_method_fallback_samples, 0);
+    assert_eq!(report.diagnostics.clipped_weight_samples, 0);
+
+    [
+        estimator_rmse(report.ips.estimate, expected_value),
+        estimator_rmse(report.wis.estimate, expected_value),
+        estimator_rmse(report.doubly_robust.estimate, expected_value),
+    ]
+}
+
+#[test]
+fn ope_estimators_converge_to_known_target_policy_value() {
+    let small = ope_estimator_errors(100);
+    let medium = ope_estimator_errors(1_000);
+    let large = ope_estimator_errors(10_000);
+
+    for (idx, name) in [(0, "IPS"), (1, "WIS"), (2, "DR")] {
+        assert!(
+            medium[idx] < small[idx],
+            "{name} RMSE should drop from n=100 to n=1000: small={}, medium={}",
+            small[idx],
+            medium[idx]
+        );
+        assert!(
+            large[idx] < medium[idx],
+            "{name} RMSE should drop from n=1000 to n=10000: medium={}, large={}",
+            medium[idx],
+            large[idx]
+        );
+        assert!(
+            large[idx] <= 0.0001,
+            "{name} RMSE should be near zero at n=10000: large={}",
+            large[idx]
+        );
+    }
+}
