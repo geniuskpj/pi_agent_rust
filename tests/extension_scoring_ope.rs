@@ -119,6 +119,32 @@ fn ope_gate_approved_integration() {
     assert_eq!(report.diagnostics.valid_samples, samples.len());
 }
 
+#[test]
+fn ope_missing_direct_method_prediction_fails_closed_under_low_overlap() {
+    let config = OpeEvaluatorConfig::default();
+    let samples = (0..32)
+        .map(|idx| OpeTraceSample {
+            action: format!("missing-dm-{idx}"),
+            behavior_propensity: 1.0,
+            target_propensity: 0.05,
+            outcome: 1.0,
+            baseline_outcome: Some(0.2),
+            direct_method_prediction: None,
+            context_lineage: Some("ctx:missing-dm".to_string()),
+        })
+        .collect::<Vec<_>>();
+
+    let report = evaluate_off_policy(&samples, &config);
+    assert_eq!(
+        report.diagnostics.direct_method_fallback_samples,
+        samples.len()
+    );
+    assert_eq!(report.gate.reason, OpeGateReason::ExcessiveRegret);
+    assert!(!report.gate.passed);
+    assert!(report.doubly_robust.estimate < report.baseline_mean);
+    assert!(report.estimated_regret_delta > config.max_regret_delta);
+}
+
 fn target_policy_reward(context: f64) -> f64 {
     context.mul_add(0.5, 0.25)
 }

@@ -87,7 +87,7 @@ get_open_beads() {
 
     # Get open beads with their IDs, titles, and labels
     br list --status=open --json 2>/dev/null | \
-    jq -r '(.issues // .)[] |
+    jq -r '(.issues? // .)[] |
         "\(.id)|\(.title // "")|\(.labels // [] | join(","))|\(.external_id // "")"' | \
     while IFS='|' read -r bead_id title labels external_id; do
         echo "OPEN_BEAD:$bead_id:$title:$labels:$external_id"

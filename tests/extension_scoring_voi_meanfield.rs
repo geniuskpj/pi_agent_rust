@@ -12,6 +12,9 @@ use pi::extension_scoring::{
     compute_mean_field_controls, plan_voi_candidates,
 };
 
+#[path = "algorithms/voi_planner.rs"]
+mod voi_planner;
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn fixed_now() -> chrono::DateTime<Utc> {
@@ -340,10 +343,10 @@ fn voi_negative_utility_treated_as_zero() {
     let plan = plan_voi_candidates(&[negative, positive], fixed_now(), &config);
 
     // Negative utility is normalized to 0.0, which equals the floor — should still pass.
-    // Both should be selected since normalized(-5) = 0.0 >= 0.0.
     assert!(plan.selected.iter().any(|selected| selected.id == "pos"));
-    // neg normalized to 0.0 which is >= min 0.0, so it should also be selected
-    assert!(plan.selected.iter().any(|selected| selected.id == "neg"));
+    // Zero-utility candidates remain eligible, but exact budget planning drops them
+    // when they add no utility and consume overhead.
+    assert!(!plan.selected.iter().any(|selected| selected.id == "neg"));
 }
 
 // ══════════════════════════════════════════════════════════════════════

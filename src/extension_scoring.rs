@@ -860,14 +860,13 @@ pub fn plan_voi_candidates(
         };
     }
 
-    let mut ranked = candidates.to_vec();
-    ranked.sort_by(compare_voi_candidates_desc);
-
     let max_candidates = config.max_candidates.unwrap_or(usize::MAX);
     let stale_after_minutes = config.stale_after_minutes.unwrap_or(120).max(0);
     let min_utility_score = config.min_utility_score.unwrap_or(0.0).max(0.0);
-    let mut used_overhead_ms = 0_u32;
 
+    let mut ranked = candidates.to_vec();
+    ranked.sort_by(compare_voi_candidates_desc);
+    let mut eligible = Vec::new();
     for candidate in ranked {
         if !candidate.enabled {
             skipped.push(VoiSkippedCandidate {
@@ -894,10 +893,18 @@ pub fn plan_voi_candidates(
             });
             continue;
         }
-        if selected.len() >= max_candidates
-            || used_overhead_ms.saturating_add(candidate.estimated_overhead_ms)
-                > config.overhead_budget_ms
-        {
+        eligible.push(candidate);
+    }
+
+    let selected_indices = select_voi_candidate_indices(
+        &eligible,
+        config.overhead_budget_ms,
+        max_candidates.min(eligible.len()),
+    );
+    let mut used_overhead_ms = 0_u32;
+
+    for (index, candidate) in eligible.into_iter().enumerate() {
+        if !selected_indices.contains(&index) {
             skipped.push(VoiSkippedCandidate {
                 id: candidate.id,
                 reason: VoiSkipReason::BudgetExceeded,
@@ -923,6 +930,123 @@ pub fn plan_voi_candidates(
         used_overhead_ms,
         remaining_overhead_ms: config.overhead_budget_ms.saturating_sub(used_overhead_ms),
     }
+}
+
+#[derive(Debug, Clone)]
+struct VoiSelectionState {
+    utility_score: f64,
+    overhead_ms: u32,
+    selected_indices: Vec<usize>,
+}
+
+fn select_voi_candidate_indices(
+    eligible: &[VoiCandidate],
+    overhead_budget_ms: u32,
+    max_candidates: usize,
+) -> BTreeSet<usize> {
+    if eligible.is_empty() || max_candidates == 0 {
+        return BTreeSet::new();
+    }
+
+    let mut frontiers = vec![BTreeMap::<u32, VoiSelectionState>::new(); max_candidates + 1];
+    frontiers[0].insert(
+        0,
+        VoiSelectionState {
+            utility_score: 0.0,
+            overhead_ms: 0,
+            selected_indices: Vec::new(),
+        },
+    );
+
+    for (candidate_index, candidate) in eligible.iter().enumerate() {
+        let candidate_utility = normalized_utility(candidate.utility_score);
+        for count in (0..max_candidates).rev() {
+            let states = frontiers[count].values().cloned().collect::<Vec<_>>();
+            for state in states {
+                let Some(overhead_ms) = state
+                    .overhead_ms
+                    .checked_add(candidate.estimated_overhead_ms)
+                else {
+                    continue;
+                };
+                if overhead_ms > overhead_budget_ms {
+                    continue;
+                }
+                let utility_score = state.utility_score + candidate_utility;
+                let mut selected_indices = state.selected_indices;
+                selected_indices.push(candidate_index);
+                insert_voi_selection_state(
+                    &mut frontiers[count + 1],
+                    VoiSelectionState {
+                        utility_score,
+                        overhead_ms,
+                        selected_indices,
+                    },
+                );
+            }
+        }
+    }
+
+    frontiers
+        .into_iter()
+        .flat_map(BTreeMap::into_values)
+        .max_by(compare_voi_selection_states)
+        .map(|state| state.selected_indices.into_iter().collect())
+        .unwrap_or_default()
+}
+
+fn insert_voi_selection_state(
+    frontier: &mut BTreeMap<u32, VoiSelectionState>,
+    candidate: VoiSelectionState,
+) {
+    if frontier
+        .values()
+        .any(|existing| voi_selection_state_dominates(existing, &candidate))
+    {
+        return;
+    }
+
+    let dominated_overheads = frontier
+        .iter()
+        .filter_map(|(overhead, existing)| {
+            voi_selection_state_dominates(&candidate, existing).then_some(*overhead)
+        })
+        .collect::<Vec<_>>();
+    for overhead in dominated_overheads {
+        frontier.remove(&overhead);
+    }
+
+    match frontier.get(&candidate.overhead_ms) {
+        Some(existing)
+            if compare_voi_selection_states(&candidate, existing)
+                != std::cmp::Ordering::Greater =>
+        {
+            return;
+        }
+        _ => {}
+    }
+    frontier.insert(candidate.overhead_ms, candidate);
+}
+
+fn voi_selection_state_dominates(left: &VoiSelectionState, right: &VoiSelectionState) -> bool {
+    const EPSILON: f64 = 1.0e-9;
+
+    left.overhead_ms <= right.overhead_ms
+        && (left.utility_score > right.utility_score + EPSILON
+            || ((left.utility_score - right.utility_score).abs() <= EPSILON
+                && (left.overhead_ms < right.overhead_ms
+                    || left.selected_indices <= right.selected_indices)))
+}
+
+fn compare_voi_selection_states(
+    left: &VoiSelectionState,
+    right: &VoiSelectionState,
+) -> std::cmp::Ordering {
+    left.utility_score
+        .partial_cmp(&right.utility_score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| right.overhead_ms.cmp(&left.overhead_ms))
+        .then_with(|| right.selected_indices.cmp(&left.selected_indices))
 }
 
 fn compare_voi_candidates_desc(left: &VoiCandidate, right: &VoiCandidate) -> std::cmp::Ordering {
@@ -1559,7 +1683,7 @@ fn normalize_ope_sample(
         .unwrap_or(sample.outcome);
     let (direct_method, fallback_direct_method) = match sample.direct_method_prediction {
         Some(value) if value.is_finite() => (value, false),
-        _ => (sample.outcome, true),
+        _ => (0.0, true),
     };
     Some((
         NormalizedOpeSample {
@@ -2826,12 +2950,12 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["fast-high", "small"]
+            vec!["small", "expensive"]
         );
-        assert_eq!(plan.used_overhead_ms, 5);
-        assert_eq!(plan.remaining_overhead_ms, 4);
+        assert_eq!(plan.used_overhead_ms, 9);
+        assert_eq!(plan.remaining_overhead_ms, 0);
         assert_eq!(plan.skipped.len(), 1);
-        assert_eq!(plan.skipped[0].id, "expensive");
+        assert_eq!(plan.skipped[0].id, "fast-high");
         assert_eq!(plan.skipped[0].reason, VoiSkipReason::BudgetExceeded);
     }
 
