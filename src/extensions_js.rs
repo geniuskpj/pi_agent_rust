@@ -18480,6 +18480,7 @@ class __pi_HostcallStream {
         this.buffer = [];
         this.waitResolve = null;
         this.done = false;
+        this.closedByConsumer = false;
         this.bufferLimit = 16;
         this.stallTimeoutMs = 30000;
         this.stallTimer = null;
@@ -18524,6 +18525,9 @@ class __pi_HostcallStream {
         }, timeoutMs);
     }
     pushChunk(chunk, isFinal) {
+        if (this.closedByConsumer) {
+            return;
+        }
         if (isFinal) {
             this.done = true;
             this._clearStallTimer();
@@ -18545,6 +18549,9 @@ class __pi_HostcallStream {
         }
     }
     pushError(error) {
+        if (this.closedByConsumer) {
+            return;
+        }
         this.done = true;
         this._clearStallTimer();
         if (this.waitResolve) {
@@ -18582,6 +18589,16 @@ class __pi_HostcallStream {
         });
     }
     return() {
+        if (!this.closedByConsumer) {
+            this.closedByConsumer = true;
+            if (!this.done && typeof __pi_cancel_hostcall_native === 'function') {
+                try {
+                    __pi_cancel_hostcall_native(this.callId);
+                } catch (e) {
+                    console.error('Hostcall cancel error:', e);
+                }
+            }
+        }
         this.done = true;
         this.buffer = [];
         this.waitResolve = null;
@@ -25521,6 +25538,70 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(chunks, serde_json::json!([]));
             let done = get_global_json(&runtime, "cancelWithoutTimerDone").await;
             assert_eq!(done, serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn pijs_stream_iterator_return_cancels_underlying_hostcall() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.iteratorReturnChunks = [];
+                    globalThis.iteratorReturnDone = false;
+                    globalThis.iteratorReturnError = null;
+                    (async () => {
+                        try {
+                            for await (const chunk of pi.exec('pi', ['--version'], { stream: true })) {
+                                globalThis.iteratorReturnChunks.push(chunk);
+                                break;
+                            }
+                        } catch (e) {
+                            globalThis.iteratorReturnError = String((e && e.message) || e || '');
+                        } finally {
+                            globalThis.iteratorReturnDone = true;
+                        }
+                    })();
+                    ",
+                )
+                .await
+                .expect("eval iterator return script");
+
+            let mut requests = runtime.drain_hostcall_requests();
+            assert_eq!(requests.len(), 1);
+            let request = requests.pop_front().expect("streaming exec request");
+            assert!(runtime.is_hostcall_pending(&request.call_id));
+
+            runtime.complete_hostcall(
+                request.call_id.clone(),
+                HostcallOutcome::StreamChunk {
+                    sequence: 0,
+                    chunk: serde_json::json!("first"),
+                    is_final: false,
+                },
+            );
+            runtime.tick().await.expect("tick first chunk");
+
+            assert!(
+                !runtime.cancel_hostcall(&request.call_id),
+                "iterator return should have already cancelled the stream"
+            );
+
+            drain_until_idle(&runtime, &clock).await;
+            assert_eq!(runtime.pending_hostcall_count(), 0);
+            assert!(!runtime.is_hostcall_pending(&request.call_id));
+
+            let chunks = get_global_json(&runtime, "iteratorReturnChunks").await;
+            assert_eq!(chunks, serde_json::json!(["first"]));
+            let done = get_global_json(&runtime, "iteratorReturnDone").await;
+            assert_eq!(done, serde_json::json!(true));
+            let error = get_global_json(&runtime, "iteratorReturnError").await;
+            assert_eq!(error, serde_json::Value::Null);
         });
     }
 

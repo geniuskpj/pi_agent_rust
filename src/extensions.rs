@@ -42550,7 +42550,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn conformal_interval_empirical_coverage_matches_confidence() {
         const CALIBRATION_SAMPLES: usize = 8_192;
         const HELD_OUT_SAMPLES: usize = 8_192;
