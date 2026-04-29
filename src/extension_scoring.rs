@@ -1078,7 +1078,10 @@ fn evaluate_candidate_freshness(
         return Some(VoiSkipReason::MissingTelemetry);
     }
     let age = now.signed_duration_since(observed_at);
-    if age > Duration::minutes(stale_after_minutes) {
+    let Some(staleness_window) = Duration::try_minutes(stale_after_minutes) else {
+        return Some(VoiSkipReason::StaleEvidence);
+    };
+    if age > staleness_window {
         Some(VoiSkipReason::StaleEvidence)
     } else {
         None
@@ -1746,7 +1749,11 @@ fn arithmetic_mean(values: &[f64]) -> f64 {
 
 const fn non_negative_finite(value: f64) -> f64 {
     if value.is_finite() {
-        if value > 0.0 { value } else { 0.0 }
+        if value > 0.0 {
+            value
+        } else {
+            0.0
+        }
     } else {
         0.0
     }
@@ -2894,21 +2901,15 @@ mod tests {
         let candidate = minimal_candidate("bare");
         let scored = score_candidate(&candidate, as_of);
         assert!(!scored.missing_signals.is_empty());
-        assert!(
-            scored
-                .missing_signals
-                .contains(&"signals.github_stars".to_string())
-        );
-        assert!(
-            scored
-                .missing_signals
-                .contains(&"signals.github_forks".to_string())
-        );
-        assert!(
-            scored
-                .missing_signals
-                .contains(&"recency.updated_at".to_string())
-        );
+        assert!(scored
+            .missing_signals
+            .contains(&"signals.github_stars".to_string()));
+        assert!(scored
+            .missing_signals
+            .contains(&"signals.github_forks".to_string()));
+        assert!(scored
+            .missing_signals
+            .contains(&"recency.updated_at".to_string()));
     }
 
     // =========================================================================
@@ -3012,11 +3013,10 @@ mod tests {
         assert_eq!(plan.selected.len(), 1);
         assert_eq!(plan.selected[0].id, "fresh-good");
         assert_eq!(plan.skipped.len(), 3);
-        assert!(
-            plan.skipped
-                .iter()
-                .any(|entry| entry.id == "stale" && entry.reason == VoiSkipReason::StaleEvidence)
-        );
+        assert!(plan
+            .skipped
+            .iter()
+            .any(|entry| entry.id == "stale" && entry.reason == VoiSkipReason::StaleEvidence));
         assert!(plan.skipped.iter().any(|entry| {
             entry.id == "low-utility" && entry.reason == VoiSkipReason::BelowUtilityFloor
         }));
@@ -3069,6 +3069,26 @@ mod tests {
         assert!(plan.skipped.iter().any(|entry| {
             entry.id == "stale-by-seconds" && entry.reason == VoiSkipReason::StaleEvidence
         }));
+    }
+
+    #[test]
+    fn voi_planner_fails_closed_when_staleness_window_overflows() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 10, 0, 0, 0).unwrap();
+        let config = VoiPlannerConfig {
+            enabled: true,
+            overhead_budget_ms: 20,
+            max_candidates: None,
+            stale_after_minutes: Some(i64::MAX),
+            min_utility_score: Some(0.0),
+        };
+        let candidates = vec![voi_candidate("fresh", 6.0, 2, Some("2026-01-09T23:59:00Z"))];
+
+        let plan = plan_voi_candidates(&candidates, now, &config);
+        assert!(plan.selected.is_empty());
+        assert!(plan
+            .skipped
+            .iter()
+            .any(|entry| { entry.id == "fresh" && entry.reason == VoiSkipReason::StaleEvidence }));
     }
 
     #[test]

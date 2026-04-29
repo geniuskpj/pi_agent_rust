@@ -7,9 +7,9 @@
 
 use chrono::{TimeZone, Utc};
 use pi::extension_scoring::{
-    MeanFieldControllerConfig, MeanFieldControllerReport, MeanFieldShardObservation,
-    MeanFieldShardState, VoiCandidate, VoiPlan, VoiPlannerConfig, VoiSkipReason,
-    compute_mean_field_controls, plan_voi_candidates,
+    compute_mean_field_controls, plan_voi_candidates, MeanFieldControllerConfig,
+    MeanFieldControllerReport, MeanFieldShardObservation, MeanFieldShardState, VoiCandidate,
+    VoiPlan, VoiPlannerConfig, VoiSkipReason,
 };
 
 #[path = "algorithms/voi_planner.rs"]
@@ -267,6 +267,21 @@ fn voi_uses_exact_staleness_boundary_instead_of_truncated_minutes() {
     assert!(plan.skipped.iter().any(|entry| {
         entry.id == "barely-stale" && entry.reason == VoiSkipReason::StaleEvidence
     }));
+}
+
+#[test]
+fn voi_fails_closed_when_staleness_window_is_out_of_range() {
+    let config = VoiPlannerConfig {
+        stale_after_minutes: Some(i64::MAX),
+        ..Default::default()
+    };
+    let fresh = candidate("fresh", 10.0, 5);
+
+    let plan = plan_voi_candidates(&[fresh], fixed_now(), &config);
+
+    assert!(plan.selected.is_empty());
+    assert_eq!(plan.skipped.len(), 1);
+    assert_eq!(plan.skipped[0].reason, VoiSkipReason::StaleEvidence);
 }
 
 #[test]
