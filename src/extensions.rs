@@ -42682,6 +42682,62 @@ mod tests {
     }
 
     #[test]
+    fn safety_envelope_pac_bayes_veto_tracks_bound_threshold() {
+        let config = SafetyEnvelopeConfig {
+            enabled: true,
+            conformal_confidence: 0.99,
+            conformal_calibration_size: 50,
+            pac_bayes_delta: 0.05,
+            pac_bayes_prior_weight: 1.0,
+            safety_error_threshold: 0.30,
+            min_observations: 20,
+        };
+
+        let mut below_threshold = SafetyEnvelopeState::default();
+        for _ in 0..200 {
+            assert!(
+                !below_threshold.evaluate(100.0, true, &config),
+                "low-error PAC-Bayes path should not veto"
+            );
+        }
+        let below = below_threshold.snapshot(&config);
+        assert!(
+            below.pac_bayes_bound < config.safety_error_threshold,
+            "low-error PAC-Bayes bound should stay below threshold: bound={}, threshold={}",
+            below.pac_bayes_bound,
+            config.safety_error_threshold
+        );
+        assert!(!below.vetoing);
+        assert!(below.veto_reason.is_none());
+
+        let mut above_threshold = SafetyEnvelopeState::default();
+        for _ in 0..18 {
+            assert!(
+                !above_threshold.evaluate(100.0, true, &config),
+                "PAC-Bayes path should not veto before failures push the bound above threshold"
+            );
+        }
+        assert!(
+            !above_threshold.evaluate(100.0, false, &config),
+            "minimum-observation gate should suppress veto until the configured sample count"
+        );
+        let vetoed = above_threshold.evaluate(100.0, false, &config);
+        let above = above_threshold.snapshot(&config);
+        assert!(
+            above.pac_bayes_bound > config.safety_error_threshold,
+            "high-KL PAC-Bayes bound should exceed threshold: bound={}, threshold={}",
+            above.pac_bayes_bound,
+            config.safety_error_threshold
+        );
+        assert!(vetoed);
+        assert!(above.vetoing);
+        assert_eq!(
+            above.veto_reason.as_deref(),
+            Some("pac_bayes_bound_exceeded")
+        );
+    }
+
+    #[test]
     fn safety_envelope_no_veto_when_disabled() {
         let config = SafetyEnvelopeConfig {
             enabled: false,

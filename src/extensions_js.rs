@@ -17405,7 +17405,13 @@ async function __pi_provider_stream_simple_next(stream_id) {
         return { done: true, value: null };
     }
 
-    const result = await record.iterator.next();
+    let result;
+    try {
+        result = await record.iterator.next();
+    } catch (err) {
+        __pi_provider_streams.delete(id);
+        throw err;
+    }
     if (!result || result.done) {
         __pi_provider_streams.delete(id);
         return { done: true, value: null };
@@ -25602,6 +25608,70 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(done, serde_json::json!(true));
             let error = get_global_json(&runtime, "iteratorReturnError").await;
             assert_eq!(error, serde_json::Value::Null);
+        });
+    }
+
+    #[test]
+    fn pijs_provider_stream_simple_error_cleans_up_registry() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                    __pi_begin_extension("ext.provider.error", { name: "ext.provider.error" });
+                    pi.registerProvider("error-provider", {
+                        api: "openai-completions",
+                        baseUrl: "https://not-used.example.com",
+                        models: [{ id: "err-model", name: "Error Model" }],
+                        streamSimple: async function*(model, context, options) {
+                            yield "partial";
+                            throw new Error("stream explosion");
+                        }
+                    });
+                    __pi_end_extension();
+
+                    globalThis.providerStreamErrorState = { done: false };
+                    (async () => {
+                        const streamId = await __pi_provider_stream_simple_start(
+                            "error-provider",
+                            { id: "err-model" },
+                            { messages: [] },
+                            {},
+                        );
+                        globalThis.providerStreamErrorState.afterStart =
+                            __pi_runtime_registry_snapshot().providerStreams;
+                        const first = await __pi_provider_stream_simple_next(streamId);
+                        globalThis.providerStreamErrorState.first = first;
+                        globalThis.providerStreamErrorState.afterFirst =
+                            __pi_runtime_registry_snapshot().providerStreams;
+                        try {
+                            await __pi_provider_stream_simple_next(streamId);
+                            globalThis.providerStreamErrorState.threw = false;
+                        } catch (e) {
+                            globalThis.providerStreamErrorState.threw = true;
+                            globalThis.providerStreamErrorState.error = String((e && e.message) || e || '');
+                        }
+                        globalThis.providerStreamErrorState.afterError =
+                            __pi_runtime_registry_snapshot().providerStreams;
+                        globalThis.providerStreamErrorState.done = true;
+                    })();
+                    "#,
+                )
+                .await
+                .expect("eval provider stream error cleanup");
+
+            let state = get_global_json(&runtime, "providerStreamErrorState").await;
+            assert_eq!(state["afterStart"], serde_json::json!(1));
+            assert_eq!(state["afterFirst"], serde_json::json!(1));
+            assert_eq!(state["first"]["done"], serde_json::json!(false));
+            assert_eq!(state["first"]["value"], serde_json::json!("partial"));
+            assert_eq!(state["threw"], serde_json::json!(true));
+            assert_eq!(state["error"], serde_json::json!("stream explosion"));
+            assert_eq!(state["afterError"], serde_json::json!(0));
+            assert_eq!(state["done"], serde_json::json!(true));
         });
     }
 
