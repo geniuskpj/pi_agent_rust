@@ -1,5 +1,5 @@
 use chrono::{TimeZone, Utc};
-use pi::extension_scoring::{plan_voi_candidates, VoiCandidate, VoiPlannerConfig};
+use pi::extension_scoring::{VoiCandidate, VoiPlannerConfig, plan_voi_candidates};
 
 const CANDIDATES_PER_SEED: usize = 24;
 const SEED_COUNT: u64 = 128;

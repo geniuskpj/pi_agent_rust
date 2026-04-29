@@ -3139,8 +3139,7 @@ mod tests {
         // When the env var is unset we keep the literal so existing
         // configurations that just happened to choose an `_API_KEY`-shaped
         // value continue to work; the user sees the auth failure as before.
-        let resolved =
-            resolve_value_with_resolvers("UNSET_PROVIDER_API_KEY", None, |_| None);
+        let resolved = resolve_value_with_resolvers("UNSET_PROVIDER_API_KEY", None, |_| None);
         assert_eq!(resolved.as_deref(), Some("UNSET_PROVIDER_API_KEY"));
     }
 

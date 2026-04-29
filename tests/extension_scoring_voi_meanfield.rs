@@ -7,9 +7,9 @@
 
 use chrono::{TimeZone, Utc};
 use pi::extension_scoring::{
-    compute_mean_field_controls, plan_voi_candidates, MeanFieldControllerConfig,
-    MeanFieldControllerReport, MeanFieldShardObservation, MeanFieldShardState, VoiCandidate,
-    VoiPlan, VoiPlannerConfig, VoiSkipReason,
+    MeanFieldControllerConfig, MeanFieldControllerReport, MeanFieldShardObservation,
+    MeanFieldShardState, VoiCandidate, VoiPlan, VoiPlannerConfig, VoiSkipReason,
+    compute_mean_field_controls, plan_voi_candidates,
 };
 
 #[path = "algorithms/voi_planner.rs"]
@@ -761,6 +761,32 @@ fn meanfield_infinite_pressures_clamped() {
     );
     assert!(ctrl.routing_weight >= config.min_routing_weight);
     assert!(ctrl.routing_weight <= config.max_routing_weight);
+}
+
+#[test]
+fn meanfield_nonfinite_previous_state_fails_closed() {
+    let config = MeanFieldControllerConfig::default();
+    let obs = vec![stressed_observation("prior-state")];
+    let prev = vec![MeanFieldShardState {
+        shard_id: "prior-state".to_string(),
+        routing_weight: f64::NAN,
+        batch_budget: 0,
+        help_factor: f64::INFINITY,
+        backoff_factor: f64::NEG_INFINITY,
+        last_routing_delta: f64::NAN,
+    }];
+
+    let report = compute_mean_field_controls(&obs, &prev, &config);
+
+    let ctrl = &report.controls[0];
+    assert!(report.global_pressure.is_finite());
+    assert!(ctrl.routing_weight.is_finite());
+    assert!(ctrl.routing_delta.is_finite());
+    assert!(ctrl.stability_margin.is_finite());
+    assert!(ctrl.routing_weight >= config.min_routing_weight);
+    assert!(ctrl.routing_weight <= config.max_routing_weight);
+    assert!(ctrl.batch_budget >= config.min_batch_budget);
+    assert!(ctrl.batch_budget <= config.max_batch_budget);
 }
 
 #[test]

@@ -1233,6 +1233,7 @@ pub fn compute_mean_field_controls(
             .get(&shard_id)
             .cloned()
             .unwrap_or_else(|| default_mean_field_state(&shard_id, &sanitized_config));
+        let baseline = sanitize_mean_field_state(baseline, &sanitized_config);
 
         let control = compute_control_for_shard(
             &shard_id,
@@ -1332,6 +1333,25 @@ fn sanitize_mean_field_config(config: &MeanFieldControllerConfig) -> SanitizedMe
         min_backoff_factor,
         max_backoff_factor,
         convergence_epsilon: non_negative_finite(config.convergence_epsilon),
+    }
+}
+
+fn sanitize_mean_field_state(
+    state: MeanFieldShardState,
+    config: &SanitizedMeanFieldConfig,
+) -> MeanFieldShardState {
+    MeanFieldShardState {
+        shard_id: state.shard_id,
+        routing_weight: finite_or_zero(state.routing_weight)
+            .clamp(config.min_routing_weight, config.max_routing_weight),
+        batch_budget: state
+            .batch_budget
+            .clamp(config.min_batch_budget, config.max_batch_budget),
+        help_factor: finite_or_zero(state.help_factor)
+            .clamp(config.min_help_factor, config.max_help_factor),
+        backoff_factor: finite_or_zero(state.backoff_factor)
+            .clamp(config.min_backoff_factor, config.max_backoff_factor),
+        last_routing_delta: finite_or_zero(state.last_routing_delta),
     }
 }
 
@@ -1753,14 +1773,14 @@ fn arithmetic_mean(values: &[f64]) -> f64 {
 
 const fn non_negative_finite(value: f64) -> f64 {
     if value.is_finite() {
-        if value > 0.0 {
-            value
-        } else {
-            0.0
-        }
+        if value > 0.0 { value } else { 0.0 }
     } else {
         0.0
     }
+}
+
+const fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
 }
 
 fn positive_finite_or(value: f64, fallback: f64) -> f64 {
@@ -2873,9 +2893,11 @@ mod tests {
             .find(|item| item.id == "present")
             .expect("present candidate present");
         assert_eq!(future_item.score.activity, 0);
-        assert!(future_item
-            .missing_signals
-            .contains(&"recency.updated_at".to_string()));
+        assert!(
+            future_item
+                .missing_signals
+                .contains(&"recency.updated_at".to_string())
+        );
         assert!(present_item.score.activity > future_item.score.activity);
         assert!(present_item.score.final_total > future_item.score.final_total);
     }
@@ -2950,15 +2972,21 @@ mod tests {
         let candidate = minimal_candidate("bare");
         let scored = score_candidate(&candidate, as_of);
         assert!(!scored.missing_signals.is_empty());
-        assert!(scored
-            .missing_signals
-            .contains(&"signals.github_stars".to_string()));
-        assert!(scored
-            .missing_signals
-            .contains(&"signals.github_forks".to_string()));
-        assert!(scored
-            .missing_signals
-            .contains(&"recency.updated_at".to_string()));
+        assert!(
+            scored
+                .missing_signals
+                .contains(&"signals.github_stars".to_string())
+        );
+        assert!(
+            scored
+                .missing_signals
+                .contains(&"signals.github_forks".to_string())
+        );
+        assert!(
+            scored
+                .missing_signals
+                .contains(&"recency.updated_at".to_string())
+        );
     }
 
     // =========================================================================
@@ -3062,10 +3090,11 @@ mod tests {
         assert_eq!(plan.selected.len(), 1);
         assert_eq!(plan.selected[0].id, "fresh-good");
         assert_eq!(plan.skipped.len(), 3);
-        assert!(plan
-            .skipped
-            .iter()
-            .any(|entry| entry.id == "stale" && entry.reason == VoiSkipReason::StaleEvidence));
+        assert!(
+            plan.skipped
+                .iter()
+                .any(|entry| entry.id == "stale" && entry.reason == VoiSkipReason::StaleEvidence)
+        );
         assert!(plan.skipped.iter().any(|entry| {
             entry.id == "low-utility" && entry.reason == VoiSkipReason::BelowUtilityFloor
         }));
@@ -3134,10 +3163,11 @@ mod tests {
 
         let plan = plan_voi_candidates(&candidates, now, &config);
         assert!(plan.selected.is_empty());
-        assert!(plan
-            .skipped
-            .iter()
-            .any(|entry| { entry.id == "fresh" && entry.reason == VoiSkipReason::StaleEvidence }));
+        assert!(
+            plan.skipped.iter().any(|entry| {
+                entry.id == "fresh" && entry.reason == VoiSkipReason::StaleEvidence
+            })
+        );
     }
 
     #[test]
@@ -3405,6 +3435,31 @@ mod tests {
 
         let report = compute_mean_field_controls(&observations, &previous, &config);
         assert!(report.converged);
+    }
+
+    #[test]
+    fn mean_field_sanitizes_nonfinite_previous_state() {
+        let config = MeanFieldControllerConfig::default();
+        let observations = vec![mean_field_observation("shard-a", 0.8, 1.5, 0.2)];
+        let previous = vec![MeanFieldShardState {
+            shard_id: "shard-a".to_string(),
+            routing_weight: f64::NAN,
+            batch_budget: 0,
+            help_factor: f64::INFINITY,
+            backoff_factor: f64::NEG_INFINITY,
+            last_routing_delta: f64::NAN,
+        }];
+
+        let report = compute_mean_field_controls(&observations, &previous, &config);
+        let control = &report.controls[0];
+        assert!(report.global_pressure.is_finite());
+        assert!(control.routing_weight.is_finite());
+        assert!(control.routing_delta.is_finite());
+        assert!(control.stability_margin.is_finite());
+        assert!(control.routing_weight >= config.min_routing_weight);
+        assert!(control.routing_weight <= config.max_routing_weight);
+        assert!(control.batch_budget >= config.min_batch_budget);
+        assert!(control.batch_budget <= config.max_batch_budget);
     }
 
     // ── Property tests ──
