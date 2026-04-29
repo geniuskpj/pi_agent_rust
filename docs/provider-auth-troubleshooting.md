@@ -326,7 +326,7 @@ let hints = err.hints();
 // hints.context: [("provider", "groq"), ("details", "401 Unauthorized")]
 ```
 
-The hint system is tested against all 12 providers across 7 failure categories:
+The hint system is tested against all 12 failure-taxonomy provider IDs across 7 failure categories:
 `cargo test --test provider_native_contract -- failure_taxonomy`
 
 ## Auth failure-signature catalog (native providers)

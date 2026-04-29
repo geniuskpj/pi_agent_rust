@@ -10,6 +10,8 @@ Snapshot basis:
 - `src/providers/*.rs` native implementations
 - Timestamp: 2026-02-10
 
+Provider-count rule: Pi has 10 native provider implementation modules, counted as the Rust files under `src/providers/` excluding `mod.rs`: `anthropic`, `openai`, `openai_responses`, `gemini`, `cohere`, `azure`, `bedrock`, `vertex`, `copilot`, and `gitlab`. User-visible canonical IDs, aliases, OpenAI-compatible presets, VCR coverage families, and extension-provided providers are separate counts.
+
 ## Implementation Modes
 
 | Mode | Meaning |
@@ -286,7 +288,7 @@ All native and preset providers now have at least metadata + factory verificatio
 
 | Category | Count | VCR Coverage | Status |
 |----------|-------|-------------|--------|
-| Built-in native | 6 | 6/6 (100%) | Full 6-scenario VCR suites |
+| Native-implemented metadata IDs | 6 | 6/6 (100%) | Full 6-scenario VCR suites |
 | Native adapter required | 4 | 4/4 (100%) | 4-6 scenario VCR suites |
 | Wave B1-B3 preset | 19 | 19/19 (100%) | 3-scenario VCR suites |
 | Wave C special routing | 3 | 3/3 (100%) | 3-scenario VCR suites |
@@ -301,7 +303,7 @@ Full deferred/high-risk inventory lives in `docs/provider-implementation-modes.j
 ## Already-Covered vs Missing Snapshot
 
 Covered now (85 canonical IDs registered in `PROVIDER_METADATA`):
-- 6 built-in native providers: `anthropic`, `openai`, `google` (gemini), `cohere`, `azure-openai`, `google-vertex`.
+- 6 native-implemented metadata IDs: `anthropic`, `openai`, `google` (gemini), `cohere`, `azure-openai`, `google-vertex`.
 - 4 native adapter providers with VCR verification: `amazon-bedrock`, `sap-ai-core`, `github-copilot`, `gitlab`.
 - 12 Wave A OpenAI-compatible preset providers: `groq`, `deepinfra`, `cerebras`, `openrouter`, `mistral`, `moonshotai`, `alibaba` (dashscope), `deepseek`, `fireworks`, `togetherai`, `perplexity`, `xai`.
 - 34 Batch A1-A4 OpenAI-compatible preset providers (metadata + factory verified).

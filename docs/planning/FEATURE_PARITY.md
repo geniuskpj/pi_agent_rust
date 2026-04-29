@@ -297,7 +297,7 @@
 | auth.json storage | ✅ | `src/auth.rs` | - | File with 0600 perms |
 | File locking | ✅ | `src/auth.rs` | - | Exclusive lock with timeout |
 | Key resolution | ✅ | `src/auth.rs` | - | override > auth.json > env |
-| Multi-provider keys | ✅ | `src/auth.rs` | - | 12 providers supported |
+| Multi-provider keys | ✅ | `src/auth.rs` | - | 12 auth provider families supported |
 | OAuth flow | ✅ | `src/auth.rs`, `src/interactive/commands.rs` | Unit | Anthropic PKCE + extension-registered providers |
 | Token refresh | ✅ | `src/auth.rs`, `src/main.rs` | Unit | Auto-refresh on startup for all OAuth providers |
 

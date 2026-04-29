@@ -249,6 +249,24 @@ jobs:
           rg -n --fixed-strings '### 8 Built-in Tools' README.md >/dev/null
           rg -n --fixed-strings '`hashline_edit`' README.md AGENTS.md >/dev/null
 
+      - name: Provider count claim guard
+        run: |
+          set -euo pipefail
+          files="$(git ls-files README.md AGENTS.md 'docs/*.md' 'tests/*.rs')"
+          native_claims="$(printf '%s\n' "$files" | xargs rg -n --color never \
+            -e '\b[0-9]+[[:space:]]+native providers?\b' \
+            -e '\b[0-9]+[[:space:]]+native provider implementation modules?\b' || true)"
+          stale_claims="$(printf '%s\n' "$native_claims" | rg -v \
+            -e '\b10[[:space:]]+native providers?\b' \
+            -e '\b10[[:space:]]+native provider implementation modules?\b' \
+            -e 'Expected 10 native providers' || true)"
+          if [ -n "$stale_claims" ]; then
+            echo "$stale_claims"
+            echo "Native provider count drift: use 10 native provider implementation modules, counted as src/providers/*.rs excluding mod.rs."
+            exit 1
+          fi
+          rg -n --fixed-strings '10 native provider implementation modules' README.md AGENTS.md docs/providers.md >/dev/null
+
       - name: Suite classification guard
         run: |
           set -euo pipefail

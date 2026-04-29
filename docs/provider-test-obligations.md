@@ -235,7 +235,7 @@ All VCR cassettes live in `tests/fixtures/vcr/` and follow the naming convention
 verify_{provider}_{scenario}.json
 ```
 
-Current cassette inventory includes 90+ files covering 10+ native providers plus OpenAI-compatible presets (alibaba-cn, kimi-for-coding, minimax, modelscope, moonshotai-cn, nebius, ovhcloud, scaleway, sap_ai_core, siliconflow, upstage, venice, zai, zhipuai-coding-plan, etc.).
+Current cassette inventory includes 90+ files covering the 10 native provider implementation modules plus OpenAI-compatible presets (alibaba-cn, kimi-for-coding, minimax, modelscope, moonshotai-cn, nebius, ovhcloud, scaleway, sap_ai_core, siliconflow, upstage, venice, zai, zhipuai-coding-plan, etc.).
 
 ---
 
