@@ -42,6 +42,21 @@ is_positive_int() {
     esac
 }
 
+resolve_shared_tmp_root() {
+    local root="/data/tmp/pi_agent_rust/${USER:-agent}"
+    local resolved=""
+
+    if [ -e /data/tmp/pi_agent_rust ] && resolved="$(cd /data/tmp/pi_agent_rust && pwd -P 2>/dev/null)"; then
+        case "$resolved" in
+            "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
+                root="/data/tmp/pi_agent_rust_cargo/${USER:-agent}"
+                ;;
+        esac
+    fi
+
+    printf '%s\n' "$root"
+}
+
 count_files() {
     local dir="$1"
     if [ ! -d "$dir" ]; then
@@ -90,9 +105,11 @@ resolve_target_binary() {
 
 choose_target_root() {
     local local_root="$PROJECT_ROOT/.tmp/${USER:-agent}"
-    local shm_root="/data/tmp/pi_agent_rust/${USER:-agent}"
+    local shm_root
     local min_shm_free_kb="${FUZZ_VALIDATE_MIN_SHM_KB:-8388608}" # 8 GiB default
     local shm_free_kb=""
+
+    shm_root="$(resolve_shared_tmp_root)"
 
     if ! is_positive_int "$min_shm_free_kb"; then
         min_shm_free_kb=8388608

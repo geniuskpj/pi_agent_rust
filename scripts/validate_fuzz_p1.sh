@@ -39,6 +39,21 @@ is_positive_int() {
     esac
 }
 
+resolve_shared_tmp_root() {
+    local root="/data/tmp/pi_agent_rust/${USER:-agent}"
+    local resolved=""
+
+    if [ -e /data/tmp/pi_agent_rust ] && resolved="$(cd /data/tmp/pi_agent_rust && pwd -P 2>/dev/null)"; then
+        case "$resolved" in
+            "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
+                root="/data/tmp/pi_agent_rust_cargo/${USER:-agent}"
+                ;;
+        esac
+    fi
+
+    printf '%s\n' "$root"
+}
+
 run_cmd() {
     if [ "$RCH_MODE" = "enabled" ]; then
         env "RCH_FORCE_REMOTE=${RCH_FORCE_REMOTE:-true}" rch exec -- "$@"
@@ -149,7 +164,7 @@ echo ""
 
 if [ -z "${CARGO_TARGET_DIR:-}" ]; then
     if [ -d /dev/shm ] && [ -w /dev/shm ]; then
-        TARGET_ROOT="/data/tmp/pi_agent_rust/${USER:-agent}"
+        TARGET_ROOT="$(resolve_shared_tmp_root)"
     else
         TARGET_ROOT="$PROJECT_ROOT/.tmp/${USER:-agent}"
     fi

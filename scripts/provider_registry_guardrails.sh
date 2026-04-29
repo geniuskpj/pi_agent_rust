@@ -73,8 +73,23 @@ run_cargo() {
     fi
 }
 
+default_build_root() {
+    local base="/data/tmp/pi_agent_rust"
+    local resolved=""
+
+    if [ -e "$base" ] && resolved="$(cd "$base" && pwd -P 2>/dev/null)"; then
+        case "$resolved" in
+            "$repo_root"|"$repo_root"/*)
+                base="/data/tmp/pi_agent_rust_cargo"
+                ;;
+        esac
+    fi
+
+    printf '%s\n' "$base"
+}
+
 # Default to tmpfs-backed build/test paths to reduce disk pressure in multi-agent runs.
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/data/tmp/pi_agent_rust/${USER:-agent}}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(default_build_root)/${USER:-agent}}"
 export TMPDIR="${TMPDIR:-${CARGO_TARGET_DIR}/tmp}"
 mkdir -p "$TMPDIR"
 

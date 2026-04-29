@@ -13,12 +13,28 @@ CORRELATION_ID="${CI_CORRELATION_ID:-persistence-fault-injection-$STAMP}"
 export CI_CORRELATION_ID="$CORRELATION_ID"
 export RUST_LOG="${RUST_LOG:-info}"
 
+default_build_root() {
+    local base="/data/tmp/pi_agent_rust"
+    local resolved=""
+
+    if [[ -e "$base" ]] && resolved="$(cd "$base" && pwd -P 2>/dev/null)"; then
+        case "$resolved" in
+            "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
+                base="/data/tmp/pi_agent_rust_cargo"
+                ;;
+        esac
+    fi
+
+    printf '%s\n' "$base"
+}
+
 AGENT_SUFFIX="${PERSISTENCE_AGENT_SUFFIX:-${CODEX_THREAD_ID:-${USER:-agent}}}"
+BUILD_ROOT="$(default_build_root)"
 if [[ -z "${CARGO_TARGET_DIR:-}" || "${CARGO_TARGET_DIR:-}" == "target" ]]; then
-    export CARGO_TARGET_DIR="/data/tmp/pi_agent_rust/$AGENT_SUFFIX/target"
+    export CARGO_TARGET_DIR="$BUILD_ROOT/$AGENT_SUFFIX/target"
 fi
 if [[ -z "${TMPDIR:-}" || "${TMPDIR:-}" == "/tmp" || "${TMPDIR:-}" == "/data/tmp" ]]; then
-    export TMPDIR="/data/tmp/pi_agent_rust/$AGENT_SUFFIX/tmp"
+    export TMPDIR="$BUILD_ROOT/$AGENT_SUFFIX/tmp"
 fi
 mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
 
