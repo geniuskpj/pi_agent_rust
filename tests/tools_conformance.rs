@@ -2994,7 +2994,7 @@ mod e2e_ls {
     }
 }
 
-/// Comprehensive E2E: exercise all 7 tools in a single test workspace with full artifact logging.
+/// Comprehensive E2E: exercise the core filesystem/process tools in a single test workspace with full artifact logging.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn e2e_all_tools_roundtrip() {
@@ -3168,12 +3168,12 @@ mod security_path_traversal {
             let parent = tempfile::tempdir().unwrap();
             let child_dir = parent.path().join("child");
             std::fs::create_dir_all(&child_dir).unwrap();
-            let secret = parent.path().join("secret.txt");
-            std::fs::write(&secret, "TOP_SECRET_DATA").unwrap();
+            let outside_file = parent.path().join("outside.txt");
+            std::fs::write(&outside_file, "OUTSIDE_DATA").unwrap();
 
             let tool = pi::tools::ReadTool::new(&child_dir);
             let input = serde_json::json!({
-                "path": "../secret.txt"
+                "path": "../outside.txt"
             });
             let err = tool
                 .execute("sec-read-01", input, None)
@@ -3194,12 +3194,12 @@ mod security_path_traversal {
             let parent = tempfile::tempdir().unwrap();
             let child_dir = parent.path().join("child");
             std::fs::create_dir_all(&child_dir).unwrap();
-            let secret = parent.path().join("secret.txt");
-            std::fs::write(&secret, "SECRET").unwrap();
+            let outside_file = parent.path().join("outside.txt");
+            std::fs::write(&outside_file, "OUTSIDE").unwrap();
 
             let tool = pi::tools::ReadTool::new(&child_dir);
             let input = serde_json::json!({
-                "path": "subdir/../secret.txt"
+                "path": "subdir/../outside.txt"
             });
             let err = tool
                 .execute("sec-read-04", input, None)
@@ -3421,12 +3421,12 @@ mod security_path_traversal {
     fn read_symlink_escape() {
         asupersync::test_utils::run_test(|| async {
             let outside = tempfile::tempdir().unwrap();
-            let secret = outside.path().join("secret.txt");
-            std::fs::write(&secret, "SYMLINK_SECRET").unwrap();
+            let outside_file = outside.path().join("outside.txt");
+            std::fs::write(&outside_file, "SYMLINK_OUTSIDE").unwrap();
 
             let cwd = tempfile::tempdir().unwrap();
             let link = cwd.path().join("link.txt");
-            std::os::unix::fs::symlink(&secret, &link).unwrap();
+            std::os::unix::fs::symlink(&outside_file, &link).unwrap();
 
             let tool = pi::tools::ReadTool::new(cwd.path());
             let input = serde_json::json!({
@@ -3878,10 +3878,8 @@ mod hashline_edit_tool {
         text.lines()
             .find(|line| line.starts_with(&line_prefix))
             .and_then(|line| line.split_once(':'))
-            .map_or_else(
-                || panic!("expected hashline tag for line {line_num}"),
-                |(tag, _)| tag.to_string(),
-            )
+            .map(|(tag, _)| tag.to_string())
+            .expect("expected hashline tag for requested line")
     }
 
     #[test]

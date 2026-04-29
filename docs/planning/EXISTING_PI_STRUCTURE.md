@@ -36,7 +36,7 @@ Pi is an AI coding agent platform with these core components:
 | Terminal UI | `@mariozechner/pi-tui` | `pi::tui` module |
 
 ### Key Statistics (TypeScript)
-- **7 built-in tools**: read, bash, edit, write, grep, find, ls
+- **Core legacy tool set**: read, bash, edit, write, grep, find, ls
 - **20+ LLM providers**: Anthropic, OpenAI, Google, Bedrock, etc.
 - **Session format version**: 3
 - **Default tools enabled**: read, bash, edit, write
@@ -1850,7 +1850,7 @@ This specification covers:
 - **Message types:** User, Assistant, ToolResult with all content block variants
 - **Streaming:** Full event type enumeration with sequences
 - **Providers:** Trait definition and model registry structure
-- **Tools:** All 7 built-in tools with exact parameters and behaviors
+- **Tools:** Built-in tools with exact parameters and behaviors
 - **Sessions:** JSONL format with tree structure
 - **Config:** Settings structure with precedence rules
 - **Auth:** Credential storage with OAuth refresh

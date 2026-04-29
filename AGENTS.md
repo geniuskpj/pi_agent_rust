@@ -214,7 +214,7 @@ Session persistence + index (JSONL, optional SQLite backend)
 | `src/providers/cohere.rs` | Cohere API implementation |
 | `src/providers/azure.rs` | Azure OpenAI API implementation |
 | `src/providers/mod.rs` | Provider factory and extension stream-simple bridge |
-| `src/tools.rs` | 7 built-in tools |
+| `src/tools.rs` | 8 built-in tools |
 | `src/interactive.rs` | Interactive TUI application state and event loop |
 | `src/rpc.rs` | RPC/stdin server mode |
 | `src/extensions.rs` | Extension protocol, policy, and host integration |
@@ -249,6 +249,7 @@ Session persistence + index (JSONL, optional SQLite backend)
 - `grep` - Content search with context
 - `find` - File discovery with glob patterns
 - `ls` - Directory listing
+- `hashline_edit` - Precise edits using `LINE#HASH` tags from `read`/`grep` with `hashline=true`
 
 **Session Management:**
 - JSONL format (version 3)

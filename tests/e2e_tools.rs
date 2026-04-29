@@ -1,8 +1,9 @@
 //! E2E: Built-in tool execution with artifact logging (bd-2xyv).
 //!
-//! Tests 7 of the 8 built-in tools (read, write, edit, bash, grep, find, ls) via direct
-//! `ToolRegistry::get(name).execute()` calls against real file system operations in
-//! temp directories. No mocks, no network, fully deterministic.
+//! Tests the core filesystem/process tools (read, write, edit, bash, grep, find,
+//! ls) via direct `ToolRegistry::get(name).execute()` calls against real file
+//! system operations in temp directories. No mocks, no network, fully
+//! deterministic.
 
 mod common;
 

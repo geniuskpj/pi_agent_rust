@@ -1,8 +1,8 @@
 //! Hardened tool execution tests (bd-1f42.2.2).
 //!
 //! These tests exercise edge cases, security boundaries, and failure modes for
-//! 7 of the 8 built-in tools using real filesystem and process execution in isolated
-//! temp workspaces. No mocks. High-fidelity diagnostics on failure.
+//! the core filesystem/process tools using real filesystem and process execution
+//! in isolated temp workspaces. No mocks. High-fidelity diagnostics on failure.
 
 mod common;
 

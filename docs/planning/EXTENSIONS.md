@@ -58,7 +58,7 @@ sockets). They get a **small set of hostcalls** that map to Pi’s already-audit
 operations (tools + session/ui actions).
 
 Core examples (names illustrative):
-- `pi.tool(name, input)` → delegates to the built-in tool registry (read/write/edit/bash/grep/find/ls)
+- `pi.tool(name, input)` → delegates to the built-in tool registry (read/write/edit/bash/grep/find/ls/hashline_edit)
 - `pi.exec(command, args, options)` → a constrained process runner (timeout + process-tree cleanup)
 - `pi.fs.*` → a *capability filesystem* rooted at project/cwd (no path escape)
 - `pi.http(request)` → a constrained HTTP client (policy-controlled)

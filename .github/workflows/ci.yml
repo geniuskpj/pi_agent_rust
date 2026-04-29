@@ -229,6 +229,26 @@ jobs:
             exit 1
           fi
 
+      - name: Built-in tool count claim guard
+        run: |
+          set -euo pipefail
+          files="$(git ls-files README.md AGENTS.md 'docs/*.md' 'tests/*.rs')"
+          stale_claims="$(printf '%s\n' "$files" | xargs rg -n --color never \
+            -e '7 built-in' \
+            -e '7 Built-in' \
+            -e 'seven built-in' \
+            -e 'Seven built-ins' \
+            -e 'all 7 built-in' \
+            -e 'all 7 tools' \
+            -e 'exercise all 7 tools' || true)"
+          if [ -n "$stale_claims" ]; then
+            echo "$stale_claims"
+            echo "Built-in tool count drift: Pi exposes 8 built-ins including hashline_edit."
+            exit 1
+          fi
+          rg -n --fixed-strings '### 8 Built-in Tools' README.md >/dev/null
+          rg -n --fixed-strings '`hashline_edit`' README.md AGENTS.md >/dev/null
+
       - name: Suite classification guard
         run: |
           set -euo pipefail

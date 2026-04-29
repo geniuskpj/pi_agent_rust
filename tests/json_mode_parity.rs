@@ -2044,13 +2044,22 @@ fn json_parity_tool_error_consistency() {
 }
 
 // ---------------------------------------------------------------------------
-// 22. All 7 built-in tool names serialize correctly
+// 22. All 8 built-in tool names serialize correctly
 // ---------------------------------------------------------------------------
 
 #[test]
 fn json_parity_all_builtin_tool_names() {
     let harness = TestHarness::new("json_parity_all_builtin_tool_names");
-    for name in &["read", "write", "edit", "bash", "grep", "find", "ls"] {
+    for name in &[
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "hashline_edit",
+    ] {
         let event = AgentEvent::ToolExecutionStart {
             tool_call_id: format!("tc-{name}"),
             tool_name: (*name).to_string(),
@@ -2062,7 +2071,7 @@ fn json_parity_all_builtin_tool_names() {
 
     harness
         .log()
-        .info_ctx("json_parity", "all 7 built-in tool names ok", |_| {});
+        .info_ctx("json_parity", "all 8 built-in tool names ok", |_| {});
 }
 
 // ---------------------------------------------------------------------------
