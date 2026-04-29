@@ -1877,6 +1877,21 @@ fn resolve_value(value: &str) -> Option<String> {
 }
 
 fn resolve_value_with_base(value: &str, base_dir: Option<&Path>) -> Option<String> {
+    resolve_value_with_resolvers(value, base_dir, |var| std::env::var(var).ok())
+}
+
+/// Testable helper. Behaves the same as [`resolve_value_with_base`] but with an
+/// injectable environment lookup so unit tests can exercise the env-var
+/// indirection path without mutating process-wide state (the crate forbids
+/// `unsafe`, so `std::env::set_var` cannot be used in tests).
+fn resolve_value_with_resolvers<F>(
+    value: &str,
+    base_dir: Option<&Path>,
+    env_lookup: F,
+) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
     if let Some(rest) = value.strip_prefix('!') {
         return resolve_shell(rest);
     }
@@ -1885,7 +1900,7 @@ fn resolve_value_with_base(value: &str, base_dir: Option<&Path>) -> Option<Strin
         if var_name.is_empty() {
             return None;
         }
-        return std::env::var(var_name).ok().filter(|v| !v.is_empty());
+        return env_lookup(var_name).filter(|v| !v.is_empty());
     }
 
     if let Some(file_path) = value.strip_prefix("file:") {
@@ -1906,11 +1921,67 @@ fn resolve_value_with_base(value: &str, base_dir: Option<&Path>) -> Option<Strin
             .filter(|v| !v.is_empty());
     }
 
+    // pi parity (issue #64): values that look like an env var name and end with
+    // `_API_KEY` (e.g. `DASHSCOPE_API_KEY`) are treated as a reference to that
+    // env var, matching the original `pi` convention. Real provider API keys do
+    // not end with the literal suffix `_API_KEY`, so this is a safe signal that
+    // the user wants indirection rather than a literal credential.
+    if looks_like_api_key_env_var(value) {
+        match env_lookup(value) {
+            Some(env_value) => {
+                let trimmed = env_value.trim();
+                if trimmed.is_empty() {
+                    tracing::warn!(
+                        event = "pi.models.api_key_env_empty",
+                        var = value,
+                        "models.json apiKey references env var that is set but empty; \
+                         falling back to literal value"
+                    );
+                } else {
+                    return Some(trimmed.to_string());
+                }
+            }
+            None => {
+                tracing::warn!(
+                    event = "pi.models.api_key_env_missing",
+                    var = value,
+                    "models.json apiKey references an env var that is not set; \
+                     falling back to literal value (auth will likely fail)"
+                );
+            }
+        }
+    }
+
     if value.is_empty() {
         None
     } else {
         Some(value.to_string())
     }
+}
+
+/// Whether `value` should be treated as the *name* of an environment variable
+/// holding the real API key (matching the original `pi` convention).
+///
+/// Conservative check: uppercase ASCII letters/digits/underscores, starting
+/// with a letter, ending with the literal suffix `_API_KEY`, and at least one
+/// character before that suffix (so `_API_KEY` itself is rejected).
+fn looks_like_api_key_env_var(value: &str) -> bool {
+    const SUFFIX: &str = "_API_KEY";
+    if !value.ends_with(SUFFIX) {
+        return false;
+    }
+    let prefix = &value[..value.len() - SUFFIX.len()];
+    if prefix.is_empty() {
+        return false;
+    }
+    let mut chars = prefix.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn resolve_shell(cmd: &str) -> Option<String> {
@@ -3014,6 +3085,80 @@ mod tests {
             Some("file-key")
         );
         assert!(resolve_value("file:/definitely/missing/path").is_none());
+    }
+
+    // ─── pi parity: bare *_API_KEY env-var indirection (issue #64) ───────────
+
+    #[test]
+    fn looks_like_api_key_env_var_accepts_typical_names() {
+        assert!(looks_like_api_key_env_var("DASHSCOPE_API_KEY"));
+        assert!(looks_like_api_key_env_var("OPENAI_API_KEY"));
+        assert!(looks_like_api_key_env_var("ANTHROPIC_API_KEY"));
+        assert!(looks_like_api_key_env_var("MY_CUSTOM_API_KEY"));
+        // Digits in the prefix are fine, as long as it starts with a letter.
+        assert!(looks_like_api_key_env_var("PROVIDER42_API_KEY"));
+    }
+
+    #[test]
+    fn looks_like_api_key_env_var_rejects_non_matches() {
+        // Wrong suffix.
+        assert!(!looks_like_api_key_env_var("DASHSCOPE_API"));
+        assert!(!looks_like_api_key_env_var("DASHSCOPE_TOKEN"));
+        // Lowercase letters anywhere → looks like a literal key.
+        assert!(!looks_like_api_key_env_var("dashscope_api_key"));
+        assert!(!looks_like_api_key_env_var("My_API_KEY"));
+        // Real-shaped keys.
+        assert!(!looks_like_api_key_env_var("sk-ant-api03-AAAA_API_KEY"));
+        assert!(!looks_like_api_key_env_var("sk-1234567890"));
+        // Bare suffix only.
+        assert!(!looks_like_api_key_env_var("_API_KEY"));
+        assert!(!looks_like_api_key_env_var(""));
+        // Must start with a letter.
+        assert!(!looks_like_api_key_env_var("0DASH_API_KEY"));
+    }
+
+    #[test]
+    fn resolve_value_resolves_bare_api_key_env_var_when_set() {
+        let resolved = resolve_value_with_resolvers("DASHSCOPE_API_KEY", None, |var| {
+            assert_eq!(var, "DASHSCOPE_API_KEY");
+            Some("sk-real-secret-from-env".to_string())
+        });
+        assert_eq!(resolved.as_deref(), Some("sk-real-secret-from-env"));
+    }
+
+    #[test]
+    fn resolve_value_trims_whitespace_from_resolved_env_value() {
+        let resolved = resolve_value_with_resolvers("DASHSCOPE_API_KEY", None, |_| {
+            Some("  sk-trimmed  \n".to_string())
+        });
+        assert_eq!(resolved.as_deref(), Some("sk-trimmed"));
+    }
+
+    #[test]
+    fn resolve_value_falls_back_to_literal_when_referenced_env_var_unset() {
+        // When the env var is unset we keep the literal so existing
+        // configurations that just happened to choose an `_API_KEY`-shaped
+        // value continue to work; the user sees the auth failure as before.
+        let resolved =
+            resolve_value_with_resolvers("UNSET_PROVIDER_API_KEY", None, |_| None);
+        assert_eq!(resolved.as_deref(), Some("UNSET_PROVIDER_API_KEY"));
+    }
+
+    #[test]
+    fn resolve_value_falls_back_to_literal_when_referenced_env_var_empty() {
+        let resolved =
+            resolve_value_with_resolvers("DASHSCOPE_API_KEY", None, |_| Some("   ".to_string()));
+        assert_eq!(resolved.as_deref(), Some("DASHSCOPE_API_KEY"));
+    }
+
+    #[test]
+    fn resolve_value_treats_literal_key_unchanged() {
+        // Real-looking provider keys are passed through verbatim and must NOT
+        // hit the env_lookup closure.
+        let resolved = resolve_value_with_resolvers("sk-ant-api03-abcdef123", None, |_| {
+            panic!("env_lookup should not be invoked for literal-shaped values");
+        });
+        assert_eq!(resolved.as_deref(), Some("sk-ant-api03-abcdef123"));
     }
 
     #[test]
