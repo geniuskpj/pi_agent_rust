@@ -2205,7 +2205,7 @@ A: Startup time matters when you're in a terminal all day. Rust gives us <100ms 
 A: Yes. Pi has 10 native provider implementation modules: Anthropic, OpenAI Chat, OpenAI Responses/Codex Responses, Gemini (native + Gemini CLI + Antigravity routes), Cohere, Azure OpenAI, Amazon Bedrock, Vertex AI, GitHub Copilot, and GitLab Duo. Pi also supports many OpenAI-compatible presets (for example Groq, OpenRouter, Mistral, Together, DeepSeek, Cerebras, DeepInfra, Alibaba/Qwen, and Moonshot/Kimi). Provider IDs and aliases are case-insensitive. Set credentials and choose via `--provider`/`--model`; run `pi --list-providers` to see canonical IDs, aliases, and env keys.
 
 **Q: How do sessions work?**
-A: Each session is a JSONL file with message entries. Sessions are per-project (based on working directory) and support branching via parent references.
+A: By default, each session is a JSONL v3 file with message entries, parent references for branching, and compaction metadata. Builds include `sqlite-sessions` support by default, so configured deployments can use SQLite-backed session storage too; JSONL remains the default store unless configuration selects SQLite.
 
 **Q: Why is unsafe forbidden?**
 A: Memory safety is non-negotiable for a tool that executes arbitrary commands. The performance cost is negligible for this use case.
@@ -2223,7 +2223,7 @@ A: When a conversation exceeds the model's context window, Pi summarizes older m
 A: Yes. Create a `models.json` file in `~/.pi/agent/` or `.pi/` with entries specifying the model ID, base URL, and API type (usually `openai-completions` for OpenAI-compatible endpoints). Pi's compat config system handles field name differences and feature flag overrides. Extensions can also register entirely custom providers.
 
 **Q: How does Pi decide which session to resume?**
-A: Pi maintains a SQLite index of all session files. When you run `pi -c`, it queries the index for the most recently modified session whose working directory matches your current project. This avoids scanning the filesystem on every resume.
+A: Pi maintains a SQLite session metadata index sidecar with WAL/lock handling and stale-index reindexing. When you run `pi -c`, it queries that index for the most recently modified session whose working directory matches your current project, including JSONL sessions and configured SQLite-backed sessions. This avoids scanning the filesystem on every resume.
 
 **Q: What happens if an extension tries to access something dangerous?**
 A: Every hostcall from an extension is checked against the active capability policy before execution. Dangerous capabilities (`exec`, `env`) are denied by default under `safe` and `balanced` unless explicitly opted in (for example via `PI_EXTENSION_ALLOW_DANGEROUS=1`), and are available under `permissive`. For `exec`, Pi then applies command mediation before spawn: it classifies command+arg signatures and blocks critical classes by default (for example recursive delete, disk/device write, reverse shell), with strict/safe policy able to block high-tier classes as well (for example shutdown, process-kill, credential-file modification). Denied calls return errors to the extension Promise path, and denial events are recorded in redacted security-alert and exec-mediation audit artifacts. Sensitive env keys (API keys/tokens/secrets) remain filtered. If behavior escalates, you can kill-switch that extension into quarantined `killed` state immediately or force compatibility-lane routing as a containment step while investigating.
