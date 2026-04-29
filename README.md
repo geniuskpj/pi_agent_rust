@@ -834,7 +834,7 @@ When multiple resources share the same name, the first occurrence wins. Collisio
 ┌────────▼─────────────────────▼──────────────────────▼──────────┐
 │                     Session Persistence                         │
 │  • JSONL format (v3)   • Tree structure   • Session index/cache  │
-│  • Per-project dirs    • Optional SQLite backend                │
+│  • Per-project dirs    • Default-enabled SQLite backend support │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -919,7 +919,7 @@ This is a second comparison pass focused on high-impact architectural deltas and
 | **Execution surfaces** | Interactive + print + JSON mode + RPC + SDK | Interactive + print + JSON mode + RPC + Rust SDK | Rust SDK provides idiomatic companion API for embedding Pi programmatically (documented in `docs/sdk.md`) |
 | **Default built-in tool posture** | Defaults to `read/write/edit/bash` (others available) | Eight built-ins treated as first-class (`read/write/edit/bash/grep/find/ls/hashline_edit`) | Keep common code-navigation, shell, and hashline-anchored edit workflows available without extra configuration |
 | **Extension trust model** | Extension/package model documented as full system access | Embedded runtime with capability-gated hostcalls and policy profiles | Reduce ambient authority and make extension behavior auditable/deny-by-default |
-| **Session architecture emphasis** | JSONL tree session model and branch navigation | JSONL v3 tree + explicit session index (SQLite sidecar) + optional SQLite session backend | Faster resume/lookups at scale and safer multi-instance coordination |
+| **Session architecture emphasis** | JSONL tree session model and branch navigation | JSONL v3 tree + explicit session index (SQLite sidecar) + default-enabled SQLite session backend support | Faster resume/lookups at scale and safer multi-instance coordination |
 | **Streaming transport stack** | Node runtime networking stack | Purpose-built HTTP/TLS client + custom SSE parser on asupersync | Tighter control over chunking, parsing, and failure handling in long streams |
 | **Cancellation/timeout mechanics** | Platform/event-loop cancellation conventions | Explicit abort signaling, bounded tool iterations, process-tree termination | Minimize hangs/orphans and make stop behavior deterministic under load |
 | **Runtime context model** | Framework-level conventions and extension APIs | Explicit `AgentCx`/`asupersync::Cx` capability-scoped context threading | Make effect boundaries and testability first-class architectural constraints |
@@ -966,7 +966,7 @@ The sections above compare mechanics. This section calls out concrete features p
 | **Extension compatibility scanner + conformance harness** | Makes extension support measurable and auditable instead of anecdotal |
 | **SQLite session index sidecar** (WAL + lock + stale reindex path) | Gives fast session resume/list operations at scale without scanning every JSONL file on each query |
 | **Session Store V2 rollback and migration ledger** (segmented log + checkpoints + rollback events) | Long-session recovery can unwind to a known checkpoint with explicit migration/rollback provenance |
-| **Optional SQLite session storage backend** (`sqlite-sessions` feature) | Supports deployments that want database-backed session persistence in addition to JSONL |
+| **Default-enabled SQLite session storage support** (`sqlite-sessions` feature) | Supports deployments that want database-backed session persistence in addition to JSONL; disable with `--no-default-features` when building a minimal binary |
 | **Crash-resilient session save path** (temp file + atomic persist) | Improves session-file durability during writes and reduces partial-write failure modes |
 | **Unified hostcall dispatcher with typed taxonomy mapping** (`timeout` / `denied` / `io` / `invalid_request` / `internal`) | Produces consistent extension/runtime error semantics and easier client handling |
 | **Fail-closed evidence-lineage gates** (`run_id`/`correlation_id` + cross-artifact lineage checks) | Rejects stale or cherry-picked conformance/perf artifacts at release-gate time |
@@ -2270,6 +2270,14 @@ space. Set `PI_CARGO_RUNNER=local` for a local-only run,
 `PI_CARGO_BUILD_ROOT=<dir>` for a different large volume, or
 `PI_CARGO_HEADROOM_MIN_FREE_MB=<mb>` for smaller focused checks.
 
+### Cargo Feature Defaults
+
+Default builds enable `image-resize`, `jemalloc`, `clipboard`, `wasm-host`, and `sqlite-sessions`. The `sqlite-sessions` feature is therefore on for normal `cargo build`, `cargo test`, release, and installer builds; JSONL remains the default session store unless configuration selects SQLite storage. To build without SQLite session backend support, use `--no-default-features` and explicitly re-enable the feature subset you need, for example:
+
+```bash
+./scripts/cargo_headroom.sh build --no-default-features --features image-resize,clipboard
+```
+
 ### Testing
 
 ```bash
@@ -2390,7 +2398,7 @@ src/
 │   └── mod.rs
 ├── session.rs              # JSONL session persistence/tree ops
 ├── session_index.rs        # SQLite session metadata index/cache
-├── session_sqlite.rs       # Optional sqlite-sessions backend
+├── session_sqlite.rs       # Default-enabled sqlite-sessions backend support
 ├── compaction.rs           # Context compaction algorithm
 ├── interactive.rs          # Interactive TUI app loop/state
 ├── interactive/            # Bubble Tea-style TUI submodules

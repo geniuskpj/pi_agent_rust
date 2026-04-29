@@ -197,7 +197,7 @@ Tool Registry (built-ins + extension tools) ↔ Extension Runtime (QuickJS + cap
                          ↓
 Surfaces: Interactive TUI + RPC/stdin modes
                          ↓
-Session persistence + index (JSONL, optional SQLite backend)
+Session persistence + index (JSONL, default-enabled SQLite backend support)
 ```
 
 ### Key Files
@@ -256,7 +256,7 @@ Session persistence + index (JSONL, optional SQLite backend)
 - Tree structure for branching
 - Entry types: Message, ModelChange, ThinkingLevel, Compaction, etc.
 - Per-project session directories + session index metadata
-- Optional SQLite session backend behind `sqlite-sessions` feature flag
+- SQLite session backend support is enabled by default via `sqlite-sessions`; opt out with `--no-default-features` and re-enable only the features you need
 
 ### Migration Strategy
 

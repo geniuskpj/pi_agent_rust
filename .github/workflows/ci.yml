@@ -267,6 +267,24 @@ jobs:
           fi
           rg -n --fixed-strings '10 native provider implementation modules' README.md AGENTS.md docs/providers.md >/dev/null
 
+      - name: SQLite sessions feature claim guard
+        run: |
+          set -euo pipefail
+          files="$(git ls-files README.md AGENTS.md 'docs/*.md' 'tests/*.rs')"
+          stale_claims="$(printf '%s\n' "$files" | xargs rg -n --color never -i \
+            -e 'optional[[:space:]]+sqlite[[:space:]]+session' \
+            -e 'sqlite-sessions.*optional' \
+            -e 'optional.*sqlite-sessions' \
+            -e 'sqlite-sessions.*behind[[:space:]]+(a[[:space:]]+)?feature[[:space:]]+flag' \
+            -e 'behind[[:space:]]+(a[[:space:]]+)?feature[[:space:]]+flag.*sqlite-sessions' || true)"
+          if [ -n "$stale_claims" ]; then
+            echo "$stale_claims"
+            echo "sqlite-sessions claim drift: Cargo.toml enables sqlite-sessions by default; document opt-out with --no-default-features instead."
+            exit 1
+          fi
+          rg -n --fixed-strings 'default = ["image-resize", "jemalloc", "clipboard", "wasm-host", "sqlite-sessions"]' Cargo.toml >/dev/null
+          rg -n --fixed-strings 'Default builds enable `image-resize`, `jemalloc`, `clipboard`, `wasm-host`, and `sqlite-sessions`.' README.md >/dev/null
+
       - name: Suite classification guard
         run: |
           set -euo pipefail
