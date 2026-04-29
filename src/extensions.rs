@@ -3599,6 +3599,11 @@ impl OcoTunerState {
 }
 
 impl SafetyEnvelopeState {
+    const fn clear_veto(&mut self) {
+        self.vetoing = false;
+        self.veto_reason = None;
+    }
+
     fn snapshot(&self, config: &SafetyEnvelopeConfig) -> SafetyEnvelopeSnapshot {
         SafetyEnvelopeSnapshot {
             vetoing: self.vetoing,
@@ -3619,6 +3624,7 @@ impl SafetyEnvelopeState {
     /// and return `true` if aggressive optimization should be vetoed.
     fn evaluate(&mut self, latency_ms: f64, success: bool, config: &SafetyEnvelopeConfig) -> bool {
         if !config.enabled {
+            self.clear_veto();
             return false;
         }
 
@@ -3635,8 +3641,7 @@ impl SafetyEnvelopeState {
         // Not enough data yet — don't veto.
         let total = self.pac_bayes.total();
         if total < u64::from(config.min_observations) {
-            self.vetoing = false;
-            self.veto_reason = None;
+            self.clear_veto();
             return false;
         }
 
@@ -3666,8 +3671,7 @@ impl SafetyEnvelopeState {
         }
 
         // All clear — release veto if previously active.
-        self.vetoing = false;
-        self.veto_reason = None;
+        self.clear_veto();
         false
     }
 
@@ -3675,8 +3679,7 @@ impl SafetyEnvelopeState {
     fn reset(&mut self) {
         self.conformal = ConformalState::default();
         self.pac_bayes.reset();
-        self.vetoing = false;
-        self.veto_reason = None;
+        self.clear_veto();
     }
 }
 
@@ -25342,6 +25345,12 @@ impl ExtensionManager {
                     default_oco.rollback_loss_threshold
                 };
 
+            if !clamped.enabled || !clamped.safety_envelope.enabled {
+                for state in guard.budget_fallback_states.values_mut() {
+                    state.safety_envelope.clear_veto();
+                }
+            }
+
             guard.budget_controller_config = clamped;
         }
     }
@@ -42751,6 +42760,121 @@ mod tests {
         }
         assert!(!state.vetoing);
         assert_eq!(state.veto_count, 0);
+    }
+
+    #[test]
+    fn safety_envelope_disabling_clears_active_veto() {
+        let enabled = SafetyEnvelopeConfig {
+            enabled: true,
+            conformal_confidence: 0.95,
+            conformal_calibration_size: 10,
+            pac_bayes_delta: 0.05,
+            pac_bayes_prior_weight: 1.0,
+            safety_error_threshold: 0.10,
+            min_observations: 5,
+        };
+        let mut state = SafetyEnvelopeState::default();
+
+        for _ in 0..20 {
+            state.evaluate(100.0, false, &enabled);
+        }
+        assert!(state.vetoing, "enabled config should enter veto state");
+        assert_eq!(state.veto_reason, Some("pac_bayes_bound_exceeded"));
+        let prior_veto_count = state.veto_count;
+        let disabled = SafetyEnvelopeConfig {
+            enabled: false,
+            ..enabled
+        };
+        assert!(prior_veto_count > 0);
+
+        assert!(
+            !state.evaluate(100.0, false, &disabled),
+            "disabled config should never veto"
+        );
+        assert!(!state.vetoing, "disabling should clear active veto state");
+        assert!(
+            state.veto_reason.is_none(),
+            "disabling should clear stale veto reason"
+        );
+        assert_eq!(
+            state.veto_count, prior_veto_count,
+            "disabling should not fabricate a new veto activation"
+        );
+    }
+
+    #[test]
+    fn budget_controller_disabling_safety_envelope_clears_active_veto_immediately() {
+        let manager = ExtensionManager::new();
+        manager.set_budget_controller_config(ExtensionBudgetControllerConfig {
+            enabled: true,
+            tier: ExtensionBudgetTier::Strict,
+            overload_window_ms: 60_000,
+            overload_signals_to_fallback: 1_000,
+            recovery_successes_to_exit: 2,
+            regime_shift: RegimeShiftConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            safety_envelope: SafetyEnvelopeConfig {
+                enabled: true,
+                min_observations: 5,
+                safety_error_threshold: 0.10,
+                conformal_confidence: 0.95,
+                conformal_calibration_size: 10,
+                pac_bayes_delta: 0.05,
+                pac_bayes_prior_weight: 1.0,
+            },
+            oco_tuner: OcoTunerConfig::for_tier(ExtensionBudgetTier::Strict),
+        });
+
+        for _ in 0..20 {
+            manager.record_budget_overload_signal(
+                Some("ext.disable.safety"),
+                "overload",
+                None,
+                None,
+            );
+        }
+        assert!(
+            manager.any_safety_envelope_vetoing(),
+            "enabled safety envelope should enter a vetoing state"
+        );
+        let before = manager
+            .safety_envelope_snapshot("ext.disable.safety")
+            .expect("snapshot before disable");
+        assert!(before.vetoing);
+        assert_eq!(
+            before.veto_reason.as_deref(),
+            Some("pac_bayes_bound_exceeded")
+        );
+
+        manager.set_budget_controller_config(ExtensionBudgetControllerConfig {
+            enabled: true,
+            tier: ExtensionBudgetTier::Strict,
+            overload_window_ms: 60_000,
+            overload_signals_to_fallback: 1_000,
+            recovery_successes_to_exit: 2,
+            regime_shift: RegimeShiftConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            safety_envelope: SafetyEnvelopeConfig {
+                enabled: false,
+                ..SafetyEnvelopeConfig::for_tier(ExtensionBudgetTier::Strict)
+            },
+            oco_tuner: OcoTunerConfig::for_tier(ExtensionBudgetTier::Strict),
+        });
+
+        assert!(
+            !manager.any_safety_envelope_vetoing(),
+            "disabling the safety envelope should clear stale veto state immediately"
+        );
+        let after = manager
+            .safety_envelope_snapshot("ext.disable.safety")
+            .expect("snapshot after disable");
+        assert!(!after.vetoing);
+        assert!(after.veto_reason.is_none());
+        assert_eq!(after.veto_count, before.veto_count);
     }
 
     #[test]
