@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1077,8 +1077,8 @@ fn evaluate_candidate_freshness(
     if observed_at > now {
         return Some(VoiSkipReason::MissingTelemetry);
     }
-    let minutes = now.signed_duration_since(observed_at).num_minutes();
-    if minutes > stale_after_minutes {
+    let age = now.signed_duration_since(observed_at);
+    if age > Duration::minutes(stale_after_minutes) {
         Some(VoiSkipReason::StaleEvidence)
     } else {
         None
@@ -3045,6 +3045,29 @@ mod tests {
         assert_eq!(plan.selected[0].id, "fresh");
         assert!(plan.skipped.iter().any(|entry| {
             entry.id == "future" && entry.reason == VoiSkipReason::MissingTelemetry
+        }));
+    }
+
+    #[test]
+    fn voi_planner_applies_staleness_at_second_precision() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 10, 0, 0, 0).unwrap();
+        let config = VoiPlannerConfig {
+            enabled: true,
+            overhead_budget_ms: 20,
+            max_candidates: None,
+            stale_after_minutes: Some(1),
+            min_utility_score: Some(0.0),
+        };
+        let candidates = vec![
+            voi_candidate("fresh", 6.0, 2, Some("2026-01-09T23:59:00Z")),
+            voi_candidate("stale-by-seconds", 7.0, 2, Some("2026-01-09T23:58:59Z")),
+        ];
+
+        let plan = plan_voi_candidates(&candidates, now, &config);
+        assert_eq!(plan.selected.len(), 1);
+        assert_eq!(plan.selected[0].id, "fresh");
+        assert!(plan.skipped.iter().any(|entry| {
+            entry.id == "stale-by-seconds" && entry.reason == VoiSkipReason::StaleEvidence
         }));
     }
 

@@ -46,6 +46,13 @@ fn future_timestamp() -> String {
         .to_rfc3339()
 }
 
+fn barely_stale_timestamp() -> String {
+    Utc.with_ymd_and_hms(2026, 2, 16, 11, 58, 59)
+        .single()
+        .expect("valid timestamp")
+        .to_rfc3339()
+}
+
 fn candidate(id: &str, utility: f64, overhead_ms: u32) -> VoiCandidate {
     VoiCandidate {
         id: id.to_string(),
@@ -240,6 +247,26 @@ fn voi_skips_future_telemetry() {
     assert!(plan.selected.is_empty());
     assert_eq!(plan.skipped.len(), 1);
     assert_eq!(plan.skipped[0].reason, VoiSkipReason::MissingTelemetry);
+}
+
+#[test]
+fn voi_uses_exact_staleness_boundary_instead_of_truncated_minutes() {
+    let config = VoiPlannerConfig {
+        stale_after_minutes: Some(1),
+        ..Default::default()
+    };
+    let mut barely_stale = candidate("barely-stale", 10.0, 5);
+    barely_stale.last_seen_at = Some(barely_stale_timestamp());
+    let mut fresh = candidate("fresh", 10.0, 5);
+    fresh.last_seen_at = Some("2026-02-16T11:59:00+00:00".to_string());
+
+    let plan = plan_voi_candidates(&[barely_stale, fresh], fixed_now(), &config);
+
+    assert_eq!(plan.selected.len(), 1);
+    assert_eq!(plan.selected[0].id, "fresh");
+    assert!(plan.skipped.iter().any(|entry| {
+        entry.id == "barely-stale" && entry.reason == VoiSkipReason::StaleEvidence
+    }));
 }
 
 #[test]
