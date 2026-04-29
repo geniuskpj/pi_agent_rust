@@ -19904,8 +19904,13 @@ async fn load_all_extensions(
     host: &JsRuntimeHost,
     specs: &[JsExtensionLoadSpec],
 ) -> Result<Vec<JsExtensionSnapshot>> {
+    let explicit_entry_paths = specs
+        .iter()
+        .map(|spec| safe_canonicalize(&spec.entry_path))
+        .collect::<HashSet<_>>();
+
     for spec in specs {
-        load_one_extension(runtime, host, spec).await?;
+        load_one_extension(runtime, host, spec, &explicit_entry_paths).await?;
     }
     snapshot_extensions(runtime).await
 }
@@ -19915,8 +19920,16 @@ async fn load_one_extension(
     runtime: &PiJsRuntime,
     host: &JsRuntimeHost,
     spec: &JsExtensionLoadSpec,
+    explicit_entry_paths: &HashSet<PathBuf>,
 ) -> Result<()> {
-    let entry_paths = discover_related_extension_entries(&spec.entry_path)?;
+    let explicit_primary = safe_canonicalize(&spec.entry_path);
+    let mut entry_paths = discover_related_extension_entries(&spec.entry_path)?;
+    if explicit_entry_paths.len() > 1 {
+        entry_paths.retain(|entry_path| {
+            let canonical = safe_canonicalize(entry_path);
+            canonical == explicit_primary || !explicit_entry_paths.contains(&canonical)
+        });
+    }
     if entry_paths.len() > 1 {
         tracing::info!(
             event = "ext.load.multi_entry",
@@ -42180,6 +42193,74 @@ mod tests {
         }
         assert!(detected, "BOCPD should detect mean shift");
         assert!(bocpd.changepoint_count > 0);
+    }
+
+    fn synthetic_bocpd_observation(index: usize, change_at: usize) -> f64 {
+        let jitter = match index % 6 {
+            0 => -2.0,
+            1 => -1.0,
+            2 => -0.25,
+            3 => 0.25,
+            4 => 1.0,
+            _ => 2.0,
+        };
+        if index < change_at {
+            1_000.0 + jitter
+        } else {
+            250.0 + jitter
+        }
+    }
+
+    #[test]
+    fn bocpd_posterior_spikes_at_synthetic_change_point() {
+        const CHANGE_AT: usize = 80;
+        const TOTAL_SAMPLES: usize = 140;
+        const DETECTION_WINDOW: usize = 4;
+        const HAZARD_LAMBDA: f64 = 20.0;
+        const POSTERIOR_THRESHOLD: f64 = 0.20;
+
+        let mut bocpd = BocpdState::default();
+        let mut max_pre_change_posterior = 0.0_f64;
+        let mut max_window_posterior = 0.0_f64;
+        let mut first_detection_delay = None;
+
+        for index in 0..TOTAL_SAMPLES {
+            let detected = bocpd.observe(
+                synthetic_bocpd_observation(index, CHANGE_AT),
+                HAZARD_LAMBDA,
+                POSTERIOR_THRESHOLD,
+                200,
+            );
+            let cp_posterior = bocpd.run_length_probs.first().copied().unwrap_or(0.0);
+
+            if bocpd.warmed_up && index < CHANGE_AT {
+                max_pre_change_posterior = max_pre_change_posterior.max(cp_posterior);
+                assert!(
+                    !detected,
+                    "pre-change sample {index} should not exceed BOCPD posterior threshold; posterior={cp_posterior:.4}",
+                );
+            }
+
+            if (CHANGE_AT..=CHANGE_AT + DETECTION_WINDOW).contains(&index) {
+                max_window_posterior = max_window_posterior.max(cp_posterior);
+                if detected && first_detection_delay.is_none() {
+                    first_detection_delay = Some(index - CHANGE_AT);
+                }
+            }
+        }
+
+        assert!(
+            max_pre_change_posterior < POSTERIOR_THRESHOLD,
+            "stationary prefix should remain below posterior threshold: max_pre={max_pre_change_posterior:.4}",
+        );
+        assert!(
+            max_window_posterior >= POSTERIOR_THRESHOLD,
+            "posterior should spike at the known change point: max_window={max_window_posterior:.4}",
+        );
+        assert!(
+            first_detection_delay.is_some_and(|delay| delay <= DETECTION_WINDOW),
+            "BOCPD should detect within {DETECTION_WINDOW} samples of the change point; delay={first_detection_delay:?}",
+        );
     }
 
     #[test]

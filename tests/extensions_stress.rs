@@ -414,7 +414,10 @@ fn artifacts_dir() -> PathBuf {
 fn report_dir() -> PathBuf {
     // Write stress artifacts under `target/` so `cargo test` remains side-effect free
     // with respect to tracked repository files.
-    project_root().join("target/perf")
+    std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| project_root().join("target"), PathBuf::from)
+        .join("perf")
 }
 
 /// Collect entry paths for official-pi-mono extensions that are single-file
@@ -636,7 +639,7 @@ fn run_stress_loop(
 #[allow(clippy::too_many_lines)]
 fn write_stress_report(result: &StressResult, duration_secs: u64, ext_names: &[String]) {
     let report_dir = report_dir();
-    let _ = std::fs::create_dir_all(&report_dir);
+    std::fs::create_dir_all(&report_dir).expect("create stress report directory");
 
     // JSONL event log
     let events_path = report_dir.join("stress_events.jsonl");
@@ -688,7 +691,7 @@ fn write_stress_report(result: &StressResult, duration_secs: u64, ext_names: &[S
     });
     lines.push(serde_json::to_string(&summary_entry).unwrap_or_default());
 
-    let _ = std::fs::write(&events_path, lines.join("\n") + "\n");
+    std::fs::write(&events_path, lines.join("\n") + "\n").expect("write stress event log");
 
     // Triage summary JSON — include run_id/correlation_id for Phase-5 lineage coherence.
     let stress_run_id = std::env::var("CI_RUN_ID")
@@ -746,10 +749,11 @@ fn write_stress_report(result: &StressResult, duration_secs: u64, ext_names: &[S
         "pass": result.rss_ok && result.latency_ok,
     });
     let triage_path = report_dir.join("stress_triage.json");
-    let _ = std::fs::write(
+    std::fs::write(
         &triage_path,
         serde_json::to_string_pretty(&triage).unwrap_or_default(),
-    );
+    )
+    .expect("write stress triage report");
 
     eprintln!("\n=== Stress Test Report ===");
     eprintln!("  Extensions loaded: {}", result.extensions_loaded);
@@ -1233,7 +1237,7 @@ fn stress_policy_profile_rotation() {
     };
 
     let output_dir = report_dir();
-    let _ = std::fs::create_dir_all(&output_dir);
+    std::fs::create_dir_all(&output_dir).expect("create stress profile report directory");
     let output_path = output_dir.join("stress_profile_rotation.json");
     std::fs::write(
         &output_path,

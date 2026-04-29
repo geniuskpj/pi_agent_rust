@@ -314,7 +314,11 @@ fn assert_contains_case_insensitive(harness: &TestHarness, haystack: &str, needl
 
 fn assert_exit_code(harness: &TestHarness, result: &CliResult, expected: i32) {
     harness.assert_log(format!("assert exit_code == {expected}").as_str());
-    assert_eq!(result.exit_code, expected);
+    assert_eq!(
+        result.exit_code, expected,
+        "expected exit code {expected}, got {}\nstdout:\n{}\nstderr:\n{}",
+        result.exit_code, result.stdout, result.stderr
+    );
 }
 
 #[cfg(unix)]
@@ -1669,8 +1673,9 @@ fn e2e_cli_packages_update_respects_pinning_offline() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn e2e_cli_extensions_install_update_manifest_resolution_offline() {
-    let harness =
+    let mut harness =
         CliTestHarness::new("e2e_cli_extensions_install_update_manifest_resolution_offline");
+    harness.env.remove("PI_CONFIG_PATH");
 
     let write_extension_package = |root: &Path,
                                    package_name: &str,

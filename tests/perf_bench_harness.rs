@@ -56,7 +56,15 @@ fn iterations_override() -> Option<usize> {
 
 fn output_dir() -> PathBuf {
     std::env::var("BENCH_OUTPUT_DIR").ok().map_or_else(
-        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/perf"),
+        || {
+            std::env::var_os("CARGO_TARGET_DIR")
+                .filter(|value| !value.is_empty())
+                .map_or_else(
+                    || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"),
+                    PathBuf::from,
+                )
+                .join("perf")
+        },
         PathBuf::from,
     )
 }
@@ -578,7 +586,7 @@ fn bench_extension_scenarios() {
     let config = harness_config();
     let env = collect_env_fingerprint();
     let out_dir = output_dir();
-    let _ = std::fs::create_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("create extension benchmark output directory");
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 

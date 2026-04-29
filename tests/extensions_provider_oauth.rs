@@ -427,7 +427,7 @@ fn complete_extension_oauth_parses_url_callback_input() {
         let credential = complete_extension_oauth(
             &config,
             "http://localhost:9876/callback?code=url-code&state=url-state",
-            "verifier",
+            "url-state",
         )
         .await
         .expect("exchange");

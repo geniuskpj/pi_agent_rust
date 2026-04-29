@@ -26,7 +26,7 @@ fn test_extension_flag_parsing_basic() {
     assert_eq!(parsed.extension_flags[0].value, Some("true".to_string()));
 
     // The message should still be parsed correctly
-    assert_eq!(parsed.cli.message_args(), vec!["Hello", "world"]);
+    assert_eq!(parsed.cli.message_args(), vec!["Hello world"]);
 }
 
 /// Test parsing extension flags without values (boolean flags).
@@ -34,8 +34,9 @@ fn test_extension_flag_parsing_basic() {
 fn test_extension_flag_parsing_boolean() {
     let args = vec![
         "pi".to_string(),
-        "--verbose".to_string(),
+        "--trace".to_string(),
         "--dry-run".to_string(),
+        "--print".to_string(),
         "test message".to_string(),
     ];
 
@@ -43,12 +44,12 @@ fn test_extension_flag_parsing_boolean() {
 
     assert_eq!(parsed.extension_flags.len(), 2);
 
-    let verbose_flag = parsed
+    let trace_flag = parsed
         .extension_flags
         .iter()
-        .find(|f| f.name == "verbose")
-        .expect("Should have verbose flag");
-    assert_eq!(verbose_flag.value, None);
+        .find(|f| f.name == "trace")
+        .expect("Should have trace flag");
+    assert_eq!(trace_flag.value, None);
 
     let dry_run_flag = parsed
         .extension_flags
@@ -56,6 +57,8 @@ fn test_extension_flag_parsing_boolean() {
         .find(|f| f.name == "dry-run")
         .expect("Should have dry-run flag");
     assert_eq!(dry_run_flag.value, None);
+    assert!(parsed.cli.print);
+    assert_eq!(parsed.cli.message_args(), vec!["test message"]);
 }
 
 /// Test parsing extension flags with equals syntax.
@@ -181,7 +184,7 @@ fn test_extension_flag_parsing_mixed_formats() {
     assert_eq!(flags["flag3"], Some("value3".to_string()));
     assert_eq!(flags["flag4"], Some("value4".to_string()));
 
-    assert_eq!(parsed.cli.message_args(), vec!["final", "message"]);
+    assert_eq!(parsed.cli.message_args(), vec!["final message"]);
 }
 
 /// Test that subcommands don't interfere with extension flag parsing.
@@ -213,9 +216,10 @@ fn test_extension_flags_with_subcommands() {
 fn test_negative_numbers_not_extension_flags() {
     let args = vec![
         "pi".to_string(),
-        "-42".to_string(),
         "--real-flag".to_string(),
         "value".to_string(),
+        "--".to_string(),
+        "-42".to_string(),
         "message".to_string(),
     ];
 

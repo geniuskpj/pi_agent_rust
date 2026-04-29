@@ -217,7 +217,7 @@ fn test_extension_flags_edge_cases() {
     let parsed = parse_with_extension_flags(vec![
         "pi".to_string(),
         "--debug-level=high".to_string(), // Equals syntax
-        "--verbose".to_string(),          // Boolean flag
+        "--dry-run".to_string(),          // Boolean extension flag
         "--output-dir".to_string(),
         "/path/with spaces".to_string(), // Value with spaces
         "--flag-with-dashes".to_string(),
@@ -237,12 +237,12 @@ fn test_extension_flags_edge_cases() {
     assert_eq!(debug_flag.value, Some("high".to_string()));
 
     // Check boolean flag
-    let verbose_flag = parsed
+    let dry_run_flag = parsed
         .extension_flags
         .iter()
-        .find(|f| f.name == "verbose")
-        .expect("Should have verbose flag");
-    assert_eq!(verbose_flag.value, None);
+        .find(|f| f.name == "dry-run")
+        .expect("Should have dry-run flag");
+    assert_eq!(dry_run_flag.value, None);
 
     // Check value with spaces
     let output_flag = parsed
