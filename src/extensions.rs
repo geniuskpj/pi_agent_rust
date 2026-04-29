@@ -42534,6 +42534,85 @@ mod tests {
         );
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn deterministic_uniform_unit_sample(seed: u64, index: usize) -> f64 {
+        let index = index as u64;
+        let mut value = seed
+            .wrapping_add(index.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            .wrapping_add(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+
+        let mantissa = value >> 11;
+        let unit = mantissa as f64 / (1_u64 << 53) as f64;
+        unit.mul_add(2.0, -1.0)
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn conformal_interval_empirical_coverage_matches_confidence() {
+        const CALIBRATION_SAMPLES: usize = 8_192;
+        const HELD_OUT_SAMPLES: usize = 8_192;
+        const SEEDS: [u64; 16] = [
+            0x11, 0x25, 0x37, 0x49, 0x5b, 0x6d, 0x7f, 0x91, 0xa3, 0xb5, 0xc7, 0xd9, 0xeb, 0xfd,
+            0x10f, 0x121,
+        ];
+        const CONFIDENCES: [f64; 3] = [0.80, 0.90, 0.95];
+
+        for confidence in CONFIDENCES {
+            let mut covered = 0_u64;
+            let mut total = 0_u64;
+
+            for seed in SEEDS {
+                let calibration_values = (0..CALIBRATION_SAMPLES)
+                    .map(|index| deterministic_uniform_unit_sample(seed, index))
+                    .collect::<Vec<_>>();
+                let calibration_mean =
+                    calibration_values.iter().sum::<f64>() / CALIBRATION_SAMPLES as f64;
+                let calibration_scores = calibration_values
+                    .iter()
+                    .map(|value| (value - calibration_mean).abs())
+                    .collect::<std::collections::VecDeque<_>>();
+                let state = ConformalState {
+                    calibration_scores,
+                    running_mean: calibration_mean,
+                    running_m2: 0.0,
+                    observation_count: CALIBRATION_SAMPLES as u64,
+                    anomaly_count: 0,
+                };
+
+                let threshold = state.interval_width(confidence);
+                assert!(
+                    threshold.is_finite() && threshold > 0.0,
+                    "calibrated threshold should be finite for confidence {confidence}, got {threshold}",
+                );
+
+                let calibration_mean = state.running_mean;
+                let held_out_seed = seed ^ 0x517c_c1b7_2722_0a95;
+                for index in 0..HELD_OUT_SAMPLES {
+                    let value = deterministic_uniform_unit_sample(held_out_seed, index);
+                    let residual = (value - calibration_mean).abs();
+                    if residual <= threshold {
+                        covered += 1;
+                    }
+                    total += 1;
+                }
+            }
+
+            let coverage = covered as f64 / total as f64;
+            let held_out_std = (confidence * (1.0 - confidence) / total as f64).sqrt();
+            let calibration_std = (confidence * (1.0 - confidence)
+                / (CALIBRATION_SAMPLES * SEEDS.len()) as f64)
+                .sqrt();
+            let two_std = 2.0 * held_out_std.hypot(calibration_std);
+            assert!(
+                (coverage - confidence).abs() <= two_std,
+                "empirical conformal coverage {coverage:.6} should be within ±2 combined std ({two_std:.6}) of confidence {confidence:.2}; covered={covered}, total={total}",
+            );
+        }
+    }
+
     #[test]
     fn pac_bayes_bound_increases_with_errors() {
         let mut state = PacBayesState::default();
