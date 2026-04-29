@@ -595,8 +595,12 @@ fn score_activity(recency: &Recency, as_of: DateTime<Utc>, missing: &mut BTreeSe
         return 0;
     };
     let updated_at = parsed.with_timezone(&Utc);
+    if updated_at > as_of {
+        missing.insert("recency.updated_at".to_string());
+        return 0;
+    }
     #[allow(clippy::cast_precision_loss)]
-    let days = (as_of - updated_at).num_days().max(0) as f64;
+    let days = (as_of - updated_at).num_days() as f64;
     // Exponential decay: 15 * exp(-ln(2) * days / half_life), half_life = 180 days
     let half_life = 180.0_f64;
     let score = 15.0 * (-std::f64::consts::LN_2 * days / half_life).exp();
@@ -2417,6 +2421,17 @@ mod tests {
         assert!(missing.contains("recency.updated_at"));
     }
 
+    #[test]
+    fn activity_future_date_returns_zero() {
+        let mut missing = BTreeSet::new();
+        let as_of = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let recency = Recency {
+            updated_at: Some("2026-01-01T00:00:01Z".to_string()),
+        };
+        assert_eq!(score_activity(&recency, as_of, &mut missing), 0);
+        assert!(missing.contains("recency.updated_at"));
+    }
+
     // =========================================================================
     // score_compatibility
     // =========================================================================
@@ -2829,6 +2844,40 @@ mod tests {
         let report = score_candidates(&[], as_of, as_of, 5);
         assert!(report.items.is_empty());
         assert!(report.summary.top_overall.is_empty());
+    }
+
+    #[test]
+    fn score_candidates_do_not_reward_future_activity_timestamps() {
+        let as_of = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let generated_at = as_of;
+        let mut future = minimal_candidate("future");
+        future.compat.status = Some(CompatStatus::Unmodified);
+        future.gates.provenance_pinned = Some(true);
+        future.gates.deterministic = Some(true);
+        future.license.redistribution = Some(Redistribution::Ok);
+        future.recency.updated_at = Some("2026-01-01T00:00:01Z".to_string());
+
+        let mut present = future.clone();
+        present.id = "present".to_string();
+        present.recency.updated_at = Some("2025-12-31T23:59:59Z".to_string());
+
+        let report = score_candidates(&[future, present], as_of, generated_at, 5);
+        let future_item = report
+            .items
+            .iter()
+            .find(|item| item.id == "future")
+            .expect("future candidate present");
+        let present_item = report
+            .items
+            .iter()
+            .find(|item| item.id == "present")
+            .expect("present candidate present");
+        assert_eq!(future_item.score.activity, 0);
+        assert!(future_item
+            .missing_signals
+            .contains(&"recency.updated_at".to_string()));
+        assert!(present_item.score.activity > future_item.score.activity);
+        assert!(present_item.score.final_total > future_item.score.final_total);
     }
 
     // =========================================================================
