@@ -58,6 +58,9 @@ _tmp_*/
 _target_*/
 _target-*/
 
+# Root-level cargo target/tmp tree accidentally synced by rch artifact retrieval.
+/ubuntu/
+
 # Per-agent remote build directories created by rch
 .rch-target-*/
 

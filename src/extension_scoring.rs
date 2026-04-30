@@ -1432,16 +1432,34 @@ fn compute_control_for_shard(
 }
 
 fn quantize_batch_budget(desired_batch: f64, min_batch_budget: u32, max_batch_budget: u32) -> u32 {
-    let mut selected = min_batch_budget;
-    let mut smallest_distance = f64::INFINITY;
-    for budget in min_batch_budget..=max_batch_budget {
-        let distance = (desired_batch - f64::from(budget)).abs();
-        if distance < smallest_distance {
-            selected = budget;
-            smallest_distance = distance;
-        }
+    if min_batch_budget >= max_batch_budget {
+        return min_batch_budget;
     }
-    selected
+
+    let lower_bound = f64::from(min_batch_budget);
+    let upper_bound = f64::from(max_batch_budget);
+    let desired = if desired_batch.is_finite() {
+        desired_batch.clamp(lower_bound, upper_bound)
+    } else {
+        lower_bound
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let lower = desired.floor() as u32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let upper = desired.ceil() as u32;
+    if lower == upper {
+        return lower.clamp(min_batch_budget, max_batch_budget);
+    }
+
+    let lower = lower.clamp(min_batch_budget, max_batch_budget);
+    let upper = upper.clamp(min_batch_budget, max_batch_budget);
+    let lower_distance = (desired - f64::from(lower)).abs();
+    let upper_distance = (f64::from(upper) - desired).abs();
+    if upper_distance < lower_distance {
+        upper
+    } else {
+        lower
+    }
 }
 
 fn default_mean_field_state(
@@ -1661,12 +1679,7 @@ pub fn evaluate_off_policy(
             passed: false,
             reason: OpeGateReason::InsufficientSupport,
         }
-    } else if numerically_unstable {
-        OpeGateDecision {
-            passed: false,
-            reason: OpeGateReason::HighUncertainty,
-        }
-    } else if doubly_robust.standard_error > max_standard_error {
+    } else if numerically_unstable || doubly_robust.standard_error > max_standard_error {
         OpeGateDecision {
             passed: false,
             reason: OpeGateReason::HighUncertainty,
@@ -1866,7 +1879,7 @@ fn unbounded_uncertainty_summary(estimate: f64) -> OpeEstimatorSummary {
     }
 }
 
-fn estimator_has_unbounded_uncertainty(summary: &OpeEstimatorSummary) -> bool {
+const fn estimator_has_unbounded_uncertainty(summary: &OpeEstimatorSummary) -> bool {
     is_saturated_f64(summary.standard_error)
 }
 
@@ -3626,6 +3639,14 @@ mod tests {
         assert!(control.routing_weight <= config.max_routing_weight);
         assert!(control.batch_budget >= config.min_batch_budget);
         assert!(control.batch_budget <= config.max_batch_budget);
+    }
+
+    #[test]
+    fn mean_field_quantizes_wide_batch_budget_range_without_scanning() {
+        assert_eq!(quantize_batch_budget(10.49, 1, u32::MAX), 10);
+        assert_eq!(quantize_batch_budget(10.50, 1, u32::MAX), 10);
+        assert_eq!(quantize_batch_budget(10.51, 1, u32::MAX), 11);
+        assert_eq!(quantize_batch_budget(f64::INFINITY, 7, u32::MAX), 7);
     }
 
     // ── Property tests ──

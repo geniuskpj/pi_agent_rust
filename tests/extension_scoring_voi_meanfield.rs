@@ -790,6 +790,24 @@ fn meanfield_nonfinite_previous_state_fails_closed() {
 }
 
 #[test]
+fn meanfield_extreme_batch_budget_range_does_not_hang() {
+    let config = MeanFieldControllerConfig {
+        min_batch_budget: 1,
+        max_batch_budget: u32::MAX,
+        ..Default::default()
+    };
+    let obs = vec![calm_observation("wide")];
+
+    let report = compute_mean_field_controls(&obs, &[], &config);
+
+    assert_eq!(report.controls.len(), 1);
+    let ctrl = &report.controls[0];
+    assert!(ctrl.batch_budget >= config.min_batch_budget);
+    assert!(ctrl.batch_budget <= config.max_batch_budget);
+    assert!(ctrl.routing_weight.is_finite());
+}
+
+#[test]
 fn meanfield_controls_sorted_by_shard_id() {
     let config = MeanFieldControllerConfig::default();
     let obs = vec![
