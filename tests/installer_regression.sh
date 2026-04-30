@@ -18,6 +18,7 @@ Usage: tests/installer_regression.sh
 
 Runs installer-focused regression checks for:
   - option parsing
+  - release workflow install-command safety
   - checksum verification branches
   - sigstore/cosign verification branches
   - completion installation branches
@@ -434,6 +435,17 @@ assert_output_contains() {
   fi
 }
 
+assert_file_contains() {
+  local file="$1"
+  local needle="$2"
+  if ! grep -Fq -- "$needle" "$file"; then
+    echo "missing file text in ${file}: ${needle}" >&2
+    echo "--- file (${file}) ---" >&2
+    cat "$file" >&2
+    return 1
+  fi
+}
+
 run_test() {
   local name="$1"
   if "$name"; then
@@ -456,6 +468,16 @@ test_help_lists_installer_flags() {
   assert_output_contains "$dir" "--sigstore-bundle-url URL"
   assert_output_contains "$dir" "--completions SHELL"
   assert_output_contains "$dir" "--no-agent-skills"
+}
+
+test_release_workflows_do_not_use_no_verify() {
+  local matches
+  matches="$(grep -RIn -- '--no-verify' "${ROOT}/.github/workflows" 2>/dev/null || true)"
+  if [ -n "$matches" ]; then
+    echo "release/workflow install commands must not use --no-verify" >&2
+    echo "$matches" >&2
+    return 1
+  fi
 }
 
 test_skill_smoke_script_passes() {
@@ -1542,7 +1564,7 @@ test_sigstore_cosign_failure_fails_hard() {
 }
 
 test_sigstore_cosign_success() {
-  local dir artifact artifact_url bundle checksum
+  local dir artifact artifact_url bundle checksum cosign_log
   dir="$(case_dir "sigstore-cosign-success")"
   write_existing_pi_stub "$dir"
   write_cosign_stub "$dir" "pass"
@@ -1552,9 +1574,10 @@ test_sigstore_cosign_success() {
   artifact_url="file://${artifact}"
   checksum="$(sha256_file "$artifact")"
   bundle="${dir}/fixtures/pi-fixture.sigstore.json"
+  cosign_log="${dir}/cosign.log"
   printf '{"mediaType":"application/vnd.dev.sigstore.bundle+json;version=0.3"}\n' > "$bundle"
 
-  run_installer "$dir" \
+  COSIGN_LOG_PATH="$cosign_log" run_installer "$dir" \
     --yes --no-gum --offline \
     --version v9.9.9 \
     --dest "${dir}/dest" \
@@ -1566,6 +1589,8 @@ test_sigstore_cosign_success() {
   assert_exit_code "$dir" 0
   assert_output_contains "$dir" "Signature verified (cosign)"
   assert_output_contains "$dir" "Signature: verified"
+  assert_file_contains "$cosign_log" "verify-blob"
+  assert_file_contains "$cosign_log" "--bundle"
 }
 
 test_completions_unsupported_build_soft_skip() {
@@ -1806,6 +1831,7 @@ main() {
   fi
 
   run_test test_help_lists_installer_flags
+  run_test test_release_workflows_do_not_use_no_verify
   run_test test_skill_smoke_script_passes
   run_test test_invalid_completions_value_fails
   run_test test_unknown_option_fails
