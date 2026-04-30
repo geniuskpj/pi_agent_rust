@@ -737,8 +737,12 @@ fn current_epoch_ms_i64() -> i64 {
 }
 
 fn epoch_ms_is_stale(epoch_ms: i64, max_age: Duration) -> bool {
-    let age_ms = current_epoch_ms_i64().saturating_sub(epoch_ms);
-    u128::try_from(age_ms).unwrap_or(u128::MAX) > max_age.as_millis()
+    epoch_ms_is_stale_at(current_epoch_ms_i64(), epoch_ms, max_age)
+}
+
+fn epoch_ms_is_stale_at(now_epoch_ms: i64, epoch_ms: i64, max_age: Duration) -> bool {
+    let age_ms = now_epoch_ms.saturating_sub(epoch_ms);
+    u128::try_from(age_ms).unwrap_or(u128::MAX) >= max_age.as_millis()
 }
 
 fn load_last_sync_epoch_ms(conn: &SqliteConnection) -> Result<Option<i64>> {
@@ -1594,6 +1598,22 @@ mod tests {
         assert!(parsed > 0, "Epoch ms should be positive");
         // Should be after 2020-01-01
         assert!(parsed > 1_577_836_800_000, "Epoch ms should be after 2020");
+    }
+
+    #[test]
+    fn epoch_ms_is_stale_at_fails_closed_on_exact_boundary() {
+        assert!(
+            epoch_ms_is_stale_at(1_000, 1_000, Duration::ZERO),
+            "zero max_age should always request a reindex, even within the same millisecond"
+        );
+        assert!(
+            epoch_ms_is_stale_at(1_000, 999, Duration::from_millis(1)),
+            "age exactly equal to max_age is stale"
+        );
+        assert!(
+            !epoch_ms_is_stale_at(1_000, 1_000, Duration::from_millis(1)),
+            "fresh entries younger than max_age should be reused"
+        );
     }
 
     // ── delete_session_path ─────────────────────────────────────────
