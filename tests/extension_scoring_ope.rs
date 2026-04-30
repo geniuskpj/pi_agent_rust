@@ -167,6 +167,7 @@ fn ope_numeric_instability_fails_closed_and_stays_serializable() {
     assert!(report.doubly_robust.estimate.is_finite());
     assert!(report.baseline_mean.is_finite());
     assert!(report.estimated_regret_delta.is_finite());
+    assert!(report.wis.standard_error >= f64::MAX / 2.0);
     serde_json::to_string(&report).expect("report must serialize");
 }
 

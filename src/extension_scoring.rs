@@ -1794,7 +1794,7 @@ fn summarize_estimator(effects: &[f64], confidence_z: f64) -> OpeEstimatorSummar
     } else {
         f64::MAX
     };
-    let standard_error = if variance == f64::MAX {
+    let standard_error = if is_saturated_f64(variance) {
         f64::MAX
     } else {
         let standard_error = (variance / sample_count).sqrt();
@@ -1804,7 +1804,7 @@ fn summarize_estimator(effects: &[f64], confidence_z: f64) -> OpeEstimatorSummar
             f64::MAX
         }
     };
-    let margin = if standard_error == f64::MAX {
+    let margin = if is_saturated_f64(standard_error) {
         f64::MAX
     } else {
         let margin = confidence_z * standard_error;
@@ -1867,7 +1867,7 @@ fn unbounded_uncertainty_summary(estimate: f64) -> OpeEstimatorSummary {
 }
 
 fn estimator_has_unbounded_uncertainty(summary: &OpeEstimatorSummary) -> bool {
-    summary.standard_error == f64::MAX
+    is_saturated_f64(summary.standard_error)
 }
 
 fn saturating_add(left: f64, right: f64) -> f64 {
@@ -1887,6 +1887,10 @@ fn saturating_add(left: f64, right: f64) -> f64 {
 
 fn saturating_difference(left: f64, right: f64) -> f64 {
     saturating_add(left, -right)
+}
+
+const fn is_saturated_f64(value: f64) -> bool {
+    value >= f64::MAX / 2.0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -3467,7 +3471,7 @@ mod tests {
         let report = evaluate_off_policy(&samples, &config);
         assert_eq!(report.gate.reason, OpeGateReason::HighUncertainty);
         assert!(!report.gate.passed);
-        assert_eq!(report.wis.standard_error, f64::MAX);
+        assert!(report.wis.standard_error >= f64::MAX / 2.0);
         serde_json::to_string(&report).expect("report must remain serializable");
     }
 
