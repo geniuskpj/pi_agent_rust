@@ -146,6 +146,15 @@ impl SseParser {
         *has_data = true;
     }
 
+    #[inline]
+    fn parse_retry(value: &str) -> Option<u64> {
+        if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+            value.parse().ok()
+        } else {
+            None
+        }
+    }
+
     /// Process a single line of SSE data.
     fn process_line(
         line: &str,
@@ -165,7 +174,7 @@ impl SseParser {
                 "id" if !value.contains('\0') => {
                     current.id = Some(value.to_string());
                 }
-                "retry" => current.retry = value.parse().ok(),
+                "retry" => current.retry = Self::parse_retry(value),
                 _ => {} // Unknown field - ignore
             }
         } else {
@@ -736,6 +745,7 @@ mod tests {
             2 => (u64::MAX - 10..=u64::MAX).prop_map(|n| n.to_string()),
             2 => "[a-zA-Z]{1,16}".prop_map(|s| s),
             1 => "-[0-9]{1,24}".prop_map(|s| s),
+            1 => "\\+[0-9]{1,24}".prop_map(|s| s),
             1 => ((u128::from(u64::MAX) + 1)..=(u128::from(u64::MAX) + 50_000))
                 .prop_map(|n| n.to_string()),
             1 => Just(String::new()),
@@ -1036,6 +1046,14 @@ mod tests {
         let events = parser.feed("retry: 3000\ndata: test\n\n");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].retry, Some(3000));
+    }
+
+    #[test]
+    fn test_retry_field_rejects_non_digit_prefix() {
+        let mut parser = SseParser::new();
+        let events = parser.feed("retry: +3000\ndata: test\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].retry, None);
     }
 
     #[test]
@@ -1647,9 +1665,13 @@ data: {"type":"message_stop"}
             let events = parse_all(&input);
             prop_assert_eq!(events.len(), 1);
 
-            let expected_retry = retry_values
-                .last()
-                .and_then(|value| value.parse::<u64>().ok());
+            let expected_retry = retry_values.last().and_then(|value| {
+                if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    value.parse::<u64>().ok()
+                } else {
+                    None
+                }
+            });
             prop_assert_eq!(events[0].retry, expected_retry);
         }
 
