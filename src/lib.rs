@@ -17,7 +17,7 @@
 //! - [`PiResult`]
 //! - [`sdk`] module
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 #![allow(dead_code, clippy::unused_async, unused_attributes)]
 #![cfg_attr(
     test,

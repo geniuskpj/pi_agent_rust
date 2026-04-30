@@ -159,7 +159,6 @@ url = "2"
 
 # Signals
 ctrlc = "3.5.2"
-libc = "0.2"
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }
@@ -314,12 +313,7 @@ debug = 1
 strip = false
 
 [lints.rust]
-# `deny` rather than `forbid` so a single, narrowly-scoped
-# `#[allow(unsafe_code)]` is permitted on `isolate_command_process_group`
-# in `src/tools.rs` — it needs `Command::pre_exec` to reset SIGPIPE in
-# child processes (see SAFETY comment there). All other crate code is
-# unchanged.
-unsafe_code = "deny"
+unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -5175,41 +5175,12 @@ fn collect_process_tree(
     }
 }
 
-/// Detach a child process from pi's controlling terminal, and restore
-/// its SIGPIPE disposition to the platform default before `exec`.
-///
-/// **Why the `pre_exec` SIGPIPE reset is necessary.** Pi's async runtime
-/// (asupersync, like tokio) installs `SIGPIPE = SIG_IGN` at startup so
-/// internal pipe-write failures inside the runtime don't tear the agent
-/// process down. POSIX inherits signal dispositions across `exec(2)`, so
-/// every child pi spawns inherits `SIG_IGN` for SIGPIPE. When pi later
-/// closes its read end of the child's stdout (output truncation,
-/// shutdown, etc.), the child no longer dies — every `write(2)` returns
-/// `EPIPE` and most well-behaved CLI tools (`fd`, `ls`, GNU coreutils,
-/// etc.) treat `EPIPE` as a recoverable I/O error and keep going.
-/// Result: child loops forever, parent blocks on `wait4(2)`. The bash
-/// tool hangs. Resetting SIGPIPE to `SIG_DFL` in the child gives the
-/// kernel the standard "writer dies on broken pipe" behavior every Unix
-/// CLI tool implicitly relies on.
-#[allow(unsafe_code)]
+/// Detach a child process from pi's controlling terminal.
 pub(crate) fn isolate_command_process_group(command: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
-
-        // SAFETY: `pre_exec` runs in the forked child between `fork(2)`
-        // and `exec(2)`. Only async-signal-safe calls are allowed there
-        // — `signal(2)` is on POSIX's async-signal-safe list (POSIX.1
-        // § 2.4.3), which is exactly the contract `pre_exec` requires.
-        // We restore the platform default disposition; we do not save
-        // any handler.
-        unsafe {
-            command.pre_exec(|| {
-                libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-                Ok(())
-            });
-        }
     }
 
     #[cfg(not(unix))]
