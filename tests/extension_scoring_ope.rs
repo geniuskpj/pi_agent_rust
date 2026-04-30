@@ -145,6 +145,31 @@ fn ope_missing_direct_method_prediction_fails_closed_under_low_overlap() {
     assert!(report.estimated_regret_delta > config.max_regret_delta);
 }
 
+#[test]
+fn ope_numeric_instability_fails_closed_and_stays_serializable() {
+    let config = OpeEvaluatorConfig {
+        max_importance_weight: 1.0,
+        min_effective_sample_size: 1.0,
+        max_standard_error: 10.0,
+        confidence_z: 1.96,
+        max_regret_delta: 10.0,
+    };
+    let samples = vec![
+        sample("dominant", 1.0, 1.0, 1.0e308, 1.0e308, 1.0e308),
+        sample("tiny", 1.0, 1.0e-308, 0.0, 0.0, 0.0),
+    ];
+
+    let report = evaluate_off_policy(&samples, &config);
+    assert_eq!(report.gate.reason, OpeGateReason::HighUncertainty);
+    assert!(!report.gate.passed);
+    assert!(report.ips.estimate.is_finite());
+    assert!(report.wis.estimate.is_finite());
+    assert!(report.doubly_robust.estimate.is_finite());
+    assert!(report.baseline_mean.is_finite());
+    assert!(report.estimated_regret_delta.is_finite());
+    serde_json::to_string(&report).expect("report must serialize");
+}
+
 fn target_policy_reward(context: f64) -> f64 {
     context.mul_add(0.5, 0.25)
 }

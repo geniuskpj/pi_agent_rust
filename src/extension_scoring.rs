@@ -1594,17 +1594,24 @@ pub fn evaluate_off_policy(
 
     let valid_samples = normalized_samples.len();
     let mut sum_importance_weight: f64 = 0.0;
-    let mut sum_importance_weight_sq: f64 = 0.0;
     let mut max_seen_importance_weight: f64 = 0.0;
     for sample in &normalized_samples {
-        sum_importance_weight += sample.importance_weight;
-        sum_importance_weight_sq = sample
-            .importance_weight
-            .mul_add(sample.importance_weight, sum_importance_weight_sq);
+        sum_importance_weight = saturating_add(sum_importance_weight, sample.importance_weight);
         max_seen_importance_weight = max_seen_importance_weight.max(sample.importance_weight);
     }
-    let effective_sample_size = if sum_importance_weight_sq > 0.0 {
-        (sum_importance_weight * sum_importance_weight) / sum_importance_weight_sq
+    let mut sum_importance_weight_scaled: f64 = 0.0;
+    let mut sum_importance_weight_sq_scaled: f64 = 0.0;
+    if max_seen_importance_weight > 0.0 {
+        for sample in &normalized_samples {
+            let scaled_weight = sample.importance_weight / max_seen_importance_weight;
+            sum_importance_weight_scaled += scaled_weight;
+            sum_importance_weight_sq_scaled =
+                scaled_weight.mul_add(scaled_weight, sum_importance_weight_sq_scaled);
+        }
+    }
+    let effective_sample_size = if sum_importance_weight_sq_scaled > 0.0 {
+        (sum_importance_weight_scaled * sum_importance_weight_scaled)
+            / sum_importance_weight_sq_scaled
     } else {
         0.0
     };
@@ -1624,11 +1631,11 @@ pub fn evaluate_off_policy(
         );
         baseline_values.push(sample.baseline);
     }
-    if sum_importance_weight > 0.0 {
+    if sum_importance_weight_scaled > 0.0 && max_seen_importance_weight > 0.0 {
         for sample in &normalized_samples {
+            let scaled_weight = sample.importance_weight / max_seen_importance_weight;
             wis_effects.push(
-                (sample.importance_weight * sample.outcome * valid_samples_f64)
-                    / sum_importance_weight,
+                (scaled_weight * sample.outcome * valid_samples_f64) / sum_importance_weight_scaled,
             );
         }
     } else {
@@ -1639,7 +1646,10 @@ pub fn evaluate_off_policy(
     let wis = summarize_estimator(&wis_effects, confidence_z);
     let doubly_robust = summarize_estimator(&doubly_robust_effects, confidence_z);
     let baseline_mean = arithmetic_mean(&baseline_values);
-    let estimated_regret_delta = baseline_mean - doubly_robust.estimate;
+    let estimated_regret_delta = saturating_difference(baseline_mean, doubly_robust.estimate);
+    let numerically_unstable = estimator_has_unbounded_uncertainty(&ips)
+        || estimator_has_unbounded_uncertainty(&wis)
+        || estimator_has_unbounded_uncertainty(&doubly_robust);
 
     let gate = if valid_samples == 0 {
         OpeGateDecision {
@@ -1650,6 +1660,11 @@ pub fn evaluate_off_policy(
         OpeGateDecision {
             passed: false,
             reason: OpeGateReason::InsufficientSupport,
+        }
+    } else if numerically_unstable {
+        OpeGateDecision {
+            passed: false,
+            reason: OpeGateReason::HighUncertainty,
         }
     } else if doubly_robust.standard_error > max_standard_error {
         OpeGateDecision {
@@ -1714,6 +1729,12 @@ fn normalize_ope_sample(
         Some(value) if value.is_finite() => (value, false),
         _ => (0.0, true),
     };
+    let ips_effect = clipped_weight * sample.outcome;
+    let doubly_robust_effect =
+        clipped_weight.mul_add(sample.outcome - direct_method, direct_method);
+    if !ips_effect.is_finite() || !doubly_robust_effect.is_finite() {
+        return None;
+    }
     Some((
         NormalizedOpeSample {
             importance_weight: clipped_weight,
@@ -1737,28 +1758,64 @@ fn summarize_estimator(effects: &[f64], confidence_z: f64) -> OpeEstimatorSummar
             ci_high: 0.0,
         };
     }
+    if effects.iter().any(|value| !value.is_finite()) {
+        return unbounded_uncertainty_summary(0.0);
+    }
     let sample_count = effects.len() as f64;
     let estimate = arithmetic_mean(effects);
+    let scale = effects
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    if scale == 0.0 {
+        return OpeEstimatorSummary {
+            estimate: 0.0,
+            variance: 0.0,
+            standard_error: 0.0,
+            ci_low: 0.0,
+            ci_high: 0.0,
+        };
+    }
     let variance = if effects.len() > 1 {
         effects
             .iter()
             .map(|value| {
-                let centered = *value - estimate;
+                let centered = (*value / scale) - (estimate / scale);
                 centered * centered
             })
             .sum::<f64>()
+            * scale
+            * scale
             / (sample_count - 1.0)
     } else {
         0.0
     };
-    let standard_error = (variance / sample_count).sqrt();
-    let margin = confidence_z * standard_error;
+    let variance = if variance.is_finite() {
+        variance
+    } else {
+        f64::MAX
+    };
+    let standard_error = if variance == f64::MAX {
+        f64::MAX
+    } else {
+        let standard_error = (variance / sample_count).sqrt();
+        if standard_error.is_finite() {
+            standard_error
+        } else {
+            f64::MAX
+        }
+    };
+    let margin = if standard_error == f64::MAX {
+        f64::MAX
+    } else {
+        let margin = confidence_z * standard_error;
+        if margin.is_finite() { margin } else { f64::MAX }
+    };
     OpeEstimatorSummary {
         estimate,
         variance,
         standard_error,
-        ci_low: estimate - margin,
-        ci_high: estimate + margin,
+        ci_low: saturating_difference(estimate, margin),
+        ci_high: saturating_add(estimate, margin),
     }
 }
 
@@ -1767,7 +1824,15 @@ fn arithmetic_mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         0.0
     } else {
-        values.iter().sum::<f64>() / values.len() as f64
+        let scale = values
+            .iter()
+            .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+        if scale == 0.0 {
+            0.0
+        } else {
+            let sample_count = values.len() as f64;
+            scale * (values.iter().map(|value| *value / scale).sum::<f64>() / sample_count)
+        }
     }
 }
 
@@ -1789,6 +1854,39 @@ fn positive_finite_or(value: f64, fallback: f64) -> f64 {
     } else {
         fallback
     }
+}
+
+fn unbounded_uncertainty_summary(estimate: f64) -> OpeEstimatorSummary {
+    OpeEstimatorSummary {
+        estimate,
+        variance: f64::MAX,
+        standard_error: f64::MAX,
+        ci_low: -f64::MAX,
+        ci_high: f64::MAX,
+    }
+}
+
+fn estimator_has_unbounded_uncertainty(summary: &OpeEstimatorSummary) -> bool {
+    summary.standard_error == f64::MAX
+}
+
+fn saturating_add(left: f64, right: f64) -> f64 {
+    let sum = left + right;
+    if sum.is_finite() {
+        sum
+    } else if left.is_sign_negative() == right.is_sign_negative() {
+        if left.is_sign_negative() {
+            -f64::MAX
+        } else {
+            f64::MAX
+        }
+    } else {
+        0.0
+    }
+}
+
+fn saturating_difference(left: f64, right: f64) -> f64 {
+    saturating_add(left, -right)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -3275,6 +3373,33 @@ mod tests {
     }
 
     #[test]
+    fn ope_skips_samples_whose_derived_effects_overflow() {
+        let config = OpeEvaluatorConfig {
+            max_importance_weight: 1.0,
+            min_effective_sample_size: 1.0,
+            max_standard_error: 10.0,
+            confidence_z: 1.96,
+            max_regret_delta: 10.0,
+        };
+        let samples = vec![OpeTraceSample {
+            action: "overflow".to_string(),
+            behavior_propensity: 1.0,
+            target_propensity: 1.0,
+            outcome: 1.0e308,
+            baseline_outcome: Some(1.0e308),
+            direct_method_prediction: Some(-1.0e308),
+            context_lineage: Some("ctx:overflow".to_string()),
+        }];
+
+        let report = evaluate_off_policy(&samples, &config);
+        assert_eq!(report.diagnostics.valid_samples, 0);
+        assert_eq!(report.diagnostics.skipped_invalid_samples, 1);
+        assert_eq!(report.gate.reason, OpeGateReason::NoValidSamples);
+        assert!(!report.gate.passed);
+        serde_json::to_string(&report).expect("report must remain serializable");
+    }
+
+    #[test]
     fn ope_is_stable_across_input_order() {
         let config = OpeEvaluatorConfig {
             max_importance_weight: 50.0,
@@ -3307,6 +3432,43 @@ mod tests {
             swapped.diagnostics.effective_sample_size,
             1e-12,
         );
+    }
+
+    #[test]
+    fn ope_fails_closed_when_wis_effects_overflow() {
+        let config = OpeEvaluatorConfig {
+            max_importance_weight: 1.0,
+            min_effective_sample_size: 1.0,
+            max_standard_error: 10.0,
+            confidence_z: 1.96,
+            max_regret_delta: 10.0,
+        };
+        let samples = vec![
+            OpeTraceSample {
+                action: "dominant".to_string(),
+                behavior_propensity: 1.0,
+                target_propensity: 1.0,
+                outcome: 1.0e308,
+                baseline_outcome: Some(1.0e308),
+                direct_method_prediction: Some(1.0e308),
+                context_lineage: Some("ctx:dominant".to_string()),
+            },
+            OpeTraceSample {
+                action: "tiny".to_string(),
+                behavior_propensity: 1.0,
+                target_propensity: 1.0e-308,
+                outcome: 0.0,
+                baseline_outcome: Some(0.0),
+                direct_method_prediction: Some(0.0),
+                context_lineage: Some("ctx:tiny".to_string()),
+            },
+        ];
+
+        let report = evaluate_off_policy(&samples, &config);
+        assert_eq!(report.gate.reason, OpeGateReason::HighUncertainty);
+        assert!(!report.gate.passed);
+        assert_eq!(report.wis.standard_error, f64::MAX);
+        serde_json::to_string(&report).expect("report must remain serializable");
     }
 
     fn mean_field_observation(
