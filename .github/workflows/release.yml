@@ -99,6 +99,29 @@ jobs:
           name: release-gate-report
           path: pi_agent_rust/release_gate_report.json
 
+  installer_regression:
+    name: Installer regression
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pi_agent_rust
+        shell: bash
+    steps:
+      - name: Checkout pi_agent_rust
+        uses: actions/checkout@v4
+        with:
+          path: pi_agent_rust
+          fetch-depth: 0
+          ref: ${{ needs.plan.outputs.tag }}
+
+      - name: Run installer regression harness
+        run: |
+          set -euxo pipefail
+          bash -n install.sh uninstall.sh tests/installer_regression.sh scripts/skill-smoke.sh
+          bash tests/installer_regression.sh
+
   build:
     name: Build (${{ matrix.target }})
     needs: [plan]
@@ -289,8 +312,8 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [plan, build]
-    if: always() && needs.plan.result == 'success' && !cancelled()
+    needs: [plan, installer_regression, build]
+    if: always() && needs.plan.result == 'success' && needs.installer_regression.result == 'success' && needs.build.result == 'success' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
