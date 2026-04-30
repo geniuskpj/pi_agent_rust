@@ -4278,6 +4278,7 @@ dependencies = [
  "insta",
  "json5",
  "jsonschema",
+ "libc",
  "loom",
  "md-5",
  "memchr",
