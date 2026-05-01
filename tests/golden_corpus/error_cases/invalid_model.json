@@ -18,7 +18,28 @@
   ],
   "stdin": null,
   "env_overrides": {},
-  "cassette": null,
+  "cassette": {
+    "version": "1.0",
+    "test_name": "golden_error_invalid_model",
+    "recorded_at": "2026-02-14T00:00:00.000Z",
+    "interactions": [
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages"
+        },
+        "response": {
+          "status": 400,
+          "headers": [
+            ["Content-Type", "application/json"]
+          ],
+          "body_chunks": [
+            "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"model: nonexistent-model-xyz is not supported\"}}"
+          ]
+        }
+      }
+    ]
+  },
   "expected": {
     "exit_code_nonzero": true,
     "stdout_contains": [],

@@ -69,6 +69,8 @@ jobs:
           set -euxo pipefail
           cargo test --test extensions_stress \
             -- stress_short_10_extensions --nocapture --exact
+          mkdir -p tests/perf/reports
+          cp "$CARGO_TARGET_DIR/perf/stress_triage.json" tests/perf/reports/stress_triage.json
 
       - name: Refresh evidence bundle
         continue-on-error: true

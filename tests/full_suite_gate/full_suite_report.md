@@ -1,6 +1,6 @@
 # Full-Suite CI Gate Report
 
-> Generated: 2026-03-27T07:40:59Z
+> Generated: 2026-05-01T02:24:22Z
 > Verdict: **FAIL**
 
 ## Summary
@@ -8,11 +8,11 @@
 | Metric | Value |
 |--------|-------|
 | Total gates | 20 |
-| Passed | 17 |
-| Failed | 3 |
+| Passed | 18 |
+| Failed | 2 |
 | Warned | 0 |
 | Skipped | 0 |
-| Blocking pass | 12/14 |
+| Blocking pass | 13/14 |
 
 ## Gate Results
 
@@ -25,7 +25,7 @@
 | Unified evidence bundle | bd-1f42.6.8 | no | FAIL | `tests/evidence_bundle/index.json` |
 | Cross-platform matrix validation | bd-1f42.6.7 | YES | PASS | `tests/cross_platform_reports/linux/platform_report.json` |
 | Conformance regression gate | bd-1f42.4 | YES | PASS | `tests/ext_conformance/reports/regression_verdict.json` |
-| Conformance pass rate >= 80% | bd-1f42.4 | YES | FAIL | `tests/ext_conformance/reports/conformance_summary.json` |
+| Conformance pass rate >= 80% | bd-1f42.4 | YES | PASS | `tests/ext_conformance/reports/conformance_summary.json` |
 | Suite classification guard | bd-1f42.6.1 | YES | PASS | `tests/suite_classification.toml` |
 | Requirement traceability matrix | bd-1f42.6.4 | no | PASS | `docs/traceability_matrix.json` |
 | Canonical E2E scenario matrix | bd-1f42.8.5.1 | no | PASS | `docs/e2e_scenario_matrix.json` |
@@ -59,15 +59,5 @@
 - **Reproduce:**
   ```bash
   cargo test --test ci_evidence_bundle -- build_evidence_bundle --nocapture --exact
-  ```
-
-### Conformance pass rate >= 80% — FAIL **(BLOCKING)**
-
-- **Bead:** bd-1f42.4
-- **Detail:** Pass rate 0.0% < 80% threshold
-- **Artifact:** `tests/ext_conformance/reports/conformance_summary.json`
-- **Reproduce:**
-  ```bash
-  cargo test --test conformance_report -- --nocapture
   ```
 

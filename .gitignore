@@ -30,6 +30,14 @@ tests/ext_conformance/reports/*
 !tests/ext_conformance/reports/gate/must_pass_gate_report.md
 !tests/ext_conformance/reports/lifecycle_hooks/
 !tests/ext_conformance/reports/lifecycle_hooks/lifecycle_hook_parity_matrix.json
+!tests/ext_conformance/reports/health_delta/
+!tests/ext_conformance/reports/health_delta/health_delta_report.json
+!tests/ext_conformance/reports/health_delta/health_delta_events.jsonl
+!tests/ext_conformance/reports/health_delta/health_delta_report.md
+!tests/ext_conformance/reports/journeys/
+!tests/ext_conformance/reports/journeys/journey_report.json
+!tests/ext_conformance/reports/journeys/journey_events.jsonl
+!tests/ext_conformance/reports/journeys/journey_report.md
 
 # sqlite databases and WAL/SHM artifacts
 storage.sqlite3

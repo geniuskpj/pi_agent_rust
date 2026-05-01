@@ -1,7 +1,7 @@
 {
   "schema": "pi.ci.certification_lane.v1",
   "lane": "full",
-  "generated_at": "2026-03-27T07:41:00.013Z",
+  "generated_at": "2026-05-01T02:24:22.794Z",
   "verdict": "fail",
   "policy": "Full certification: all blocking gates must pass for release. Waived gates are tracked but do not block. Expired waivers fail the waiver_lifecycle gate.",
   "gates": [
@@ -73,10 +73,9 @@
       "id": "conformance_pass_rate",
       "name": "Conformance pass rate >= 80%",
       "bead": "bd-1f42.4",
-      "status": "fail",
+      "status": "pass",
       "blocking": true,
       "artifact_path": "tests/ext_conformance/reports/conformance_summary.json",
-      "detail": "Pass rate 0.0% < 80% threshold",
       "reproduce_command": "cargo test --test conformance_report -- --nocapture"
     },
     {
@@ -191,7 +190,7 @@
   ],
   "waiver_audit": {
     "schema": "pi.ci.waiver_audit.v1",
-    "generated_at": "2026-03-27T07:41:00.013Z",
+    "generated_at": "2026-05-01T02:24:22.771Z",
     "total_waivers": 0,
     "active": 0,
     "expired": 0,
@@ -203,24 +202,23 @@
   "waivers_applied": [],
   "summary": {
     "total_gates": 20,
-    "passed": 17,
-    "failed": 3,
+    "passed": 18,
+    "failed": 2,
     "warned": 0,
     "skipped": 0,
     "waived": 0,
-    "blocking_pass": 12,
+    "blocking_pass": 13,
     "blocking_total": 14,
     "all_blocking_pass": false
   },
   "promotion_rules": {
     "can_promote": false,
     "blocker_gates": [
-      "ext_must_pass",
-      "conformance_pass_rate"
+      "ext_must_pass"
     ],
     "waiver_gates": [],
     "conditions": [
-      "Blocking gates still failing: ext_must_pass, conformance_pass_rate"
+      "Blocking gates still failing: ext_must_pass"
     ]
   },
   "rerun_guidance": {
