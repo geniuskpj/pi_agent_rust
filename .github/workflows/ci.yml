@@ -13,6 +13,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
+      RUST_LOG: "pi_agent_rust::http::client=debug"
       CI: "true"
       VCR_MODE: "playback"
       VCR_CASSETTE_DIR: "tests/fixtures/vcr"
