@@ -1,0 +1,1456 @@
+{
+  "schema": "pi.ext.health_delta.v1",
+  "generated_at": "2026-05-01T04:10:28.479Z",
+  "baseline_path": "/data/projects/pi_agent_rust/tests/ext_conformance/reports/conformance_baseline.json",
+  "baseline_date": "2026-02-07T23:31:53Z",
+  "current_summary": {
+    "failed": 3,
+    "manifest_count": 224,
+    "pass_rate_pct": 98.66071428571429,
+    "passed": 221,
+    "skipped": 0,
+    "tested": 224
+  },
+  "baseline_summary": {
+    "failed": 36,
+    "pass_rate_pct": 83.9,
+    "passed": 187,
+    "tested": 223
+  },
+  "aggregate_delta": {
+    "fail_delta": -33,
+    "net_change": 34,
+    "pass_delta": 34,
+    "rate_delta_pct": 14.760714285714286
+  },
+  "regressions": [],
+  "fixes": [
+    {
+      "id": "agents-mikeastock/extensions",
+      "tier": 5,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "base_fixtures",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Not a real extension; test-only fixture in manifest."
+    },
+    {
+      "id": "community/nicobailon-interview-tool",
+      "tier": 4,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension crashes during initialization (missing data, broken API, FS dependency)."
+    },
+    {
+      "id": "community/prateekmedia-lsp",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "community/qualisero-background-notify",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension uses relative imports to unbundled sibling/parent modules."
+    },
+    {
+      "id": "community/qualisero-pi-agent-scip",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension uses relative imports to unbundled sibling/parent modules."
+    },
+    {
+      "id": "community/qualisero-safe-git",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension uses relative imports to unbundled sibling/parent modules."
+    },
+    {
+      "id": "npm/aliou-pi-guardrails",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension crashes during initialization (missing data, broken API, FS dependency)."
+    },
+    {
+      "id": "npm/aliou-pi-linkup",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/aliou-pi-synthetic",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/aliou-pi-toolchain",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension crashes during initialization (missing data, broken API, FS dependency)."
+    },
+    {
+      "id": "npm/lsp-pi",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/marckrenn-pi-sub-bar",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/marckrenn-pi-sub-core",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension crashes during initialization (missing data, broken API, FS dependency)."
+    },
+    {
+      "id": "npm/mitsupi",
+      "tier": 5,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/pi-amplike",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/pi-bash-confirm",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/pi-extensions",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/pi-package-test",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/pi-search-agent",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
+    },
+    {
+      "id": "npm/pi-wakatime",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
+    },
+    {
+      "id": "npm/pi-web-access",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
+    },
+    {
+      "id": "npm/qualisero-pi-agent-scip",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
+    },
+    {
+      "id": "npm/shitty-extensions",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/tmustier-pi-arcade",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "npm/vaayne-agent-kit",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/ben-vargas-pi-packages",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/charles-cooper-pi-extensions",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/kcosr-pi-extensions",
+      "tier": 5,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/marckrenn-pi-sub",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/openclaw-openclaw",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/pasky-pi-amplike",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    },
+    {
+      "id": "third-party/qualisero-pi-agent-scip",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
+    },
+    {
+      "id": "third-party/w-winter-dot314",
+      "tier": 3,
+      "delta_type": "fix",
+      "current_status": "pass",
+      "baseline_status": "fail",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    }
+  ],
+  "new_extensions": [
+    {
+      "id": "antigravity-image-gen",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "auto-commit-on-exit",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "bash-spawn-hook",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "bookmark",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "claude-rules",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/ferologics-notify",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-clipboard",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-cost-tracker",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-flicker-corp",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-funny-working-message",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-handoff",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-loop",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-memory-mode",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-oracle",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-plan-mode",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-resistance",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-speedreading",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-status-widget",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-ultrathink",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/hjanuschka-usage-bar",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/jyaunches-canvas",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-answer",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-control",
+      "tier": 5,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-cwd-history",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-files",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-loop",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-notify",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-review",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-todos",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-uv",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/mitsuhiko-whimsical",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/nicobailon-interactive-shell",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/nicobailon-mcp-adapter",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/nicobailon-powerline-footer",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/nicobailon-rewind-hook",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/nicobailon-subagents",
+      "tier": 3,
+      "delta_type": "new_failure",
+      "current_status": "fail",
+      "failure_reason": "Load error: Extension error: Error loading module '/tmp/pi-async-subagent-results': host write denied: path outside extension root\n    at checkWriteAccess (node:fs:32:47)\n    at mkdirSync (node:fs:572:29)\n    at registerSubagentExtension (/data/projects/pi_agent_rust/tests/ext_conformance/artifacts/community/nicobailon-subagents/index.ts:29:18)\n    at __pi_load_extension (eval_script:472:20)\n"
+    },
+    {
+      "id": "community/ogulcancelik-ghostty-theme-sync",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/prateekmedia-checkpoint",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/prateekmedia-permission",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/prateekmedia-ralph-loop",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/prateekmedia-repeat",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/prateekmedia-token-rate",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/qualisero-compact-config",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/qualisero-safe-rm",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/qualisero-session-color",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/qualisero-session-emoji",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-agent-guidance",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-arcade-mario-not",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-arcade-picman",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-arcade-ping",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-arcade-spice-invaders",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-arcade-tetris",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-code-actions",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-files-widget",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-ralph-wiggum",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-raw-paste",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-tab-status",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "community/tmustier-usage-extension",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "confirm-destructive",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "custom-compaction",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "custom-footer",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "custom-header",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "custom-provider-anthropic",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "custom-provider-gitlab-duo",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "custom-provider-qwen-cli",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "diff",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "dirty-repo-guard",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "doom-overlay",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "dynamic-resources",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "event-bus",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "file-trigger",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "files",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "git-checkpoint",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "handoff",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "hello",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "inline-bash",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "input-transform",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "interactive-shell",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "mac-system-theme",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "message-renderer",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "modal-editor",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "model-status",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "negative-denied-caps",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "notify",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/agentsbox",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/aliou-pi-extension-dev",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/benvargas-pi-ancestor-discovery",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/benvargas-pi-antigravity-image-gen",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/benvargas-pi-synthetic-provider",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/checkpoint-pi",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/imsus-pi-extension-minimax-coding-plan-mcp",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/juanibiapina-pi-extension-settings",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/juanibiapina-pi-files",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/juanibiapina-pi-gob",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/ogulcancelik-pi-sketch",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/oh-my-pi-basics",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/permission-pi",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-agentic-compaction",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-annotate",
+      "tier": 5,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-brave-search",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-command-center",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-ephemeral",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-ghostty-theme-sync",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-interactive-shell",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-interview",
+      "tier": 4,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-mcp-adapter",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-md-export",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-mermaid",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-messenger",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-model-switch",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-moonshot",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-multicodex",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-notify",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-poly-notify",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-powerline-footer",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-prompt-template-model",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-repoprompt-mcp",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-review-loop",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-screenshots-picker",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-session-ask",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-shadow-git",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-shell-completions",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-skill-palette",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-subdir-context",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-super-curl",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-telemetry-otel",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-threads",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-voice-of-god",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/pi-watch",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/ralph-loop-pi",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/repeat-pi",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/token-rate-pi",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/vaayne-pi-mcp",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/vaayne-pi-subagent",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/vaayne-pi-web-tools",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/verioussmith-pi-openrouter",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/vpellegrino-pi-skills",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/walterra-pi-charts",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/walterra-pi-graphviz",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "npm/zenobius-pi-dcp",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "overlay-qa-tests",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "overlay-test",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "permission-gate",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "pirate",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "plan-mode",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "preset",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "prompt-url-widget",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "protected-paths",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "qna",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "question",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "questionnaire",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "rainbow-editor",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "redraws",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "rpc-demo",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "sandbox",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "send-user-message",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "session-name",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "shutdown-command",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "snake",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "space-invaders",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "ssh",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "status-line",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "subagent",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "summarize",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "system-prompt-header",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/cv-pi-ssh-remote",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/graffioh-pi-screenshots-picker",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/graffioh-pi-super-curl",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/jyaunches-pi-canvas",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/limouren-agent-things",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/lsj5031-pi-notification-extension",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/michalvavra-agents",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/ogulcancelik-pi-sketch",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/raunovillberg-pi-stuffed",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/rytswd-direnv",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/rytswd-questionnaire",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/rytswd-slow-mode",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/vtemian-pi-config",
+      "tier": 4,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "third-party/zenobi-us-pi-dcp",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "timed-confirm",
+      "tier": 1,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "titlebar-spinner",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "todo",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "tool-override",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "tools",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "trigger-compact",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "truncated-tool",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "widget-placement",
+      "tier": 2,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    },
+    {
+      "id": "with-deps",
+      "tier": 3,
+      "delta_type": "new_pass",
+      "current_status": "pass"
+    }
+  ],
+  "removed_extensions": [],
+  "unchanged_failures": [
+    {
+      "id": "npm/aliou-pi-processes",
+      "tier": 3,
+      "delta_type": "unchanged_fail",
+      "current_status": "fail",
+      "baseline_status": "fail",
+      "failure_reason": "Load error: Extension error: Error loading module '/data/tmp/pi_agent_rust_cargo/codex-evidence-030/tmp/pi-processes-1777608581425': host write denied: path outside extension root\n    at checkWriteAccess (node:fs:32:47)\n    at mkdirSync (node:fs:572:29)\n    at ProcessManager (/data/projects/pi_agent_rust/tests/ext_conformance/artifacts/npm/aliou-pi-processes/manager.ts:17:19)\n    at default (/data/projects/pi_agent_rust/tests/ext_conformance/artifacts/npm/aliou-pi-processes/index.ts:14:25)\n    at __pi_load_extension (eval_script:472:20)\n",
+      "baseline_failure_reason": "Extension uses relative imports to unbundled sibling/parent modules."
+    },
+    {
+      "id": "third-party/aliou-pi-extensions",
+      "tier": 3,
+      "delta_type": "unchanged_fail",
+      "current_status": "fail",
+      "baseline_status": "fail",
+      "failure_reason": "Missing command 'processes'. Actual: [\"theme\", \"system-prompt\", \"ad-name\", \"extensions:update\", \"plan:list\", \"plan:save\", \"providers:usage\", \"providers:toggle-widget\", \"session:copy-path\", \"session:copy-id\", \"dumb-zone-status\"]",
+      "baseline_failure_reason": "Extension loads but registers different commands/tools than manifest expects."
+    }
+  ],
+  "total_regressions": 0,
+  "total_fixes": 34,
+  "net_change": 34
+}
