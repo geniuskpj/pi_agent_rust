@@ -498,19 +498,22 @@ cargo run --example ext_unvendored_fetch_run -- run-all --workers 8 --no-probe
 cargo run --example ext_full_validation --
 ```
 
-### Latest run snapshot (2026-04-23)
+### Latest run snapshot (2026-05-01)
 
 From:
-- `tests/perf/reports/budget_summary.json` (generated `2026-04-23T00:20:33Z`)
-- `tests/perf/reports/PERF_BUDGETS.md` (generated `2026-04-23T00:20:33Z`)
-- `tests/e2e_results/20260423T053902Z/evidence_contract.json` (run `20260423T053902Z-unsharded`)
-- `docs/evidence/dropin-certification-verdict.json` (generated `2026-04-23T05:30:00Z`)
+- `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json` (generated `2026-05-01T03:20:54.460Z`, run `local-20260501T0316`)
+- `tests/ext_conformance/reports/health_delta/health_delta_report.json` (generated `2026-05-01T04:10:28.479Z`)
+- `tests/ext_conformance/reports/journeys/journey_report.json` (generated `2026-05-01T04:07:47.106Z`)
+- `tests/evidence_bundle/index.json` (generated `2026-05-01T04:19:19.979Z`, run `local-20260501T0413`)
+- `tests/full_suite_gate/certification_verdict.json` (generated `2026-05-01T04:35:30.643Z`, run `local-20260501T0442`)
+- `docs/evidence/dropin-certification-verdict.json` (generated `2026-05-01T04:35:52Z`)
 
-- Strict drop-in status: **12/12 gates PASS** - `CERTIFIED` *(from docs/evidence/dropin-certification-verdict.json; strict replacement wording is allowed only while this verdict remains `CERTIFIED` and the contract hard gates stay PASS)*
-- Release evidence gate validation: `28/28` tests passed *(from tests/release_evidence_gate.rs)*
-- Performance budget compliance: All CI-enforced budgets within thresholds *(from tests/perf/reports/budget_summary.json)*
-- Extension conformance: `224/224` extensions validated *(from evidence_contract.json)*
-- Differential parity: `97.5%` pass rate across CLI, RPC, session, and tool I/O surfaces *(from G10 differential evidence suite)*
+- Strict drop-in status: **20/20 certification gates PASS, 14/14 blocking gates PASS** - `CERTIFIED` *(from docs/evidence/dropin-certification-verdict.json; strict replacement wording is allowed only while this verdict remains `CERTIFIED` and the contract hard gates stay PASS)*
+- Unified evidence bundle: `28/28` sections present, `11/11` required sections present, `0` missing, `0` invalid *(from tests/evidence_bundle/index.json)*
+- Extension must-pass gate: `123/123` must-pass extensions passed; informational stretch set `98/101` passed *(from tests/ext_conformance/reports/gate/must_pass_gate_verdict.json)*
+- Extension health delta: `221/224` current extensions passed (`98.7%`), `0` regressions, `34` fixes vs the 2026-02-07 baseline *(from tests/ext_conformance/reports/health_delta/health_delta_report.json)*
+- Extension journey coverage: `87/123` journey scenarios passed (`70.7%`); command, passive, and tool-provider categories are green, while event-subscriber journeys remain tracked as current failures *(from tests/ext_conformance/reports/journeys/journey_report.json)*
+- Stress triage: `1,500` events, `0` errors, p99 latency `576us`, RSS growth `0.0%` *(from tests/perf/reports/stress_triage.json, generated `2026-05-01T03:28:52Z`)*
 
 ---
 
@@ -1833,13 +1836,17 @@ Policy implication: release/size artifacts alone are not valid evidence for glob
 claims. Performance claims must cite benchmark evidence bundles with reproducible provenance.
 See `docs/testing-policy.md` and `docs/releasing.md` for normative policy details.
 
-Latest full orchestrator checkpoint (`2026-04-23`):
+Latest full performance orchestrator checkpoint (`2026-04-23`):
 - Run output: `tests/perf/reports/` (budget_summary.json, PERF_BUDGETS.md)
 - Correlation ID: `20260423T002033Z-perf-refresh`
 - Summary: All CI-enforced performance budgets within thresholds
-- Evidence freshness: G11 release evidence gate tests `28/28` passing
-- Drop-in certification: `12/12` gates PASS, overall verdict `CERTIFIED`
 - Measured startup guards: `--version` P95 under `100ms` budget threshold *(from tests/perf/reports/budget_summary.json)*
+
+Latest certification/evidence refresh (`2026-05-01`):
+- Unified evidence bundle: `28/28` sections present, `11/11` required sections present, `0` missing, `0` invalid *(from tests/evidence_bundle/index.json)*
+- Full-suite gate: `20/20` gates passed, including `14/14` blocking gates *(from tests/full_suite_gate/full_suite_verdict.json)*
+- Drop-in certification: `20/20` certification gates passed, overall verdict `CERTIFIED` *(from docs/evidence/dropin-certification-verdict.json)*
+- Extension must-pass gate: `123/123` must-pass extensions passed; stretch set `98/101` passed *(from tests/ext_conformance/reports/gate/must_pass_gate_verdict.json)*
 
 ### Fast Loop vs Definitive Benchmarks
 

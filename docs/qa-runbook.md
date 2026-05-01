@@ -650,7 +650,7 @@ expires = "2026-02-27"            # Max 30 days from created
 bead = "bd-XXXX"
 reason = "Blocked by upstream QuickJS bug"
 scope = "both"                    # "full", "preflight", or "both"
-remove_when = "QuickJS fix merged and all 208 extensions pass"
+remove_when = "QuickJS fix merged and all blocking extension conformance gates pass"
 ```
 
 ### Waiver rules

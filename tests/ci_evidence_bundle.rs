@@ -156,7 +156,7 @@ const ARTIFACT_SOURCES: &[ArtifactSource] = &[
     // ── Extension diagnostics ──
     ArtifactSource {
         id: "must_pass_gate",
-        label: "Must-pass gate verdict (208 extensions)",
+        label: "Must-pass gate verdict",
         category: "diagnostics",
         path: "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
         expected_schema: Some("pi.ext.must_pass_gate"),
@@ -1104,8 +1104,13 @@ fn build_evidence_bundle() {
 
     // Group by category.
     let categories: Vec<&str> = {
-        let mut cats: Vec<&str> = sections.iter().map(|s| s.category.as_str()).collect();
-        cats.dedup();
+        let mut cats = Vec::new();
+        for section in &sections {
+            let category = section.category.as_str();
+            if !cats.contains(&category) {
+                cats.push(category);
+            }
+        }
         cats
     };
 

@@ -16,7 +16,7 @@ performance advantage.
 
 | Claim | Evidence |
 |---|---|
-| Current vendored matrix is fully green (`224/224`) | `tests/ext_conformance/reports/sharded/shard_0_report.json` |
+| Certified must-pass extension set is fully green (`123/123`), with full-manifest health at `221/224` (`98.7%`) | `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json`, `tests/ext_conformance/reports/health_delta/health_delta_report.json` |
 | Scenario conformance suite is fully green (`25/25`) | `tests/ext_conformance/reports/scenario_conformance.json` |
 | Differential parity triage sample has zero mismatches (`22` match, `0` mismatch, `3` skip) | `tests/ext_conformance/reports/parity/triage.json` |
 | Cold load P95 = 106ms (debug build) | `ext_bench_baseline.json` |
@@ -139,20 +139,22 @@ capability-gated rather than ambient.
 
 ### 3.4 Conformance evidence
 
-Current conformance matrix status is fully green:
-- `224/224` pass
-- `0` fail
-- `0` skip
+Current certified conformance status:
+- Must-pass extension gate: `123/123` pass, `0` fail, `0` skip.
+- Informational stretch set: `98/101` pass, `3` fail, `0` skip.
+- Full-manifest health: `221/224` pass (`98.7%`), `0` regressions, `34` fixes vs the 2026-02-07 baseline.
 
 Source artifact:
-- `tests/ext_conformance/reports/sharded/shard_0_report.json` (`generated_at=2026-02-18T23:43:48Z`)
+- `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json` (`generated_at=2026-05-01T03:20:54.460Z`)
+- `tests/ext_conformance/reports/health_delta/health_delta_report.json` (`generated_at=2026-05-01T04:10:28.479Z`)
 
-Historical `187/223` baseline figures are superseded by this current run and are retained only as older archival context.
+Historical `224/224` and `187/223` figures are retained only as older archival context; they do not override the current must-pass/full-manifest split above.
 
 **Reproduction:**
 
 ```bash
-cargo test --test ext_conformance_generated --features ext-conformance -- --nocapture
+cargo test --test ext_conformance_generated --features ext-conformance -- conformance_must_pass_gate --nocapture --exact
+cargo test --test ext_conformance_generated --features ext-conformance -- conformance_health_delta --nocapture --exact
 ```
 
 ---
@@ -275,7 +277,7 @@ PI_BENCH_MODE=nightly PI_BENCH_MAX=103 PI_BENCH_ITERATIONS=10 \
 | **Test harness** | Manual setup | Manual setup | LabRuntime (built-in) |
 | **Native addons** | Supported (risk) | Supported (risk) | Blocked (safe) |
 | **WebAssembly** | Built-in | Built-in | Via wasmtime bridge* |
-| **Compatibility** | 100% Node API | ~98% Node API | `224/224` in current vendored conformance matrix (harness scope) |
+| **Compatibility** | 100% Node API | ~98% Node API | `123/123` certified must-pass extensions; `221/224` full-manifest health (harness scope) |
 | **Dependencies** | node binary (80MB+) | bun binary (60MB+) | Embedded (0 bytes) |
 
 *PiWasm bridge planned for extensions that require WebAssembly; no current

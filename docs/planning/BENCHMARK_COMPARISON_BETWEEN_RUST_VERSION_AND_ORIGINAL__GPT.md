@@ -3,17 +3,30 @@
 Generated: 2026-02-19
 Workspace: `/data/projects/pi_agent_rust`
 
-## 0) Post-Hardening Status Update (2026-02-17)
+## 0) Historical Post-Hardening Status Update (2026-02-17)
 
-This report now includes a post-hardening extension-compatibility checkpoint.
+This section records the post-hardening extension-compatibility checkpoint from 2026-02-17. It is historical evidence, not the current certification state.
 
-- Extension conformance matrix is now fully green locally: `224/224` passed, `0` failed, `0` skipped.
-- This supersedes earlier partial-compatibility snapshots in this document that referenced `223` corpus entries with non-zero failures.
+- Extension conformance matrix was fully green locally in that checkpoint: `224/224` passed, `0` failed, `0` skipped.
+- That result superseded earlier partial-compatibility snapshots in this document that referenced `223` corpus entries with non-zero failures.
 - Validation commands run in this update cycle:
   - `cargo test --test ext_conformance_generated --features ext-conformance -- conformance_sharded_matrix --nocapture --exact`
   - `cargo check --all-targets`
   - `cargo clippy --all-targets -- -D warnings`
   - `cargo fmt --check`
+
+## 0.0.1) Current Certification Reality Check (2026-05-01)
+
+Current checked-in certification evidence now separates blocking must-pass extensions from informational full-manifest health:
+
+- Must-pass extension gate: `123/123` pass, `0` fail, `0` skip.
+- Informational stretch set: `98/101` pass, `3` fail, `0` skip.
+- Full-manifest health: `221/224` pass (`98.7%`), `0` regressions, `34` fixes vs the 2026-02-07 baseline.
+- Source artifacts:
+  - `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json` (`generated_at=2026-05-01T03:20:54.460Z`)
+  - `tests/ext_conformance/reports/health_delta/health_delta_report.json` (`generated_at=2026-05-01T04:10:28.479Z`)
+
+Older `224/224` compatibility checkpoints remain useful historical evidence, but strict current claims must cite the 2026-05-01 must-pass/full-manifest split above.
 
 ## 0.1) Post-Compaction Secure-Path Verification (2026-02-18)
 
@@ -77,9 +90,10 @@ This report now includes a post-hardening extension-compatibility checkpoint.
 
 1. Fresh secure-path reruns (2026-02-18) plus a full orchestrator checkpoint (2026-02-19) continue to show the same trendline: against the last validated legacy baselines, Rust wins the measured `1M`/`5M` matched-state and realistic workload totals in this report’s harness.
 2. Rust remains **much smaller in memory footprint** in matched-state and realistic flows, with substantial RSS advantages retained.
-3. Extension compatibility is fully passing in both local matrix conformance and live-provider release-binary execution:
-   - Matrix: `224/224` pass (`0` fail, `0` skipped)
-   - Release-binary E2E (ollama, optimized binaries): `224/224` pass (`0` fail, `0` timeout)
+3. Current extension certification is passing on the blocking must-pass lane, while full-manifest health is tracked separately:
+   - Must-pass gate: `123/123` pass (`0` fail, `0` skipped)
+   - Full-manifest health: `221/224` pass (`98.7%`), with `0` regressions vs baseline
+   - Historical release-binary E2E checkpoint (ollama, optimized binaries): `224/224` pass (`0` fail, `0` timeout)
 4. Rust has significantly expanded first-class capability surface versus legacy coding-agent CLI (commands, policy explainers, provider metadata/control, risk/quota/security instrumentation).
 5. The largest practical optimization target remains session append/save behavior at high token-volume and large histories; this is the best lever for major speed gains.
 6. Startup/readiness latency strongly favors Rust in this snapshot: fresh Rust `--help`/`--version` means are ~`3.02ms`/`2.77ms`; direct legacy reruns are currently blocked, but prior validated legacy means remain ~`1.0s` (Node) and ~`0.73s` (Bun).
@@ -107,7 +121,7 @@ Reused (existing in-repo evidence, unchanged methodology):
 - matched-state 10-message append footprint matrix
 - realistic 1M/5M footprint matrix
 - extension workload microbench (`ext_workloads` and `bench_legacy_extension_workloads.mjs`)
-- historical 223-extension vendored conformance + failure taxonomy (kept for baseline context; superseded by current `224/224` matrix status above)
+- historical 223-extension vendored conformance + failure taxonomy (kept for baseline context; superseded by later checkpoint evidence and the current 2026-05-01 certification split above)
 
 Build/regeneration note:
 - `cargo build --release --bin pi` succeeds in this run and was used for fresh Rust startup numbers.
@@ -645,7 +659,7 @@ Interpretation:
 
 ## 7.4 Historical Baseline (2026-02-14, Superseded)
 
-The following TSV is retained for audit history from the older `223`-entry baseline run and is superseded by the current `224/224` matrix status above.
+The following TSV is retained for audit history from the older `223`-entry baseline run and is superseded by later checkpoint evidence. For current certification language, use the 2026-05-01 must-pass/full-manifest split at the top of this document.
 
 Columns: `id`, `status`, `verdict`, `failure_category`, `reason`, `suggested_fix`
 
@@ -690,10 +704,11 @@ third-party/w-winter-dot314	fail	harness_gap	registration_mismatch	Observed regi
 
 ## 7.5 Current Gap Status
 
-1. Current vendored conformance matrix has no outstanding non-pass entries (`224/224` pass).
-2. Current scenario suite has no outstanding failures (`25/25` pass).
-3. Differential parity triage currently shows `0` mismatches in sampled cases (`22` match, `3` skip).
-4. Remaining work is regression prevention: keep the matrix/scenario/parity lanes as release-gate checks and investigate any future drift immediately.
+1. Current certified must-pass conformance has no outstanding non-pass entries (`123/123` pass).
+2. Current full-manifest health has three non-pass stretch entries (`221/224` pass); these are informational and non-blocking in the current certification gate.
+3. Current scenario suite has no outstanding failures (`25/25` pass).
+4. Differential parity triage currently shows `0` mismatches in sampled cases (`22` match, `3` skip).
+5. Remaining work is regression prevention: keep the must-pass, full-manifest health, scenario, and parity lanes as release-gate evidence and investigate any future drift immediately.
 
 ---
 

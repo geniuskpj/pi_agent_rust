@@ -13,7 +13,7 @@
 //! Sub-gates:
 //! 1. Non-mock unit compliance (bd-1f42.2.6)
 //! 2. E2E log contract (bd-1f42.3.6)
-//! 3. Extension must-pass gate — 208 extensions (bd-1f42.4.4)
+//! 3. Extension must-pass gate (bd-1f42.4.4)
 //! 4. Extension provider compatibility matrix (bd-1f42.4.6)
 //! 5. Unified evidence bundle (bd-1f42.6.8)
 //! 6. Cross-platform matrix (bd-1f42.6.7)
@@ -2156,14 +2156,14 @@ fn collect_gates(root: &Path) -> Vec<SubGate> {
         reproduce_command: None,
     });
 
-    // Gate 3: Extension must-pass gate (208 extensions).
+    // Gate 3: Extension must-pass gate.
     let (status, detail) = check_must_pass_gate_artifact(
         root,
         "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
     );
     gates.push(SubGate {
         id: "ext_must_pass".to_string(),
-        name: "Extension must-pass gate (208 extensions)".to_string(),
+        name: "Extension must-pass gate".to_string(),
         bead: "bd-1f42.4.4".to_string(),
         status,
         blocking: true,
