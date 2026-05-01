@@ -149,6 +149,7 @@ jobs:
     env:
       CI: "true"
       RUST_BACKTRACE: "1"
+      RUST_LOG: "pi_agent_rust::http::client=debug"
     defaults:
       run:
         working-directory: pi_agent_rust
