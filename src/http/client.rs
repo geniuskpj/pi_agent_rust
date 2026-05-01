@@ -41,6 +41,12 @@ const WRITE_ZERO_BACKOFF: std::time::Duration = std::time::Duration::from_millis
 #[cfg(not(test))]
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
+#[cfg(windows)]
+use native_tls as ntls;
+#[cfg(windows)]
+use tokio_native_tls as tntls;
+
+
 fn default_request_timeout_from_env() -> Option<std::time::Duration> {
     #[cfg(test)]
     {
@@ -68,13 +74,19 @@ fn default_request_timeout_from_env() -> Option<std::time::Duration> {
 
 #[derive(Debug, Clone)]
 pub struct Client {
-    tls: std::result::Result<TlsConnector, String>,
+    tls: std::result::Result<TlsConnectorType, String>,
     user_agent: String,
     vcr: Option<VcrRecorder>,
 }
 
+#[cfg(windows)]
+type TlsConnectorType = tntls::TlsConnector;
+
+#[cfg(unix)]
+type TlsConnectorType = TlsConnector; // whatever you already use
+
 impl Client {
-    #[must_use]
+    #[cfg(unix)]
     pub fn new() -> Self {
         let tls = TlsConnectorBuilder::new()
             .with_native_roots()
@@ -92,7 +104,24 @@ impl Client {
             vcr: None,
         }
     }
+    
+#[cfg(windows)]
+    pub fn new() -> Self {
+        let tls = ntls::TlsConnector::new()
+            .map(tntls::TlsConnector::from)
+            .map_err(|e| e.to_string());
 
+        let user_agent = std::env::var(ANTIGRAVITY_VERSION_ENV).map_or_else(
+            |_| DEFAULT_USER_AGENT.to_string(),
+            |v| format!("{DEFAULT_USER_AGENT} Antigravity/{v}"),
+        );
+
+        Self {
+            tls,
+            user_agent,
+            vcr: None,
+        }
+    }
     pub fn post(&self, url: &str) -> RequestBuilder<'_> {
         RequestBuilder::new(self, Method::Post, url)
     }
