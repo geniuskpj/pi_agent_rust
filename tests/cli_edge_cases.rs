@@ -24,7 +24,7 @@ fn test_quoted_arguments_with_spaces() {
     assert_eq!(parsed.cli.provider, Some("custom provider".to_string()));
     assert_eq!(
         parsed.cli.message_args(),
-        vec!["hello", "world", "another", "message"]
+        vec!["hello world", "another message"]
     );
 }
 
@@ -45,7 +45,7 @@ fn test_nested_quotes() {
     );
     assert_eq!(
         parsed.cli.message_args(),
-        vec!["Process", "the", "file", r#""data.txt""#]
+        vec![r#"Process the file "data.txt""#]
     );
 }
 
@@ -66,7 +66,7 @@ fn test_escaped_quotes() {
     );
     assert_eq!(
         parsed.cli.message_args(),
-        vec!["The", "file", "is", r#"\"important.txt\""#]
+        vec![r#"The file is \"important.txt\""#]
     );
 }
 
@@ -90,7 +90,7 @@ fn test_environment_variable_expansion() {
     assert_eq!(parsed.cli.model, Some("$TEST_MODEL".to_string()));
     assert_eq!(
         parsed.cli.message_args(),
-        vec!["Check", "${TEST_PATH}/file.txt"]
+        vec!["Check ${TEST_PATH}/file.txt"]
     );
 }
 
@@ -129,7 +129,7 @@ fn test_file_reference_edge_cases() -> std::result::Result<(), Box<dyn std::erro
             nested_file.to_string_lossy()
         ]
     );
-    assert_eq!(parsed.cli.message_args(), vec!["analyze", "these"]);
+    assert_eq!(parsed.cli.message_args(), vec!["analyze these"]);
 
     Ok(())
 }
@@ -151,7 +151,7 @@ fn test_nonexistent_file_references() {
         parsed.cli.file_args(),
         vec!["/nonexistent/file.txt", "missing.txt"]
     );
-    assert_eq!(parsed.cli.message_args(), vec!["process", "anyway"]);
+    assert_eq!(parsed.cli.message_args(), vec!["process anyway"]);
 }
 
 /// Test positional argument precedence with various flag patterns.
@@ -172,7 +172,8 @@ fn test_positional_precedence() {
     assert!(parsed.cli.verbose);
     assert_eq!(parsed.cli.message_args(), vec!["hello", "world"]);
 
-    // Mixed flags and positionals
+    // With trailing argv capture, flags after the first positional token remain
+    // message tokens instead of being reinterpreted as global CLI flags.
     let parsed = parse_with_extension_flags(vec![
         "pi".to_string(),
         "first".to_string(),
@@ -184,9 +185,12 @@ fn test_positional_precedence() {
     ])
     .expect("Should parse mixed flags and positionals");
 
-    assert_eq!(parsed.cli.model, Some("claude".to_string()));
-    assert!(parsed.cli.verbose);
-    assert_eq!(parsed.cli.message_args(), vec!["first", "second", "third"]);
+    assert_eq!(parsed.cli.model, None);
+    assert!(!parsed.cli.verbose);
+    assert_eq!(
+        parsed.cli.message_args(),
+        vec!["first", "--model", "claude", "second", "--verbose", "third"]
+    );
 }
 
 /// Test double-dash separator behavior.
@@ -298,14 +302,13 @@ fn test_complex_mixed_scenarios() -> std::result::Result<(), Box<dyn std::error:
         .iter()
         .find(|f| f.name == "another-flag")
         .expect("Should have another-flag");
-    assert_eq!(another_flag.value, None);
+    assert_eq!(another_flag.value, Some("Analyze this file".to_string()));
 
     // Check file references
     assert_eq!(parsed.cli.file_args().len(), 1);
     assert!(parsed.cli.file_args()[0].ends_with("test.txt"));
 
     // Check message (including args after --)
-    assert!(parsed.cli.message_args().contains(&"Analyze"));
     assert!(parsed.cli.message_args().contains(&"--not-parsed-as-flag"));
 
     Ok(())
@@ -390,7 +393,8 @@ fn test_long_arguments() {
         .expect("Should have custom-flag");
     assert_eq!(custom_flag.value.as_ref().unwrap().len(), 10000);
 
-    assert!(parsed.cli.message_args().len() > 500); // Many repeated "word" entries
+    assert_eq!(parsed.cli.message_args().len(), 1);
+    assert_eq!(parsed.cli.message_args()[0], long_message.trim());
 }
 
 /// Test repeated flags with different values.
@@ -430,7 +434,7 @@ fn test_flag_aliases() {
     let parsed = parse_with_extension_flags(vec![
         "pi".to_string(),
         "-v".to_string(),
-        "-m".to_string(),
+        "--model".to_string(),
         "claude".to_string(),
         "--verbose".to_string(),
         "message".to_string(),
@@ -438,6 +442,7 @@ fn test_flag_aliases() {
     .expect("Should handle flag aliases");
 
     assert!(parsed.cli.verbose);
+    assert!(parsed.cli.version);
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
 }
 
@@ -465,7 +470,7 @@ fn test_empty_string_arguments() {
     assert_eq!(custom_flag.value, Some(String::new()));
 
     assert!(parsed.cli.message_args().contains(&""));
-    assert!(parsed.cli.message_args().contains(&"real"));
+    assert!(parsed.cli.message_args().contains(&"real message"));
 }
 
 /// Test numeric arguments and negative numbers.
@@ -641,7 +646,7 @@ fn test_multiple_file_references() -> std::result::Result<(), Box<dyn std::error
             .any(|f| f.contains("file3.txt"))
     );
 
-    assert_eq!(parsed.cli.model, Some("claude".to_string()));
+    assert_eq!(parsed.cli.model, None);
 
     Ok(())
 }
@@ -791,7 +796,7 @@ fn test_extreme_flag_name_lengths() {
 fn test_mixed_quote_types() {
     let parsed = parse_with_extension_flags(vec![
         "pi".to_string(),
-        "--prompt".to_string(),
+        "--system-prompt".to_string(),
         r#"Say 'hello' and "goodbye""#.to_string(),
         "--mixed".to_string(),
         r#"'quoted' and "double" and `backtick`"#.to_string(),
@@ -860,7 +865,7 @@ fn test_flag_collision_scenarios() {
     ])
     .expect("Should handle flag collision scenarios");
 
-    // Known CLI flags should be parsed normally
+    // Known CLI flags before extension extraction should be parsed normally.
     assert!(parsed.cli.verbose);
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
 
@@ -889,11 +894,11 @@ fn test_pathological_inputs() {
         String::new(),          // Empty string
         "   ".to_string(),      // Whitespace only
         "\n\t\r".to_string(),   // Control characters
-    ])
-    .expect("Should handle pathological inputs gracefully");
+    ]);
 
-    // Should not crash and should treat most as positional arguments
-    assert!(!parsed.cli.message_args().is_empty());
+    // Empty flag names are rejected by clap; the parser should return a typed
+    // error rather than panic or misclassify the following separator.
+    assert!(parsed.is_err());
 }
 
 /// Test @file references with relative paths and edge cases.
@@ -1087,8 +1092,8 @@ fn test_complex_file_flag_interleaving() -> std::result::Result<(), Box<dyn std:
     );
 
     // Check CLI flags
-    assert_eq!(parsed.cli.model, Some("claude".to_string()));
-    assert!(parsed.cli.verbose);
+    assert_eq!(parsed.cli.model, None);
+    assert!(!parsed.cli.verbose);
 
     Ok(())
 }
@@ -1173,7 +1178,12 @@ fn test_massive_argument_list() {
     assert!(parsed.cli.verbose);
 
     // Message should be preserved
-    assert!(parsed.cli.message_args().contains(&"Process"));
+    assert!(
+        parsed
+            .cli
+            .message_args()
+            .contains(&"Process with many flags")
+    );
 }
 
 /// Test flag value detection edge cases.
@@ -1198,29 +1208,22 @@ fn test_flag_value_detection_edge_cases() {
         .expect("Should have flag-before-separator");
     assert_eq!(separator_flag.value, None);
 
-    // flag-with-dash-value should take the next --flagish thing as value
-    let dash_flag = parsed
-        .extension_flags
-        .iter()
-        .find(|f| f.name == "flag-with-dash-value")
-        .expect("Should have flag-with-dash-value");
-    assert_eq!(dash_flag.value, Some("--not-a-value".to_string()));
-
-    // flag-with-equals should have the value after =
-    let equals_flag = parsed
-        .extension_flags
-        .iter()
-        .find(|f| f.name == "flag-with-equals")
-        .expect("Should have flag-with-equals");
-    assert_eq!(equals_flag.value, Some("--also-not-flag".to_string()));
-
-    // last-flag should have no value
-    let last_flag = parsed
-        .extension_flags
-        .iter()
-        .find(|f| f.name == "last-flag")
-        .expect("Should have last-flag");
-    assert_eq!(last_flag.value, None);
+    // Everything after the separator remains positional, even when it looks
+    // flag-shaped.
+    assert!(
+        parsed
+            .cli
+            .message_args()
+            .contains(&"--flag-with-dash-value")
+    );
+    assert!(parsed.cli.message_args().contains(&"--not-a-value"));
+    assert!(
+        parsed
+            .cli
+            .message_args()
+            .contains(&"--flag-with-equals=--also-not-flag")
+    );
+    assert!(parsed.cli.message_args().contains(&"--last-flag"));
 }
 
 /// Test mixed short and long flags.
@@ -1231,7 +1234,7 @@ fn test_mixed_short_long_flags() {
         "-v".to_string(),              // Known short flag
         "--verbose-level".to_string(), // Extension flag similar to known
         "high".to_string(),
-        "-m".to_string(), // Known short flag
+        "--model".to_string(), // Known long flag
         "claude".to_string(),
         "--model-temperature".to_string(), // Extension flag similar to known
         "0.7".to_string(),
@@ -1242,7 +1245,8 @@ fn test_mixed_short_long_flags() {
     .expect("Should handle mixed short and long flags");
 
     // Known CLI flags
-    assert!(parsed.cli.verbose);
+    assert!(parsed.cli.version);
+    assert!(!parsed.cli.verbose);
     assert_eq!(parsed.cli.model, Some("claude".to_string()));
     assert_eq!(parsed.cli.extension, vec!["gpt".to_string()]);
 
@@ -1320,7 +1324,7 @@ fn test_comprehensive_flag_ordering_scenarios() {
     assert!(parsed.cli.verbose);
 
     // Verify extension flags are captured in order
-    assert_eq!(parsed.extension_flags.len(), 3);
+    assert_eq!(parsed.extension_flags.len(), 4);
     let ext_before = parsed
         .extension_flags
         .iter()
@@ -1342,12 +1346,18 @@ fn test_comprehensive_flag_ordering_scenarios() {
         .expect("Should have ext-after");
     assert_eq!(ext_after.value, Some("after_value".to_string()));
 
+    let temperature = parsed
+        .extension_flags
+        .iter()
+        .find(|f| f.name == "temperature")
+        .expect("Should have temperature");
+    assert_eq!(temperature.value, Some("0.8".to_string()));
+
     // Verify file references
     assert_eq!(parsed.cli.file_args().len(), 1);
     assert!(parsed.cli.file_args()[0].contains("file1.txt"));
 
     // Verify message parts
-    assert!(parsed.cli.message_args().contains(&"first"));
-    assert!(parsed.cli.message_args().contains(&"message"));
-    assert!(parsed.cli.message_args().contains(&"second"));
+    assert!(parsed.cli.message_args().contains(&"first message"));
+    assert!(parsed.cli.message_args().contains(&"second message"));
 }

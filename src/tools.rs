@@ -426,8 +426,9 @@ pub fn truncate_tail(
             let added_bytes = start_idx - line_start;
 
             if byte_count + added_bytes > max_bytes {
-                // Truncate!
-                // Try to take a partial line if we haven't collected any full lines yet.
+                // Try to take a partial line if byte budget remains. This
+                // preserves suffix stability under prepends while staying on a
+                // valid UTF-8 boundary.
                 let remaining = max_bytes.saturating_sub(byte_count);
                 if remaining > 0 {
                     let chunk = &content[line_start..start_idx];

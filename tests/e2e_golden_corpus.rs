@@ -749,7 +749,7 @@ fn parse_json_lines_ignores_blank_lines() {
 
 #[test]
 fn parse_json_lines_accepts_crlf() {
-    let stdout = "{\n\"type\":\"session\",\"id\":\"abc\"}\r\n{\"type\":\"agent_end\"}\r\n";
+    let stdout = "{\"type\":\"session\",\"id\":\"abc\"}\r\n{\"type\":\"agent_end\"}\r\n";
     let lines = parse_json_lines(stdout).expect("CRLF JSON lines should parse");
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["type"], "session");

@@ -80,8 +80,8 @@
       }
     },
     {
-      "name": "find_limit_notice_golden",
-      "description": "Limit notice formatting stays locked to golden output",
+      "name": "find_limit_notice_format",
+      "description": "Limit notice formatting stays stable when same-mtime files tie at the cutoff",
       "setup": [
         {"type": "create_file", "path": "a.txt", "content": ""},
         {"type": "create_file", "path": "b.txt", "content": ""},
@@ -89,7 +89,7 @@
       ],
       "input": {"pattern": "*.txt", "limit": 2},
       "expected": {
-        "content_golden": "find_tool/limit_notice.txt",
+        "content_regex": "^[abc]\\.txt\\n[abc]\\.txt\\n\\n\\[2 results limit reached\\. Use limit=4 for more, or refine pattern\\]$",
         "details_golden": "find_tool/limit_details.json"
       }
     },

@@ -254,7 +254,7 @@ fn context_window_tokens_for_entry(entry: &ModelEntry) -> u32 {
 #[allow(clippy::too_many_lines)]
 fn main_impl() -> Result<()> {
     // Parse CLI arguments
-    let Some((cli, extension_flags)) = parse_cli_from_env()? else {
+    let Some((mut cli, extension_flags)) = parse_cli_from_env()? else {
         return Ok(());
     };
 
@@ -271,6 +271,21 @@ fn main_impl() -> Result<()> {
     // Ultra-fast paths that don't need tracing or the async runtime.
     if let Some(command) = &cli.command {
         match command {
+            cli::Commands::Install { source, local } => {
+                let manager = PackageManager::new(cwd.clone());
+                handle_package_install_blocking(&manager, source, *local)?;
+                return Ok(());
+            }
+            cli::Commands::Remove { source, local } => {
+                let manager = PackageManager::new(cwd.clone());
+                handle_package_remove_blocking(&manager, source, *local)?;
+                return Ok(());
+            }
+            cli::Commands::Update { source } => {
+                let manager = PackageManager::new(cwd.clone());
+                handle_package_update_blocking(&manager, source.as_deref())?;
+                return Ok(());
+            }
             cli::Commands::List => {
                 let manager = PackageManager::new(cwd);
                 handle_package_list_blocking(&manager)?;
@@ -428,6 +443,36 @@ fn main_impl() -> Result<()> {
         }
     }
 
+    if cli.command.is_none() && !cli.acp && cli.mode.as_deref() != Some("rpc") {
+        let stdin_content = read_piped_stdin()?;
+        pi::app::apply_piped_stdin(&mut cli, stdin_content);
+    }
+
+    if !cli.print && cli.mode.is_none() && !cli.message_args().is_empty() {
+        cli.print = true;
+    }
+
+    pi::app::normalize_cli(&mut cli);
+
+    let early_mode = cli.mode.clone().unwrap_or_else(|| {
+        if !cli.print && cli.export.is_none() {
+            "interactive".to_string()
+        } else {
+            "text".to_string()
+        }
+    });
+    if cli.command.is_none()
+        && early_mode == "text"
+        && cli.export.is_none()
+        && cli.file_args().is_empty()
+        && cli
+            .message_args()
+            .iter()
+            .all(|message| message.trim().is_empty())
+    {
+        bail!("No input provided. Use: pi -p \"your message\" or pipe input via stdin");
+    }
+
     // Initialize logging (skip for ultra-fast paths like --version)
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -439,13 +484,13 @@ fn main_impl() -> Result<()> {
     let reactor = create_reactor()?;
     let runtime = RuntimeBuilder::multi_thread()
         .blocking_threads(1, 2)
+        .enable_parking(false)
         .with_reactor(reactor)
         .build()
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let handle = runtime.handle();
     let runtime_handle = handle.clone();
-    let join = handle.spawn(Box::pin(run(cli, extension_flags, runtime_handle)));
-    runtime.block_on(join)
+    runtime.block_on(run(cli, extension_flags, runtime_handle))
 }
 
 fn print_error_with_hints(err: &anyhow::Error) {
@@ -906,6 +951,7 @@ async fn run(
         // Theme already validated above
         config.theme = Some(theme_spec.to_string());
     }
+
     spawn_session_index_maintenance();
     let package_manager = PackageManager::new(cwd.clone());
     let resource_cli = ResourceCliOptions {
@@ -1111,19 +1157,6 @@ async fn run(
         return run_acp_mode(acp_options).await;
     }
 
-    if cli.mode.as_deref() != Some("rpc") {
-        let stdin_content = read_piped_stdin()?;
-        pi::app::apply_piped_stdin(&mut cli, stdin_content);
-    }
-
-    // Auto-detect print mode: if the user passed positional message args (e.g. `pi "hello"`)
-    // or stdin was piped, run in non-interactive print mode automatically.
-    if !cli.print && cli.mode.is_none() && !cli.message_args().is_empty() {
-        cli.print = true;
-    }
-
-    pi::app::normalize_cli(&mut cli);
-
     if let Some(export_path) = cli.export.clone() {
         let output = cli.message_args().first().map(ToString::to_string);
         let output_path = export_session(&export_path, output.as_deref()).await?;
@@ -1145,6 +1178,7 @@ async fn run(
             .and_then(|i| i.auto_resize)
             .unwrap_or(true),
     )?;
+    messages.retain(|message| !message.trim().is_empty());
 
     let is_interactive = !cli.print && cli.mode.is_none() && cli.export.is_none();
     let mode = cli.mode.clone().unwrap_or_else(|| {
@@ -1157,6 +1191,9 @@ async fn run(
     let is_print_mode = mode == "text" || mode == "json";
     if is_print_mode {
         cli.no_session = true;
+    }
+    if mode == "text" && initial.is_none() && messages.is_empty() {
+        bail!("No input provided. Use: pi -p \"your message\" or pipe input via stdin");
     }
 
     let scoped_patterns = if let Some(models_arg) = &cli.models {
@@ -1676,6 +1713,23 @@ async fn handle_package_install(manager: &PackageManager, source: &str, local: b
     Ok(())
 }
 
+fn handle_package_install_blocking(
+    manager: &PackageManager,
+    source: &str,
+    local: bool,
+) -> Result<()> {
+    let scope = scope_from_flag(local);
+    let resolved_source = manager.resolve_install_source_alias(source);
+    manager.install_blocking(&resolved_source, scope)?;
+    manager.add_package_source_blocking(&resolved_source, scope)?;
+    if resolved_source == source {
+        println!("Installed {source}");
+    } else {
+        println!("Installed {source} (resolved to {resolved_source})");
+    }
+    Ok(())
+}
+
 async fn handle_package_remove(manager: &PackageManager, source: &str, local: bool) -> Result<()> {
     let scope = scope_from_flag(local);
     let resolved_source = manager.resolve_install_source_alias(source);
@@ -1683,6 +1737,23 @@ async fn handle_package_remove(manager: &PackageManager, source: &str, local: bo
     manager
         .remove_package_source(&resolved_source, scope)
         .await?;
+    if resolved_source == source {
+        println!("Removed {source}");
+    } else {
+        println!("Removed {source} (resolved to {resolved_source})");
+    }
+    Ok(())
+}
+
+fn handle_package_remove_blocking(
+    manager: &PackageManager,
+    source: &str,
+    local: bool,
+) -> Result<()> {
+    let scope = scope_from_flag(local);
+    let resolved_source = manager.resolve_install_source_alias(source);
+    manager.remove_blocking(&resolved_source, scope)?;
+    manager.remove_package_source_blocking(&resolved_source, scope)?;
     if resolved_source == source {
         println!("Removed {source}");
     } else {
@@ -1728,6 +1799,55 @@ async fn handle_package_update(manager: &PackageManager, source: Option<String>)
     let mut failed = 0;
     for entry in entries {
         if let Err(e) = manager.update_source(&entry.source, entry.scope).await {
+            eprintln!("Failed to update {}: {}", entry.source, e);
+            failed += 1;
+        }
+    }
+
+    if failed > 0 {
+        bail!("Failed to update {failed} packages");
+    }
+    println!("Updated packages");
+    Ok(())
+}
+
+fn handle_package_update_blocking(manager: &PackageManager, source: Option<&str>) -> Result<()> {
+    let entries = manager.list_packages_blocking()?;
+
+    if let Some(source) = source {
+        let source = source.trim();
+        if source.is_empty() {
+            bail!(pi::error::Error::validation(
+                "Package source must be non-empty"
+            ));
+        }
+
+        let resolved_source = manager.resolve_install_source_alias(source);
+        let identity = manager.package_identity(&resolved_source);
+        let mut matched = false;
+        for entry in entries {
+            if manager.package_identity(&entry.source) != identity {
+                continue;
+            }
+            matched = true;
+            manager.update_source_blocking(&entry.source, entry.scope)?;
+        }
+        if !matched {
+            bail!(pi::error::Error::validation(format!(
+                "Package source not found: {source}"
+            )));
+        }
+        if resolved_source == source {
+            println!("Updated {source}");
+        } else {
+            println!("Updated {source} (resolved to {resolved_source})");
+        }
+        return Ok(());
+    }
+
+    let mut failed = 0;
+    for entry in entries {
+        if let Err(e) = manager.update_source_blocking(&entry.source, entry.scope) {
             eprintln!("Failed to update {}: {}", entry.source, e);
             failed += 1;
         }
@@ -3857,11 +3977,7 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
                     if let Ok(line) = manual_rx.try_recv() {
                         break line;
                     }
-                    asupersync::time::sleep(
-                        asupersync::time::wall_now(),
-                        std::time::Duration::from_millis(50),
-                    )
-                    .await;
+                    sleep_with_current_timer(std::time::Duration::from_millis(50)).await;
                 };
 
                 // Don't wait for the prompt thread — it will exit on its own
@@ -4359,7 +4475,16 @@ async fn run_print_mode(
     let messages = messages
         .into_iter()
         .map(|message| resources.expand_input(&message))
+        .filter(|message| !message.trim().is_empty())
         .collect::<Vec<_>>();
+
+    if initial.is_none() && messages.is_empty() {
+        if mode == "json" {
+            io::stdout().flush()?;
+            return Ok(());
+        }
+        bail!("No input provided. Use: pi -p \"your message\" or pipe input via stdin");
+    }
 
     let retry_enabled = config.retry_enabled();
     let max_retries = config.retry_max_retries();
@@ -4556,6 +4681,13 @@ fn print_mode_retry_delay_ms(config: &Config, attempt: u32) -> u32 {
     u32::try_from(delay).unwrap_or(u32::MAX)
 }
 
+async fn sleep_with_current_timer(duration: Duration) {
+    let now = asupersync::Cx::current()
+        .and_then(|cx| cx.timer_driver())
+        .map_or_else(asupersync::time::wall_now, |timer| timer.now());
+    asupersync::time::sleep(now, duration).await;
+}
+
 /// Emit a JSON-serialized [`AgentEvent`] to stdout (for JSON print mode).
 fn emit_json_event(event: &AgentEvent) {
     if let Ok(serialized) = serde_json::to_string(event) {
@@ -4653,11 +4785,7 @@ where
                     });
                 }
 
-                asupersync::time::sleep(
-                    asupersync::time::wall_now(),
-                    Duration::from_millis(u64::from(delay_ms)),
-                )
-                .await;
+                sleep_with_current_timer(Duration::from_millis(u64::from(delay_ms))).await;
 
                 // Revert the failed user message before retrying to prevent context duplication.
                 let _ = session.revert_last_user_message().await;
@@ -4717,11 +4845,7 @@ where
                         });
                     }
 
-                    asupersync::time::sleep(
-                        asupersync::time::wall_now(),
-                        Duration::from_millis(u64::from(delay_ms)),
-                    )
-                    .await;
+                    sleep_with_current_timer(Duration::from_millis(u64::from(delay_ms))).await;
 
                     // Revert the failed user message before retrying to prevent context
                     // duplication when the provider fails before emitting an assistant

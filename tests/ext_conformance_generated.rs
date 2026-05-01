@@ -161,6 +161,24 @@ fn load_manifest() -> &'static Manifest {
     })
 }
 
+fn hermetic_conformance_env(cwd: &Path) -> std::collections::HashMap<String, String> {
+    let home = cwd.join("home");
+    let tmp = cwd.join("tmp");
+    std::fs::create_dir_all(&home).expect("create conformance home");
+    std::fs::create_dir_all(&tmp).expect("create conformance tmp");
+
+    let home = home.display().to_string();
+    let tmp = tmp.display().to_string();
+    std::collections::HashMap::from([
+        ("HOME".to_string(), home.clone()),
+        ("USERPROFILE".to_string(), home.clone()),
+        ("PI_DETERMINISTIC_HOME".to_string(), home),
+        ("TMPDIR".to_string(), tmp.clone()),
+        ("TEMP".to_string(), tmp.clone()),
+        ("TMP".to_string(), tmp),
+    ])
+}
+
 // ─── Core conformance test runner ───────────────────────────────────────────
 
 /// Load an extension from the artifacts directory, validate registrations match
@@ -208,6 +226,8 @@ fn run_conformance_test(ext_id: &str) {
     let tools = Arc::new(ToolRegistry::new(&[], &cwd, None));
     let js_config = PiJsRuntimeConfig {
         cwd: cwd.display().to_string(),
+        env: hermetic_conformance_env(&cwd),
+        deny_env: false,
         ..Default::default()
     };
 
@@ -376,8 +396,6 @@ struct ExtensionConformanceResult {
 /// even when some extensions fail.
 #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
 fn try_conformance(ext_id: &str) -> ExtensionConformanceResult {
-    use std::collections::HashMap;
-
     let manifest = load_manifest();
     let Some(entry) = manifest.find(ext_id) else {
         return ExtensionConformanceResult {
@@ -440,17 +458,22 @@ fn try_conformance(ext_id: &str) -> ExtensionConformanceResult {
     // Some npm extensions gate registration behind API-key presence checks.
     // Conformance validates registration shape, so inject deterministic dummy
     // keys for those specific extensions.
-    let env: HashMap<String, String> = match ext_id {
-        "npm/aliou-pi-linkup" => HashMap::from([(
-            "LINKUP_API_KEY".to_string(),
-            "conformance-dummy-key".to_string(),
-        )]),
-        "npm/aliou-pi-synthetic" => HashMap::from([(
-            "SYNTHETIC_API_KEY".to_string(),
-            "conformance-dummy-key".to_string(),
-        )]),
-        _ => HashMap::new(),
-    };
+    let mut env = hermetic_conformance_env(&cwd);
+    match ext_id {
+        "npm/aliou-pi-linkup" => {
+            env.insert(
+                "LINKUP_API_KEY".to_string(),
+                "conformance-dummy-key".to_string(),
+            );
+        }
+        "npm/aliou-pi-synthetic" => {
+            env.insert(
+                "SYNTHETIC_API_KEY".to_string(),
+                "conformance-dummy-key".to_string(),
+            );
+        }
+        _ => {}
+    }
 
     let js_config = PiJsRuntimeConfig {
         cwd: cwd.display().to_string(),
@@ -1594,6 +1617,8 @@ fn try_conformance_detailed(
     let tools = Arc::new(ToolRegistry::new(&[], &cwd, None));
     let js_config = PiJsRuntimeConfig {
         cwd: cwd.display().to_string(),
+        env: hermetic_conformance_env(&cwd),
+        deny_env: false,
         ..Default::default()
     };
 
@@ -2649,8 +2674,6 @@ fn try_conformance_with_env(
     ext_id: &str,
     env_overrides: &[(&str, &str)],
 ) -> ExtensionConformanceResult {
-    use std::collections::HashMap;
-
     let manifest = load_manifest();
     let Some(entry) = manifest.find(ext_id) else {
         return ExtensionConformanceResult {
@@ -2709,10 +2732,12 @@ fn try_conformance_with_env(
     let tools = Arc::new(ToolRegistry::new(&[], &cwd, None));
 
     // Build env map with overrides.
-    let env: HashMap<String, String> = env_overrides
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
+    let mut env = hermetic_conformance_env(&cwd);
+    env.extend(
+        env_overrides
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string())),
+    );
 
     let js_config = PiJsRuntimeConfig {
         cwd: cwd.display().to_string(),
@@ -3394,6 +3419,8 @@ fn run_category_journey(
     let tools = Arc::new(ToolRegistry::new(&[], &cwd, None));
     let js_config = PiJsRuntimeConfig {
         cwd: cwd.display().to_string(),
+        env: hermetic_conformance_env(&cwd),
+        deny_env: false,
         ..Default::default()
     };
 

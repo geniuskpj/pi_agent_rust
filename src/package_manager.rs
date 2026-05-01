@@ -275,6 +275,11 @@ impl PackageManager {
         finish_package_task(handle, recv_result, "Install task cancelled")
     }
 
+    /// Synchronous variant of [`Self::install`] for startup subcommand fast paths.
+    pub fn install_blocking(&self, source: &str, scope: PackageScope) -> Result<()> {
+        self.install_sync(source, scope)
+    }
+
     fn install_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
         let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
@@ -318,6 +323,11 @@ impl PackageManager {
         finish_package_task(handle, recv_result, "Remove task cancelled")
     }
 
+    /// Synchronous variant of [`Self::remove`] for startup subcommand fast paths.
+    pub fn remove_blocking(&self, source: &str, scope: PackageScope) -> Result<()> {
+        self.remove_sync(source, scope)
+    }
+
     fn remove_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
         let source = validate_non_empty_source(source, "Package source")?;
         let parsed = parse_source(source, &self.cwd);
@@ -344,6 +354,11 @@ impl PackageManager {
         let cx = AgentCx::for_request();
         let recv_result = rx.recv(cx.cx()).await;
         finish_package_task(handle, recv_result, "Update task cancelled")
+    }
+
+    /// Synchronous variant of [`Self::update_source`] for startup subcommand fast paths.
+    pub fn update_source_blocking(&self, source: &str, scope: PackageScope) -> Result<()> {
+        self.update_source_sync(source, scope)
     }
 
     fn update_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
@@ -810,6 +825,11 @@ impl PackageManager {
         finish_package_task(handle, recv_result, "Add source task cancelled")
     }
 
+    /// Synchronous variant of [`Self::add_package_source`] for startup subcommand fast paths.
+    pub fn add_package_source_blocking(&self, source: &str, scope: PackageScope) -> Result<()> {
+        self.add_package_source_sync(source, scope)
+    }
+
     fn add_package_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {
         let path = match scope {
             PackageScope::User => global_settings_path(&self.cwd),
@@ -837,6 +857,11 @@ impl PackageManager {
         let cx = AgentCx::for_request();
         let recv_result = rx.recv(cx.cx()).await;
         finish_package_task(handle, recv_result, "Remove source task cancelled")
+    }
+
+    /// Synchronous variant of [`Self::remove_package_source`] for startup subcommand fast paths.
+    pub fn remove_package_source_blocking(&self, source: &str, scope: PackageScope) -> Result<()> {
+        self.remove_package_source_sync(source, scope)
     }
 
     fn remove_package_source_sync(&self, source: &str, scope: PackageScope) -> Result<()> {

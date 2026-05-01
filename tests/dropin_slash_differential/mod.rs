@@ -26,9 +26,7 @@ pub struct SlashCommandScenario {
 pub fn canonicalize_response(mut response: Value) -> Value {
     // Remove time-sensitive fields
     if let Some(obj) = response.as_object_mut() {
-        obj.remove("timestamp");
-        obj.remove("id"); // Request IDs may differ
-        obj.remove("duration");
+        obj.retain(|key, _| !is_nondeterministic_response_key(key));
 
         // Canonicalize paths to be relative
         if let Some(path) = obj.get_mut("path") {
@@ -53,6 +51,11 @@ pub fn canonicalize_response(mut response: Value) -> Value {
     }
 
     response
+}
+
+fn is_nondeterministic_response_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("timestamp") || lower == "id" || lower == "duration"
 }
 
 /// Test runner for differential slash command testing.

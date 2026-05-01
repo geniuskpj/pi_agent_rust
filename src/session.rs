@@ -6326,8 +6326,12 @@ mod tests {
     #[test]
     fn test_save_handles_short_or_empty_session_id() {
         let temp = tempfile::tempdir().unwrap();
+        let project_cwd = temp.path().join("project");
+        std::fs::create_dir(&project_cwd).expect("create project cwd");
+        let project_cwd = project_cwd.display().to_string();
 
         let mut short_id_session = Session::create_with_dir(Some(temp.path().to_path_buf()));
+        short_id_session.header.cwd.clone_from(&project_cwd);
         short_id_session.header.id = "x".to_string();
         run_async(async { short_id_session.save().await }).expect("save with short id");
         let short_name = short_id_session
@@ -6339,6 +6343,7 @@ mod tests {
         assert!(short_name.contains("_x."));
 
         let mut empty_id_session = Session::create_with_dir(Some(temp.path().to_path_buf()));
+        empty_id_session.header.cwd.clone_from(&project_cwd);
         empty_id_session.header.id.clear();
         run_async(async { empty_id_session.save().await }).expect("save with empty id");
         let empty_name = empty_id_session
@@ -6350,6 +6355,7 @@ mod tests {
         assert!(empty_name.contains("_session."));
 
         let mut unsafe_id_session = Session::create_with_dir(Some(temp.path().to_path_buf()));
+        unsafe_id_session.header.cwd.clone_from(&project_cwd);
         unsafe_id_session.header.id = "../etc/passwd".to_string();
         run_async(async { unsafe_id_session.save().await }).expect("save with unsafe id");
         let unsafe_path = unsafe_id_session.path.as_ref().expect("unsafe id path");
@@ -6358,9 +6364,7 @@ mod tests {
             .and_then(|n| n.to_str())
             .expect("unsafe id filename");
         assert!(unsafe_name.contains("____etc_p."));
-        let expected_dir = temp
-            .path()
-            .join(encode_cwd(&std::env::current_dir().unwrap()));
+        let expected_dir = temp.path().join(encode_cwd(Path::new(&project_cwd)));
         assert_eq!(
             unsafe_path.parent().expect("unsafe id parent"),
             expected_dir.as_path()

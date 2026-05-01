@@ -1991,7 +1991,8 @@ impl Agent {
 
         // Phase 2: Execute tools with safety barriers.
         let mut pending_parallel: Vec<(usize, ToolCall)> = Vec::new();
-        let mut tool_outputs: Vec<Option<(ToolOutput, bool)>> = vec![None; tool_calls.len()];
+        let mut recorded_results: Vec<Option<Arc<ToolResultMessage>>> =
+            vec![None; tool_calls.len()];
 
         // Iterate through tools. If read-only, buffer. If unsafe, flush buffer then run unsafe.
         for (index, tool_call) in tool_calls.iter().enumerate() {
@@ -2015,11 +2016,18 @@ impl Agent {
                 // Barrier: flush parallel buffer first
                 if !pending_parallel.is_empty() {
                     let batch = std::mem::take(&mut pending_parallel);
-                    let results = self
+                    let mut results = self
                         .execute_parallel_batch(batch, Arc::clone(&on_event), abort.clone())
                         .await;
-                    for (idx, result) in results {
-                        tool_outputs[idx] = Some(result);
+                    results.sort_by_key(|(idx, _)| *idx);
+                    for (idx, (output, is_error)) in results {
+                        recorded_results[idx] = Some(self.record_tool_result(
+                            &tool_calls[idx],
+                            output,
+                            is_error,
+                            &on_event,
+                            new_messages,
+                        ));
                     }
                 }
 
@@ -2038,27 +2046,41 @@ impl Agent {
                 // Race tool execution against the abort signal so that a
                 // long-running (or hanging) tool is cancelled promptly.
                 if let Some(signal) = abort.as_ref() {
-                    use futures::future::{Either, select};
-                    let tool_fut = self
-                        .execute_tool(tool_call.clone(), Arc::clone(&on_event))
-                        .fuse();
-                    let abort_fut = signal.wait().fuse();
-                    futures::pin_mut!(tool_fut, abort_fut);
-                    match select(tool_fut, abort_fut).await {
-                        Either::Left((result, _)) => {
-                            tool_outputs[index] = Some(result);
+                    let maybe_result = {
+                        use futures::future::{Either, select};
+                        let tool_fut = self
+                            .execute_tool(tool_call.clone(), Arc::clone(&on_event))
+                            .fuse();
+                        let abort_fut = signal.wait().fuse();
+                        futures::pin_mut!(tool_fut, abort_fut);
+                        match select(tool_fut, abort_fut).await {
+                            Either::Left((result, _)) => Some(result),
+                            Either::Right(_) => None,
                         }
-                        Either::Right(_) => {
-                            // Abort fired — leave tool_outputs[index] as None
-                            // so Phase 3 records it as aborted.
-                            break;
-                        }
-                    }
+                    };
+                    let Some((output, is_error)) = maybe_result else {
+                        // Abort fired; leave this slot unrecorded so Phase 3
+                        // emits the aborted tool-result marker in order.
+                        break;
+                    };
+                    recorded_results[index] = Some(self.record_tool_result(
+                        tool_call,
+                        output,
+                        is_error,
+                        &on_event,
+                        new_messages,
+                    ));
                 } else {
-                    let result = self
+                    let (output, is_error) = self
                         .execute_tool(tool_call.clone(), Arc::clone(&on_event))
                         .await;
-                    tool_outputs[index] = Some(result);
+                    recorded_results[index] = Some(self.record_tool_result(
+                        tool_call,
+                        output,
+                        is_error,
+                        &on_event,
+                        new_messages,
+                    ));
                 }
             }
         }
@@ -2072,11 +2094,18 @@ impl Agent {
             // Check steering one last time before final flush
             let steering = self.drain_steering_messages().await;
             if steering.is_empty() {
-                let results = self
+                let mut results = self
                     .execute_parallel_batch(batch, Arc::clone(&on_event), abort.clone())
                     .await;
-                for (idx, result) in results {
-                    tool_outputs[idx] = Some(result);
+                results.sort_by_key(|(idx, _)| *idx);
+                for (idx, (output, is_error)) in results {
+                    recorded_results[idx] = Some(self.record_tool_result(
+                        &tool_calls[idx],
+                        output,
+                        is_error,
+                        &on_event,
+                        new_messages,
+                    ));
                 }
             } else {
                 steering_messages = Some(steering);
@@ -2094,44 +2123,9 @@ impl Agent {
                 }
             }
 
-            // Extract the result, tracking whether the tool actually executed.
-            // If `tool_outputs[index]` is `Some`, `execute_tool` ran.
-            // If `None`, the tool was skipped/aborted.
-            if let Some((output, is_error)) = tool_outputs[index].take() {
-                // Tool executed normally.
-                // Build ToolResultMessage first and wrap in Arc; the message
-                // clone below is O(1) Arc refcount bump since ToolResult is
-                // already Arc-wrapped in the Message enum.
-                let tool_result = Arc::new(ToolResultMessage {
-                    tool_call_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    content: output.content,
-                    details: output.details,
-                    is_error,
-                    timestamp: Utc::now().timestamp_millis(),
-                });
-
-                // Emit ToolExecutionEnd. We clone content/details from the
-                // Arc'd result — same data, no extra source clone.
-                on_event(AgentEvent::ToolExecutionEnd {
-                    tool_call_id: tool_result.tool_call_id.clone(),
-                    tool_name: tool_result.tool_name.clone(),
-                    result: ToolOutput {
-                        content: tool_result.content.clone(),
-                        details: tool_result.details.clone(),
-                        is_error,
-                    },
-                    is_error,
-                });
-
-                let msg = Message::ToolResult(Arc::clone(&tool_result));
-                self.messages.push(msg.clone());
-                on_event(AgentEvent::MessageStart {
-                    message: msg.clone(),
-                });
-                new_messages.push(msg.clone());
-                on_event(AgentEvent::MessageEnd { message: msg });
-
+            // If a result was recorded during execution, keep outcome ordering
+            // without re-emitting lifecycle events or duplicating transcript entries.
+            if let Some(tool_result) = recorded_results[index].take() {
                 results.push(tool_result);
             } else if steering_messages.is_some() {
                 // Skipped due to steering.
@@ -2194,6 +2188,45 @@ impl Agent {
             tool_results: results,
             steering_messages,
         })
+    }
+
+    fn record_tool_result(
+        &mut self,
+        tool_call: &ToolCall,
+        output: ToolOutput,
+        is_error: bool,
+        on_event: &AgentEventHandler,
+        new_messages: &mut Vec<Message>,
+    ) -> Arc<ToolResultMessage> {
+        let tool_result = Arc::new(ToolResultMessage {
+            tool_call_id: tool_call.id.clone(),
+            tool_name: tool_call.name.clone(),
+            content: output.content,
+            details: output.details,
+            is_error,
+            timestamp: Utc::now().timestamp_millis(),
+        });
+
+        on_event(AgentEvent::ToolExecutionEnd {
+            tool_call_id: tool_result.tool_call_id.clone(),
+            tool_name: tool_result.tool_name.clone(),
+            result: ToolOutput {
+                content: tool_result.content.clone(),
+                details: tool_result.details.clone(),
+                is_error,
+            },
+            is_error,
+        });
+
+        let msg = Message::ToolResult(Arc::clone(&tool_result));
+        self.messages.push(msg.clone());
+        on_event(AgentEvent::MessageStart {
+            message: msg.clone(),
+        });
+        new_messages.push(msg.clone());
+        on_event(AgentEvent::MessageEnd { message: msg });
+
+        tool_result
     }
 
     async fn execute_tool(
@@ -7330,7 +7363,9 @@ impl AgentSession {
             .await;
         drop(streaming_guard);
 
-        let persist_result = self.persist_new_messages(start_len + 1).await;
+        let persist_result = self
+            .persist_new_messages(start_len + 1, result.is_err())
+            .await;
 
         let result = result?;
         persist_result?;
@@ -7395,7 +7430,9 @@ impl AgentSession {
 
         // Persist any NEW messages (assistant/tools) generated before the agent stopped,
         // even if it stopped due to an error, skipping the user message we already saved.
-        let persist_result = self.persist_new_messages(start_len + 1).await;
+        let persist_result = self
+            .persist_new_messages(start_len + 1, result.is_err())
+            .await;
 
         let result = result?;
         persist_result?;
@@ -7460,14 +7497,16 @@ impl AgentSession {
 
         // Persist any NEW messages (assistant/tools) generated before the agent stopped,
         // even if it stopped due to an error, skipping the user message we already saved.
-        let persist_result = self.persist_new_messages(start_len + 1).await;
+        let persist_result = self
+            .persist_new_messages(start_len + 1, result.is_err())
+            .await;
 
         let result = result?;
         persist_result?;
         Ok(result)
     }
 
-    async fn persist_new_messages(&self, start_len: usize) -> Result<()> {
+    async fn persist_new_messages(&self, start_len: usize, run_failed: bool) -> Result<()> {
         let new_messages = self.agent.messages()[start_len..].to_vec();
         {
             let cx = crate::agent_cx::AgentCx::for_request();
@@ -7477,6 +7516,9 @@ impl AgentSession {
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
             for message in new_messages {
+                if run_failed && is_synthetic_empty_error_assistant(&message) {
+                    continue;
+                }
                 session.append_model_message(message);
             }
             if self.save_enabled {
@@ -7487,6 +7529,16 @@ impl AgentSession {
         }
         Ok(())
     }
+}
+
+fn is_synthetic_empty_error_assistant(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::Assistant(assistant)
+            if assistant.content.is_empty()
+                && assistant.stop_reason == StopReason::Error
+                && assistant.error_message.is_some()
+    )
 }
 
 // ============================================================================

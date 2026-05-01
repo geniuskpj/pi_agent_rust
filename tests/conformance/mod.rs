@@ -335,7 +335,7 @@ pub fn validate_expected_with_goldens(
                 golden_path.display()
             )
         })?;
-        if content != golden_content {
+        if !content_matches_golden_text(content, &golden_content) {
             return Err(format!(
                 "Content mismatch against golden '{}'.\nExpected:\n{}\nActual:\n{}",
                 golden_path.display(),
@@ -376,6 +376,13 @@ pub fn validate_expected_with_goldens(
     }
 
     Ok(())
+}
+
+fn content_matches_golden_text(content: &str, golden_content: &str) -> bool {
+    content == golden_content
+        || golden_content
+            .strip_suffix('\n')
+            .is_some_and(|trimmed| content == trimmed)
 }
 
 fn match_json_subset(

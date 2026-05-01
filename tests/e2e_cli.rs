@@ -992,11 +992,11 @@ fn e2e_cli_help_flag() {
 #[test]
 fn e2e_cli_invalid_flag_is_error() {
     let harness = CliTestHarness::new("e2e_cli_invalid_flag_is_error");
-    let result = harness.run(&["--invalid-flag"]);
+    let result = harness.run(&["--mode"]);
 
     harness
         .harness
-        .assert_log("assert exit_code == 2 for invalid flag");
+        .assert_log("assert exit_code == 2 for invalid core flag syntax");
     assert_exit_code(&harness.harness, &result, 2);
     assert_contains_case_insensitive(&harness.harness, &result.stderr, "error");
 }

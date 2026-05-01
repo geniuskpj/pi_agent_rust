@@ -165,12 +165,12 @@ fn truncate_tail_keeps_last_lines() {
 #[test]
 fn truncate_tail_truncated_by_bytes() {
     let content = "aaaa\nbbbb\ncccc\ndddd\neeee";
-    // Want last N lines that fit in 10 bytes.
-    // "eeee" = 4 bytes, "dddd\neeee" = 9 bytes, "cccc\ndddd\neeee" = 14 bytes
+    // Keep the maximal valid UTF-8 suffix under the byte budget, including a
+    // partial separator when that preserves tail stability.
     let result = truncate_tail(content, 100, 10);
     assert!(result.truncated);
     assert_eq!(result.truncated_by, Some(TruncatedBy::Bytes));
-    assert_eq!(result.content, "dddd\neeee");
+    assert_eq!(result.content, "\ndddd\neeee");
 }
 
 #[test]
@@ -1458,11 +1458,13 @@ fn truncate_head_byte_boundary_between_lines() {
 
 #[test]
 fn truncate_head_byte_limit_one_less_than_line_end() {
-    // "ab\ncd\nef" with limit 4 → "ab\n" only (can't fit "cd" = 2 more bytes)
+    // Byte pressure preserves the maximal valid UTF-8 prefix, even if that
+    // leaves the final output line partial.
     let content = "ab\ncd\nef";
     let result = truncate_head(content, 100, 4);
-    assert_eq!(result.content, "ab\n");
-    assert_eq!(result.output_lines, 1);
+    assert_eq!(result.content, "ab\nc");
+    assert_eq!(result.output_lines, 2);
+    assert!(result.last_line_partial);
 }
 
 #[test]
@@ -1477,11 +1479,11 @@ fn truncate_tail_byte_boundary_precision() {
 #[test]
 fn truncate_tail_byte_limit_excludes_partial_line() {
     let content = "ab\ncd\nef";
-    // Limit 4: "ef"=2 bytes fits, then "\nef"=3 bytes → "cd\nef"=5 > 4, so only "ef" fits
-    // Wait: from the tail, first we check "ef" (2 bytes), then "cd\nef" = 2+1+2 = 5 > 4
+    // Tail truncation keeps the maximal valid UTF-8 suffix under the byte
+    // budget, including a partial preceding line when space remains.
     let result = truncate_tail(content, 100, 4);
-    assert_eq!(result.content, "ef");
-    assert_eq!(result.output_lines, 1);
+    assert_eq!(result.content, "d\nef");
+    assert_eq!(result.output_lines, 2);
 }
 
 #[test]

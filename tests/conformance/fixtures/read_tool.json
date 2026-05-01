@@ -335,7 +335,7 @@
       ],
       "input": {"path": "hashline_offset.txt", "offset": 2, "limit": 1, "hashline": true},
       "expected": {
-        "content_regex": "^\\s*2#[A-Z]{2}:beta$",
+        "content_regex": "(?s)^\\s*2#[A-Z]{2}:beta\\n\\n\\[1 more lines in file\\. Use offset=3 to continue\\.\\]$",
         "details_none": true
       }
     }

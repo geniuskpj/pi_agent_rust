@@ -83,6 +83,21 @@ fn make_tool_output(text: &str) -> ToolOutput {
     }
 }
 
+fn recorded_events(manager: &ExtensionManager) -> Vec<String> {
+    let result = common::run_async({
+        let manager = manager.clone();
+        async move {
+            manager
+                .execute_command("get-events", "", 5000)
+                .await
+                .expect("get recorded events")
+        }
+    });
+
+    serde_json::from_str(result.as_str().expect("event command returns string"))
+        .expect("parse recorded events")
+}
+
 // ---------------------------------------------------------------------------
 // Extension sources
 // ---------------------------------------------------------------------------
@@ -757,6 +772,131 @@ fn event_ordering_startup_then_tool_call_then_agent_end() {
     assert_eq!(events[2], "tool_call:read");
     assert_eq!(events[3], "tool_result:read");
     assert_eq!(events[4], "agent_end");
+}
+
+#[test]
+fn lifecycle_hook_parity_matrix_writes_evidence_artifact() {
+    let harness = common::TestHarness::new("lifecycle_hook_parity_matrix_writes_evidence_artifact");
+    let manager = load_js_extension(&harness, EVENT_TRACKING_EXT);
+
+    common::run_async({
+        let manager = manager.clone();
+        async move {
+            manager
+                .dispatch_event(ExtensionEventName::Startup, Some(json!({"version": "1.0"})))
+                .await
+                .expect("dispatch startup");
+            manager
+                .dispatch_event(
+                    ExtensionEventName::AgentStart,
+                    Some(json!({"session_id": "s1"})),
+                )
+                .await
+                .expect("dispatch agent_start");
+
+            let tool = make_tool_call("read", json!({"path": "sample.txt"}));
+            manager
+                .dispatch_tool_call(&tool, 5000)
+                .await
+                .expect("dispatch tool_call");
+            manager
+                .dispatch_tool_result(&tool, &make_tool_output("ok"), false, 5000)
+                .await
+                .expect("dispatch tool_result");
+
+            manager
+                .dispatch_event(
+                    ExtensionEventName::AgentEnd,
+                    Some(json!({"session_id": "s1"})),
+                )
+                .await
+                .expect("dispatch agent_end");
+        }
+    });
+
+    let ordering_trace = recorded_events(&manager);
+    assert_eq!(
+        ordering_trace,
+        vec![
+            "startup".to_string(),
+            "agent_start".to_string(),
+            "tool_call:read".to_string(),
+            "tool_result:read".to_string(),
+            "agent_end".to_string(),
+        ],
+        "lifecycle hook ordering changed"
+    );
+
+    let cancel_harness =
+        common::TestHarness::new("lifecycle_hook_parity_matrix_cancellable_session_hooks");
+    let cancel_manager = load_js_extension(&cancel_harness, SESSION_CANCEL_EXT);
+    let cancellable_hooks = [
+        (
+            "session_before_switch",
+            ExtensionEventName::SessionBeforeSwitch,
+            json!({"fromSessionId": "s1", "toSessionId": "s2"}),
+        ),
+        (
+            "session_before_fork",
+            ExtensionEventName::SessionBeforeFork,
+            json!({"fromSessionId": "s1", "newSessionId": "s1-fork"}),
+        ),
+        (
+            "session_before_compact",
+            ExtensionEventName::SessionBeforeCompact,
+            json!({"preparation": {}, "branchEntries": []}),
+        ),
+    ];
+    let mut cancellable_results = Vec::new();
+    for (hook, event_name, payload) in cancellable_hooks {
+        let cancelled = common::run_async({
+            let manager = cancel_manager.clone();
+            async move {
+                manager
+                    .dispatch_cancellable_event(event_name, Some(payload), 5000)
+                    .await
+                    .expect("dispatch cancellable lifecycle hook")
+            }
+        });
+        assert!(cancelled, "{hook} did not cancel as expected");
+        cancellable_results.push(json!({
+            "hook": hook,
+            "mode": "cancellable",
+            "cancelled": cancelled,
+        }));
+    }
+
+    let artifact_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("ext_conformance")
+        .join("reports")
+        .join("lifecycle_hooks");
+    std::fs::create_dir_all(&artifact_dir).expect("create lifecycle hook report dir");
+    let artifact_path = artifact_dir.join("lifecycle_hook_parity_matrix.json");
+    let artifact = json!({
+        "schema": "pi.ext.lifecycle_hook_parity_matrix.v1",
+        "generated_at": chrono::Utc::now()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "status": "pass",
+        "coverage": [
+            {"hook": "startup", "mode": "fire_and_forget", "observed": true},
+            {"hook": "agent_start", "mode": "fire_and_forget", "observed": true},
+            {"hook": "tool_call", "mode": "pre_tool", "observed": true},
+            {"hook": "tool_result", "mode": "post_tool", "observed": true},
+            {"hook": "agent_end", "mode": "fire_and_forget", "observed": true},
+            {"hook": "session_before_switch", "mode": "cancellable", "observed": true},
+            {"hook": "session_before_fork", "mode": "cancellable", "observed": true},
+            {"hook": "session_before_compact", "mode": "cancellable", "observed": true}
+        ],
+        "ordering_trace": ordering_trace,
+        "cancellable_assertions": cancellable_results,
+        "reproduce_command": "cargo test --test extensions_event_wiring -- lifecycle_hook_parity_matrix_writes_evidence_artifact --nocapture --exact",
+    });
+    std::fs::write(
+        &artifact_path,
+        serde_json::to_string_pretty(&artifact).expect("serialize lifecycle hook artifact"),
+    )
+    .expect("write lifecycle hook artifact");
 }
 
 // ---------------------------------------------------------------------------
