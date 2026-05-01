@@ -347,7 +347,7 @@
         "step": 2,
         "description": "Evaluate all hard gates and emit a machine-readable verdict artifact.",
         "required_outputs": [
-          "docs/dropin-certification-verdict.json"
+          "docs/evidence/dropin-certification-verdict.json"
         ]
       },
       {
@@ -366,7 +366,7 @@
       }
     ],
     "verdict_artifact_contract": {
-      "path": "docs/dropin-certification-verdict.json",
+      "path": "docs/evidence/dropin-certification-verdict.json",
       "schema": "pi.dropin.certification_verdict.v1",
       "required_fields": [
         "git_commit",

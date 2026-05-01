@@ -1108,7 +1108,7 @@ jobs:
           from pathlib import Path
 
           source_path = Path("tests/full_suite_gate/certification_verdict.json")
-          target_path = Path("docs/dropin-certification-verdict.json")
+          target_path = Path("docs/evidence/dropin-certification-verdict.json")
           generated_at = (
               datetime.now(timezone.utc)
               .replace(microsecond=0)
@@ -1244,7 +1244,7 @@ jobs:
             tests/full_suite_gate/full_suite_report.md
             tests/security_compat/security_compat_dashboard.json
             tests/security_compat/security_compat_events.jsonl
-            docs/dropin-certification-verdict.json
+            docs/evidence/dropin-certification-verdict.json
             release_gate_report.json
           if-no-files-found: warn
 

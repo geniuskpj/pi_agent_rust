@@ -252,7 +252,7 @@ strict drop-in claims.
 - `tests/full_suite_gate/full_suite_verdict.json` shows a failed blocking gate
   affecting parity/test-log evidence (`e2e_log_contract`, `suite_classification`,
   `conformance_pass_rate`, `evidence_bundle`, or other blocking gate).
-- `docs/dropin-certification-verdict.json` is missing or has
+- `docs/evidence/dropin-certification-verdict.json` is missing or has
   `overall_verdict != CERTIFIED` when release messaging needs strict drop-in wording.
 - CI parity suite gate fails (`PARITY GATE FAIL`) in `.github/workflows/ci.yml`.
 
@@ -277,7 +277,7 @@ Collect and attach these artifacts to the incident bead and Agent Mail thread:
 - `tests/full_suite_gate/full_suite_report.md`
 - `tests/evidence_bundle/index.json`
 - `docs/dropin-certification-contract.json`
-- `docs/dropin-certification-verdict.json` (if present in the run)
+- `docs/evidence/dropin-certification-verdict.json` (if present in the run)
 
 ### Response flow
 

@@ -2,7 +2,7 @@
 
 > **Purpose:** Authoritative single-source-of-truth for implementation status.
 > **Last Updated:** 2026-02-18 (implementation snapshot refresh)
-> **Release Claim Guardrail:** This document is progress evidence only. Strict drop-in replacement language is blocked unless `docs/dropin-certification-verdict.json` reports `overall_verdict = CERTIFIED`.
+> **Release Claim Guardrail:** This document is progress evidence only. Strict drop-in replacement language is blocked unless `docs/evidence/dropin-certification-verdict.json` reports `overall_verdict = CERTIFIED`.
 
 ## Status Legend
 

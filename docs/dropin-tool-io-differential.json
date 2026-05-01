@@ -104,7 +104,7 @@
     {
       "criterion": "G09 verdict flips to pass",
       "status": "pass",
-      "evidence": "docs/dropin-certification-verdict.json marks G09-integration-io-parity as pass and indexes this artifact."
+      "evidence": "docs/evidence/dropin-certification-verdict.json marks G09-integration-io-parity as pass and indexes this artifact."
     }
   ],
   "verification": [

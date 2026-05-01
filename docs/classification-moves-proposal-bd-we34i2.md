@@ -24,7 +24,7 @@ Generated for DC-T2: Execute classification moves with explicit user approval pe
 ```bash
 # Create evidence subdirectory for snapshots
 mkdir -p docs/evidence/
-git mv docs/dropin-certification-verdict.json docs/evidence/
+# Already moved: docs/evidence/dropin-certification-verdict.json
 git mv docs/dropin-parity-gap-ledger.json docs/evidence/
 git mv docs/dropin-feature-inventory-matrix.json docs/evidence/
 git mv docs/dropin-*-diff.json docs/evidence/

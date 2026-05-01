@@ -56,7 +56,7 @@
       "verification_evidence": [
         "tests/extension_flag_passthrough.rs - comprehensive integration tests",
         "tests/cli_edge_cases.rs - 40+ edge case test functions",
-        "G04 certification gate marked as pass in docs/dropin-certification-verdict.json"
+        "G04 certification gate marked as pass in docs/evidence/dropin-certification-verdict.json"
       ],
       "owner_issue_primary": "bd-2cd9b",
       "owner_issue_supporting": [
@@ -172,7 +172,7 @@
       "verification_evidence": [
         "tests/dropin_slash_differential.rs - differential parity harness",
         "Comprehensive test coverage with behavioral equivalence verification",
-        "G04 certification gate marked as pass in docs/dropin-certification-verdict.json"
+        "G04 certification gate marked as pass in docs/evidence/dropin-certification-verdict.json"
       ],
       "owner_issue_primary": "bd-3meug",
       "owner_issue_supporting": [

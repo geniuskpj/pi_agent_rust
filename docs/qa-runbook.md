@@ -402,7 +402,7 @@ PY
 
 Before release messaging can claim strict drop-in parity, evaluate
 `docs/dropin-certification-contract.json` and emit
-`docs/dropin-certification-verdict.json` (`pi.dropin.certification_verdict.v1`).
+`docs/evidence/dropin-certification-verdict.json` (`pi.dropin.certification_verdict.v1`).
 
 Blocking rule:
 - if `overall_verdict != CERTIFIED`, release language must not claim strict drop-in replacement.
