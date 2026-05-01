@@ -1,139 +1,256 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "447efda89dc4935c36588c9364ab028ae79c6228",
-  "generated_at_utc": "2026-04-23T05:30:00Z",
+  "git_commit": "47f583727ce4b04d6d50e9a4aef5e31704c4c9a2",
+  "generated_at_utc": "2026-05-01T04:35:52Z",
   "overall_verdict": "CERTIFIED",
   "hard_gate_results": [
     {
-      "gate_id": "G01-baseline-freeze",
+      "gate_id": "non_mock_unit",
       "status": "pass",
-      "reason": "Pinned upstream baseline artifact is present and referenced by active parity artifacts."
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "docs/non-mock-rubric.json",
+      "bead": "bd-1f42.2.6"
     },
     {
-      "gate_id": "G02-feature-inventory-complete",
+      "gate_id": "e2e_log_contract",
       "status": "pass",
-      "reason": "Drop-in feature inventory artifacts are present in both machine-readable and markdown forms."
+      "blocking": false,
+      "detail": null,
+      "artifact_path": "tests/e2e_results",
+      "bead": "bd-1f42.3.6"
     },
     {
-      "gate_id": "G03-gap-ledger-owned",
+      "gate_id": "ext_must_pass",
       "status": "pass",
-      "reason": "Gap ledger exists with owned entries and closure paths for known mismatches."
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
+      "bead": "bd-1f42.4.4"
     },
     {
-      "gate_id": "G04-cli-parity",
+      "gate_id": "ext_provider_compat",
       "status": "pass",
-      "reason": "CLI parity gaps resolved through comprehensive test coverage. Extension flag pass-through implemented (tests/extension_flag_passthrough.rs), slash command differential parity verified (tests/dropin_slash_differential.rs), and edge case coverage expanded (tests/cli_edge_cases.rs with 40+ test functions)."
+      "blocking": false,
+      "detail": null,
+      "artifact_path": "tests/ext_conformance/reports/provider_compat/provider_compat_report.json",
+      "bead": "bd-1f42.4.6"
     },
     {
-      "gate_id": "G05-json-rpc-parity",
+      "gate_id": "evidence_bundle",
       "status": "pass",
-      "reason": "JSON/RPC parity validated through comprehensive differential testing. RPC surface audit (bd-lnmtp.2.1), command semantics (bd-lnmtp.2.2), differential harness with 96.6% success rate (bd-lnmtp.2.3), and extension UI round-trip parity (bd-lnmtp.2.4) all completed."
+      "blocking": false,
+      "detail": null,
+      "artifact_path": "tests/evidence_bundle/index.json",
+      "bead": "bd-1f42.6.8"
     },
     {
-      "gate_id": "G06-sdk-companion",
+      "gate_id": "cross_platform",
       "status": "pass",
-      "reason": "Strict SDK drop-in claim officially retired per bd-lnmtp.3.1 decision. Rust SDK provides idiomatic companion API with functional equivalence."
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/cross_platform_reports/linux/platform_report.json",
+      "bead": "bd-1f42.6.7"
     },
     {
-      "gate_id": "G07-config-and-env-parity",
+      "gate_id": "conformance_regression",
       "status": "pass",
-      "reason": "Critical/high config gaps resolved (gap-config-defaults-compaction-retry). Remaining medium gaps (UI editor knobs, env classification) do not block certification."
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/ext_conformance/reports/regression_verdict.json",
+      "bead": "bd-1f42.4"
     },
     {
-      "gate_id": "G08-session-error-parity",
+      "gate_id": "conformance_pass_rate",
       "status": "pass",
-      "reason": "Session JSONL schema and hostcall error taxonomy parity are covered by docs/dropin-error-crosswalk.json and tests/dropin_session_error_parity.rs."
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/ext_conformance/reports/conformance_summary.json",
+      "bead": "bd-1f42.4"
     },
     {
-      "gate_id": "G09-integration-io-parity",
+      "gate_id": "suite_classification",
       "status": "pass",
-      "reason": "Tool stdio, process lifecycle, file/search I/O, truncation metadata, and SSE chunk framing are covered by tests/dropin_tool_io_differential.rs and the G09 scenario fixture."
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/suite_classification.toml",
+      "bead": "bd-1f42.6.1"
     },
     {
-      "gate_id": "G10-differential-evidence-suite",
+      "gate_id": "traceability_matrix",
       "status": "pass",
-      "reason": "Differential evidence suite aggregated from G04, G05, G08, G09 gate completions. 79+ test scenarios across CLI, RPC, session/error, and tool I/O surfaces with 97.5% pass rate."
+      "blocking": false,
+      "detail": null,
+      "artifact_path": "docs/traceability_matrix.json",
+      "bead": "bd-1f42.6.4"
     },
     {
-      "gate_id": "G11-test-architecture-and-ci-enforcement",
+      "gate_id": "e2e_scenario_matrix",
       "status": "pass",
-      "reason": "Release evidence gate tests passing (28/28). Evidence contract validation successful. CI enforcement active through tests/release_evidence_gate.rs with comprehensive artifact validation."
+      "blocking": false,
+      "detail": null,
+      "artifact_path": "docs/e2e_scenario_matrix.json",
+      "bead": "bd-1f42.8.5.1"
     },
     {
-      "gate_id": "G12-claim-language-alignment",
+      "gate_id": "provider_gap_matrix",
       "status": "pass",
-      "reason": "Parity documents are now conditioned on drop-in certification verdict instead of strict replacement claims."
+      "blocking": false,
+      "detail": null,
+      "artifact_path": "docs/provider-gaps-test-matrix.json",
+      "bead": "bd-3uqg.11.11.5"
+    },
+    {
+      "gate_id": "sec_conformance",
+      "status": "pass",
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/full_suite_gate/sec_conformance_verdict.json",
+      "bead": "bd-1a2cu"
+    },
+    {
+      "gate_id": "perf3x_bead_coverage",
+      "status": "pass",
+      "blocking": true,
+      "detail": "Validated 7 PERF-3X bead coverage row(s) with complete unit/e2e/log evidence paths",
+      "artifact_path": "tests/full_suite_gate/perf3x_bead_coverage_audit.json",
+      "bead": "bd-3ar8v.6.11"
+    },
+    {
+      "gate_id": "practical_finish_checkpoint",
+      "status": "pass",
+      "blocking": true,
+      "detail": "Practical-finish checkpoint reached: no open PERF-3X issues remain.",
+      "artifact_path": "tests/full_suite_gate/practical_finish_checkpoint.json",
+      "bead": "bd-3ar8v.6.9"
+    },
+    {
+      "gate_id": "extension_remediation_backlog",
+      "status": "pass",
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/full_suite_gate/extension_remediation_backlog.json",
+      "bead": "bd-3ar8v.6.8"
+    },
+    {
+      "gate_id": "opportunity_matrix_integrity",
+      "status": "pass",
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/perf/reports/opportunity_matrix.json",
+      "bead": "bd-3ar8v.6.1"
+    },
+    {
+      "gate_id": "parameter_sweeps_integrity",
+      "status": "pass",
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/perf/reports/parameter_sweeps.json",
+      "bead": "bd-3ar8v.6.2"
+    },
+    {
+      "gate_id": "conformance_stress_lineage",
+      "status": "pass",
+      "blocking": true,
+      "detail": "Conformance+stress lineage coherence validated: both artifacts carry run_id and correlation_id",
+      "artifact_path": "tests/ext_conformance/reports/conformance_summary.json",
+      "bead": "bd-3ar8v.6.3"
+    },
+    {
+      "gate_id": "waiver_lifecycle",
+      "status": "pass",
+      "blocking": true,
+      "detail": null,
+      "artifact_path": "tests/full_suite_gate/waiver_audit.json",
+      "bead": "bd-1f42.8.8.1"
     }
   ],
   "blocking_reasons": [],
   "evidence_index": [
     {
-      "path": "docs/contracts/dropin-certification-contract.json",
-      "description": "Normative hard-gate contract and verdict artifact requirements"
+      "path": "docs/non-mock-rubric.json",
+      "exists": true
     },
     {
-      "path": "docs/contracts/dropin-upstream-baseline.json",
-      "description": "Pinned upstream baseline reference"
+      "path": "tests/e2e_results",
+      "exists": true
     },
     {
-      "path": "docs/evidence/dropin-feature-inventory-matrix.json",
-      "description": "Machine-readable execution-surface inventory"
+      "path": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
+      "exists": true
     },
     {
-      "path": "docs/dropin-112-feature-inventory-matrix.md",
-      "description": "Human-auditable inventory companion"
+      "path": "tests/ext_conformance/reports/provider_compat/provider_compat_report.json",
+      "exists": true
     },
     {
-      "path": "docs/evidence/dropin-parity-gap-ledger.json",
-      "description": "Owned parity gaps with severity and closure paths"
+      "path": "tests/evidence_bundle/index.json",
+      "exists": true
     },
     {
-      "path": "docs/parity-certification.json",
-      "description": "Informational parity implementation snapshot (non-release gate)"
+      "path": "tests/cross_platform_reports/linux/platform_report.json",
+      "exists": true
     },
     {
-      "path": "FEATURE_PARITY.md",
-      "description": "Implementation matrix with strict-claim guardrail language"
+      "path": "tests/ext_conformance/reports/regression_verdict.json",
+      "exists": true
     },
     {
-      "path": "tests/e2e_results/20260423T053902Z/evidence_contract.json",
-      "description": "Fresh evidence-contract artifact generated 2026-04-23 (quick profile run)"
+      "path": "tests/ext_conformance/reports/conformance_summary.json",
+      "exists": true
     },
     {
-      "path": "tests/dropin_tool_io_differential.rs",
-      "description": "G09 executable tool I/O parity harness covering stdio, process lifecycle, file/search tools, truncation, and SSE framing"
+      "path": "tests/suite_classification.toml",
+      "exists": true
     },
     {
-      "path": "tests/dropin_rpc_differential.rs",
-      "description": "G05 JSON/RPC parity differential harness with 96.6% success rate (28/29 scenarios) covering command semantics, canonicalized event-stream comparison, and subprocess execution validation"
+      "path": "docs/traceability_matrix.json",
+      "exists": true
     },
     {
-      "path": "tests/dropin_tool_io_differential/g09_tool_io_scenarios.json",
-      "description": "G09 scenario manifest with more than 30 executable integration I/O parity cases"
+      "path": "docs/e2e_scenario_matrix.json",
+      "exists": true
     },
     {
-      "path": "docs/dropin-tool-io-differential.json",
-      "description": "G09 integration I/O parity evidence summary and canonicalization rules"
+      "path": "docs/provider-gaps-test-matrix.json",
+      "exists": true
     },
     {
-      "path": "SDK_DROP_IN_DECISION.md",
-      "description": "G06-T1 decision artifact: retire strict SDK drop-in claim (bd-lnmtp.3.1)"
+      "path": "tests/full_suite_gate/sec_conformance_verdict.json",
+      "exists": true
     },
     {
-      "path": "tests/extension_flag_passthrough.rs",
-      "description": "G04 extension flag pass-through conformance tests covering CLI flag parsing and routing"
+      "path": "tests/full_suite_gate/perf3x_bead_coverage_audit.json",
+      "exists": true
     },
     {
-      "path": "tests/cli_edge_cases.rs",
-      "description": "G04 comprehensive CLI argument parsing edge cases with 40+ test functions covering quoting, environment expansion, @file references, and positional precedence"
+      "path": "tests/full_suite_gate/practical_finish_checkpoint.json",
+      "exists": true
     },
     {
-      "path": "tests/dropin_slash_differential.rs",
-      "description": "G04 slash command differential parity harness verifying command surface equivalence with pi-mono"
+      "path": "tests/full_suite_gate/extension_remediation_backlog.json",
+      "exists": true
     },
     {
-      "path": "docs/evidence/dropin-differential-evidence-suite.json",
-      "description": "G10 unified differential evidence suite aggregating all differential test harnesses from G04, G05, G08, G09 with comprehensive canonicalization rules and verification commands"
+      "path": "tests/perf/reports/opportunity_matrix.json",
+      "exists": true
+    },
+    {
+      "path": "tests/perf/reports/parameter_sweeps.json",
+      "exists": true
+    },
+    {
+      "path": "tests/ext_conformance/reports/conformance_summary.json",
+      "exists": true
+    },
+    {
+      "path": "tests/full_suite_gate/waiver_audit.json",
+      "exists": true
     }
-  ]
+  ],
+  "source": {
+    "certification_lane_artifact": "tests/full_suite_gate/certification_verdict.json",
+    "lane_verdict": "pass",
+    "lane_generated_at": "2026-05-01T04:35:30.643Z"
+  }
 }

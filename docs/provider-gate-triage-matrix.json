@@ -91,12 +91,12 @@
       "id": "F4",
       "gate": "full_suite_gate",
       "gate_bead": "bd-1f42.4.4",
-      "severity": "SKIPPED_BLOCKING",
-      "root_cause": "Extension must-pass gate cannot run - artifacts missing",
-      "detail": "ext_must_pass gate (208 extensions) is BLOCKING but SKIPPED because tests/ext_conformance/reports/gate/must_pass_gate_verdict.json not found.",
+      "severity": "RESOLVED",
+      "root_cause": "Historical artifact-missing blocker resolved by current must-pass evidence",
+      "detail": "ext_must_pass gate now has tests/ext_conformance/reports/gate/must_pass_gate_verdict.json with status=pass for the certified must-pass extension set.",
       "reproduce_command": "cargo test --test ext_conformance_generated --features ext-conformance -- conformance_must_pass_gate --nocapture --exact",
       "owner": "Extension conformance (bd-1f42.4.4)",
-      "remediation": "Execute extension conformance test suite with --features ext-conformance",
+      "remediation": "Keep regenerating the extension conformance must-pass artifact with --features ext-conformance",
       "dependent_blockers": ["F1 (cross_platform extension_artifacts check)"],
       "exit_criteria": "must_pass_gate_verdict.json exists with status=pass"
     }

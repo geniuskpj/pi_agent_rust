@@ -1,7 +1,7 @@
 {
   "schema": "pi.ci.full_suite_gate.v1",
-  "generated_at": "2026-05-01T02:24:22.670Z",
-  "verdict": "fail",
+  "generated_at": "2026-05-01T04:35:06.821Z",
+  "verdict": "pass",
   "policy": "Full-suite gate: all blocking gates must pass for release. Non-blocking gates produce warnings but do not block.",
   "gates": [
     {
@@ -23,12 +23,11 @@
     },
     {
       "id": "ext_must_pass",
-      "name": "Extension must-pass gate (208 extensions)",
+      "name": "Extension must-pass gate",
       "bead": "bd-1f42.4.4",
-      "status": "fail",
+      "status": "pass",
       "blocking": true,
       "artifact_path": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
-      "detail": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json generated_at '2026-02-17T03:06:08.928Z' is stale (older than 7 days)",
       "reproduce_command": "cargo test --test ext_conformance_generated --features ext-conformance -- conformance_must_pass_gate --nocapture --exact"
     },
     {
@@ -44,10 +43,9 @@
       "id": "evidence_bundle",
       "name": "Unified evidence bundle",
       "bead": "bd-1f42.6.8",
-      "status": "fail",
+      "status": "pass",
       "blocking": false,
       "artifact_path": "tests/evidence_bundle/index.json",
-      "detail": "summary.verdict = 'insufficient' (expected one of: [\"complete\", \"partial\"])",
       "reproduce_command": "cargo test --test ci_evidence_bundle -- build_evidence_bundle --nocapture --exact"
     },
     {
@@ -189,12 +187,12 @@
   ],
   "summary": {
     "total_gates": 20,
-    "passed": 18,
-    "failed": 2,
+    "passed": 20,
+    "failed": 0,
     "warned": 0,
     "skipped": 0,
-    "blocking_pass": 13,
+    "blocking_pass": 14,
     "blocking_total": 14,
-    "all_blocking_pass": false
+    "all_blocking_pass": true
   }
 }
