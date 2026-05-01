@@ -1,8 +1,8 @@
 {
   "schema": "pi.ci.evidence_bundle.v1",
-  "generated_at": "2026-05-01T06:00:15.355Z",
-  "git_ref": "7ea3298ba",
-  "ci_run_id": "local-20260501Tvalidation",
+  "generated_at": "2026-05-01T06:39:15.752Z",
+  "git_ref": "5f5f9a639",
+  "ci_run_id": "local-20260501T063915Z",
   "sections": [
     {
       "id": "conformance_summary",
