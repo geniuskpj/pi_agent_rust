@@ -272,17 +272,17 @@ fn main_impl() -> Result<()> {
     if let Some(command) = &cli.command {
         match command {
             cli::Commands::Install { source, local } => {
-                let manager = PackageManager::new(cwd.clone());
+                let manager = PackageManager::new(cwd);
                 handle_package_install_blocking(&manager, source, *local)?;
                 return Ok(());
             }
             cli::Commands::Remove { source, local } => {
-                let manager = PackageManager::new(cwd.clone());
+                let manager = PackageManager::new(cwd);
                 handle_package_remove_blocking(&manager, source, *local)?;
                 return Ok(());
             }
             cli::Commands::Update { source } => {
-                let manager = PackageManager::new(cwd.clone());
+                let manager = PackageManager::new(cwd);
                 handle_package_update_blocking(&manager, source.as_deref())?;
                 return Ok(());
             }
@@ -490,8 +490,7 @@ fn main_impl() -> Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let handle = runtime.handle();
-    let runtime_handle = handle.clone();
-    let result = runtime.block_on(run(cli, extension_flags, runtime_handle));
+    let result = runtime.block_on(run(cli, extension_flags, handle));
     if exit_after_runtime {
         match result {
             Ok(()) => std::process::exit(0),

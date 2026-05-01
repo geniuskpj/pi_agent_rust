@@ -1,8 +1,8 @@
 {
   "schema": "pi.ci.evidence_bundle.v1",
-  "generated_at": "2026-05-01T04:34:34.005Z",
-  "git_ref": "47f583727",
-  "ci_run_id": "local-20260501T0440",
+  "generated_at": "2026-05-01T06:00:15.355Z",
+  "git_ref": "7ea3298ba",
+  "ci_run_id": "local-20260501Tvalidation",
   "sections": [
     {
       "id": "conformance_summary",
@@ -162,17 +162,14 @@
       "total_bytes": 280518
     },
     {
-      "id": "journey_reports",
-      "label": "Extension journey reports",
+      "id": "journey_report",
+      "label": "Extension journey report",
       "category": "diagnostics",
       "status": "present",
-      "artifact_path": "tests/ext_conformance/reports/journeys",
-      "summary": {
-        "file_count": 126,
-        "total_bytes": 333596
-      },
-      "file_count": 126,
-      "total_bytes": 333596
+      "artifact_path": "tests/ext_conformance/reports/journeys/journey_report.json",
+      "schema": "pi.ext.journey_report.v1",
+      "file_count": 1,
+      "total_bytes": 14742
     },
     {
       "id": "auto_repair_summary",
@@ -368,8 +365,8 @@
     "present_sections": 28,
     "missing_sections": 0,
     "invalid_sections": 0,
-    "total_artifacts": 2127,
-    "total_bytes": 185694435,
+    "total_artifacts": 2002,
+    "total_bytes": 185375581,
     "verdict": "complete"
   }
 }

@@ -209,12 +209,12 @@ const ARTIFACT_SOURCES: &[ArtifactSource] = &[
         required: false,
     },
     ArtifactSource {
-        id: "journey_reports",
-        label: "Extension journey reports",
+        id: "journey_report",
+        label: "Extension journey report",
         category: "diagnostics",
-        path: "tests/ext_conformance/reports/journeys",
-        expected_schema: None,
-        is_directory: true,
+        path: "tests/ext_conformance/reports/journeys/journey_report.json",
+        expected_schema: Some("pi.ext.journey_report"),
+        is_directory: false,
         required: true,
     },
     ArtifactSource {
@@ -1358,13 +1358,13 @@ fn full_cert_diagnostics_are_required_for_complete_verdict() {
         "health_delta should be required for complete evidence bundles"
     );
 
-    let journey_reports = ARTIFACT_SOURCES
+    let journey_report = ARTIFACT_SOURCES
         .iter()
-        .find(|source| source.id == "journey_reports")
-        .expect("journey_reports source must exist");
+        .find(|source| source.id == "journey_report")
+        .expect("journey_report source must exist");
     assert!(
-        journey_reports.required,
-        "journey_reports should be required for complete evidence bundles"
+        journey_report.required,
+        "journey_report should be required for complete evidence bundles"
     );
 }
 

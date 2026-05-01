@@ -1,7 +1,7 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "47f583727ce4b04d6d50e9a4aef5e31704c4c9a2",
-  "generated_at_utc": "2026-05-01T04:35:52Z",
+  "git_commit": "7ea3298ba1a97cc2b3689b64ed8dd786308da5a3",
+  "generated_at_utc": "2026-05-01T06:01:22Z",
   "overall_verdict": "CERTIFIED",
   "hard_gate_results": [
     {
@@ -251,6 +251,6 @@
   "source": {
     "certification_lane_artifact": "tests/full_suite_gate/certification_verdict.json",
     "lane_verdict": "pass",
-    "lane_generated_at": "2026-05-01T04:35:30.643Z"
+    "lane_generated_at": "2026-05-01T06:00:46.624Z"
   }
 }

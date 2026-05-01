@@ -1,8 +1,8 @@
 # Unified CI Evidence Bundle
 
-> Generated: 2026-05-01T04:34:34Z
-> Git ref: 47f583727
-> CI run: local-20260501T0440
+> Generated: 2026-05-01T06:00:15Z
+> Git ref: 7ea3298ba
+> CI run: local-20260501Tvalidation
 > Verdict: **COMPLETE**
 
 ## Summary
@@ -13,8 +13,8 @@
 | Present | 28 |
 | Missing | 0 |
 | Invalid | 0 |
-| Total artifacts | 2127 |
-| Total size | 181342.2 KB |
+| Total artifacts | 2002 |
+| Total size | 181030.8 KB |
 | Required present | 11/11 |
 
 ## Conformance (6)
@@ -38,7 +38,7 @@
 | Health & regression delta report | PASS | 3 | 88320 B | `tests/ext_conformance/reports/health_delta` |
 | Provider compatibility matrix | PASS | 753 | 375207 B | `tests/ext_conformance/reports/provider_compat` |
 | Sharded extension matrix reports | PASS | 12 | 280518 B | `tests/ext_conformance/reports/sharded` |
-| Extension journey reports | PASS | 126 | 333596 B | `tests/ext_conformance/reports/journeys` |
+| Extension journey report | PASS | 1 | 14742 B | `tests/ext_conformance/reports/journeys/journey_report.json` |
 | Auto-repair summary | PASS | 1 | 52598 B | `tests/ext_conformance/reports/auto_repair_summary.json` |
 
 ## E2e (1)
