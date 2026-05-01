@@ -283,7 +283,7 @@ tikv-jemallocator = { version = "0.6", optional = true }
 [target.'cfg(target_os = "freebsd")'.dependencies]
 rquickjs = { version = "0.11", features = ["futures", "loader", "bindgen"] }
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os="windows")'.dependencies]
 native-tls = { version = "0.2.18", features = ["alpn"] }
 tokio-native-tls = "0.3.1"
 
@@ -303,6 +303,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+debug = true
 
 [profile.dev]
 opt-level = 0
