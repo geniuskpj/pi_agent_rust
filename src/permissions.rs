@@ -269,25 +269,39 @@ impl PermissionStore {
         let mut contents = serde_json::to_string_pretty(&file)?;
         contents.push('\n');
 
-        let mut tmp = NamedTempFile::new_in(parent)?;
+        for attempt in 0..2 {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            tmp.as_file().set_permissions(perms)?;
+            let mut tmp = NamedTempFile::new_in(parent)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let perms = std::fs::Permissions::from_mode(0o600);
+                tmp.as_file().set_permissions(perms)?;
+            }
+
+            tmp.write_all(contents.as_bytes())?;
+            tmp.as_file().sync_all()?;
+
+            match tmp.persist(&self.path) {
+                Ok(_) => break,
+                Err(err) if err.error.kind() == std::io::ErrorKind::NotFound && attempt == 0 => {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                }
+                Err(err) => {
+                    return Err(Error::config(format!(
+                        "Failed to persist permissions file to {}: {}",
+                        self.path.display(),
+                        err.error
+                    )));
+                }
+            }
         }
-
-        tmp.write_all(contents.as_bytes())?;
-        tmp.as_file().sync_all()?;
-
-        tmp.persist(&self.path).map_err(|err| {
-            Error::config(format!(
-                "Failed to persist permissions file to {}: {}",
-                self.path.display(),
-                err.error
-            ))
-        })?;
         sync_permissions_parent_dir(&self.path)?;
 
         Ok(())

@@ -8369,6 +8369,10 @@ mod tests {
 
     #[test]
     fn test_continue_recent_in_dir_refreshes_index_after_changed_disk_session() {
+        let _lock = current_dir_lock();
+        let process_cwd = tempfile::tempdir().unwrap();
+        let _guard = CurrentDirGuard::new(process_cwd.path());
+
         let temp = tempfile::tempdir().expect("tempdir");
         let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
         session.append_message(make_test_message("first"));
@@ -8378,10 +8382,7 @@ mod tests {
 
         let index = SessionIndex::for_sessions_root(temp.path());
         index.index_session(&session).expect("index session");
-        let cwd_display = std::env::current_dir()
-            .expect("current dir")
-            .display()
-            .to_string();
+        let cwd_display = session.header.cwd.clone();
 
         std::fs::write(
             &path,
