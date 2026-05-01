@@ -37,7 +37,7 @@ pub struct HttpConnectorConfig {
 impl Default for HttpConnectorConfig {
     fn default() -> Self {
         Self {
-            require_tls: true,
+            require_tls: false,
             enforce_allowlist: false,
             allowlist: Vec::new(),
             denylist: Vec::new(),
