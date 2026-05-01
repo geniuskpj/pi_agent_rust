@@ -30978,7 +30978,11 @@ mod tests {
                 .expect("load extension");
 
             manager
-                .dispatch_event(ExtensionEventName::AgentStart, None)
+                .dispatch_event_with_response(
+                    ExtensionEventName::AgentStart,
+                    None,
+                    EXTENSION_EVENT_TIMEOUT_MS,
+                )
                 .await
                 .expect("dispatch agent_start");
 

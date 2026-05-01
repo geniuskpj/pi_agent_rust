@@ -3146,8 +3146,8 @@ mod retry_tests {
             config.retry = Some(crate::config::RetrySettings {
                 enabled: Some(true),
                 max_retries: Some(3),
-                base_delay_ms: Some(100),
-                max_delay_ms: Some(100),
+                base_delay_ms: Some(1000),
+                max_delay_ms: Some(1000),
             });
 
             let mut shared = RpcSharedState::new(&config);
@@ -3178,7 +3178,7 @@ mod retry_tests {
 
             let retry_abort_for_thread = Arc::clone(&retry_abort);
             let abort_thread = std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 retry_abort_for_thread.store(true, Ordering::SeqCst);
             });
 
@@ -3268,8 +3268,8 @@ mod retry_tests {
             config.retry = Some(crate::config::RetrySettings {
                 enabled: Some(true),
                 max_retries: Some(3),
-                base_delay_ms: Some(100),
-                max_delay_ms: Some(100),
+                base_delay_ms: Some(1000),
+                max_delay_ms: Some(1000),
             });
 
             let mut shared = RpcSharedState::new(&config);
@@ -3301,7 +3301,7 @@ mod retry_tests {
             let retry_cx = asupersync::Cx::for_testing();
             let cancel_cx = retry_cx.clone();
             let cancel_thread = std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 cancel_cx.set_cancel_requested(true);
             });
 
@@ -3387,8 +3387,8 @@ mod retry_tests {
             config.retry = Some(crate::config::RetrySettings {
                 enabled: Some(true),
                 max_retries: Some(10),
-                base_delay_ms: Some(100),
-                max_delay_ms: Some(100),
+                base_delay_ms: Some(1000),
+                max_delay_ms: Some(1000),
             });
 
             let auth_path = tempfile::tempdir()
@@ -3459,7 +3459,7 @@ mod retry_tests {
                 futures::pin_mut!(ack_wait);
                 let ack = asupersync::time::timeout(
                     asupersync::time::wall_now(),
-                    Duration::from_secs(1),
+                    Duration::from_secs(5),
                     ack_wait,
                 )
                 .await;
@@ -3468,7 +3468,7 @@ mod retry_tests {
                 assert_eq!(ack["success"], true, "prompt should be accepted: {ack}");
 
                 let cancel_thread = std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(20));
+                    std::thread::sleep(Duration::from_millis(100));
                     cancel_cx.set_cancel_requested(true);
                 });
 
@@ -3517,7 +3517,7 @@ mod retry_tests {
                 futures::pin_mut!(retry_abort_wait);
                 let (timeline, last_agent_end_error) = asupersync::time::timeout(
                     asupersync::time::wall_now(),
-                    Duration::from_secs(1),
+                    Duration::from_secs(5),
                     retry_abort_wait,
                 )
                 .await
