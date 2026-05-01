@@ -482,6 +482,7 @@ fn main_impl() -> Result<()> {
 
     // Run the application
     let reactor = create_reactor()?;
+    let exit_after_runtime = cli.print || matches!(cli.mode.as_deref(), Some("text" | "json"));
     let runtime = RuntimeBuilder::multi_thread()
         .blocking_threads(1, 2)
         .enable_parking(false)
@@ -490,7 +491,18 @@ fn main_impl() -> Result<()> {
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let handle = runtime.handle();
     let runtime_handle = handle.clone();
-    runtime.block_on(run(cli, extension_flags, runtime_handle))
+    let result = runtime.block_on(run(cli, extension_flags, runtime_handle));
+    if exit_after_runtime {
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(err) => {
+                let exit_code = exit_code_for_error(&err);
+                print_error_with_hints(&err);
+                std::process::exit(exit_code);
+            }
+        }
+    }
+    result
 }
 
 fn print_error_with_hints(err: &anyhow::Error) {
@@ -952,7 +964,17 @@ async fn run(
         config.theme = Some(theme_spec.to_string());
     }
 
-    spawn_session_index_maintenance();
+    let startup_mode = cli.mode.clone().unwrap_or_else(|| {
+        if !cli.print && cli.export.is_none() {
+            "interactive".to_string()
+        } else {
+            "text".to_string()
+        }
+    });
+    let startup_is_print_mode = startup_mode == "text" || startup_mode == "json";
+    if !startup_is_print_mode {
+        spawn_session_index_maintenance();
+    }
     let package_manager = PackageManager::new(cwd.clone());
     let resource_cli = ResourceCliOptions {
         no_skills: cli.no_skills,
