@@ -28,6 +28,8 @@ tests/ext_conformance/reports/*
 !tests/ext_conformance/reports/gate/must_pass_gate_verdict.json
 !tests/ext_conformance/reports/gate/must_pass_events.jsonl
 !tests/ext_conformance/reports/gate/must_pass_gate_report.md
+!tests/ext_conformance/reports/lifecycle_hooks/
+!tests/ext_conformance/reports/lifecycle_hooks/lifecycle_hook_parity_matrix.json
 
 # sqlite databases and WAL/SHM artifacts
 storage.sqlite3
