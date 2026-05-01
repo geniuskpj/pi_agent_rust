@@ -41,10 +41,10 @@ const WRITE_ZERO_BACKOFF: std::time::Duration = std::time::Duration::from_millis
 #[cfg(not(test))]
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
-#[cfg(windows)]
-use native_tls as ntls;
-#[cfg(windows)]
-use tokio_native_tls as tntls;
+// #[cfg(windows)]
+// use native_tls as ntls;
+// #[cfg(windows)]
+// use tokio_native_tls as tntls;
 
 
 fn default_request_timeout_from_env() -> Option<std::time::Duration> {
@@ -79,14 +79,14 @@ pub struct Client {
     vcr: Option<VcrRecorder>,
 }
 
-#[cfg(windows)]
-type TlsConnectorType = tntls::TlsConnector;
+// #[cfg(windows)]
+// type TlsConnectorType = tntls::TlsConnector;
 
-#[cfg(unix)]
+// #[cfg(unix)]
 type TlsConnectorType = TlsConnector; // whatever you already use
 
 impl Client {
-    #[cfg(unix)]
+    // #[cfg(unix)]
     pub fn new() -> Self {
         let tls = TlsConnectorBuilder::new()
             .with_native_roots()
@@ -105,23 +105,23 @@ impl Client {
         }
     }
     
-#[cfg(windows)]
-    pub fn new() -> Self {
-        let tls = ntls::TlsConnector::new()
-            .map(tntls::TlsConnector::from)
-            .map_err(|e| e.to_string());
+// #[cfg(windows)]
+//     pub fn new() -> Self {
+//         let tls = ntls::TlsConnector::new()
+//             .map(tntls::TlsConnector::from)
+//             .map_err(|e| e.to_string());
 
-        let user_agent = std::env::var(ANTIGRAVITY_VERSION_ENV).map_or_else(
-            |_| DEFAULT_USER_AGENT.to_string(),
-            |v| format!("{DEFAULT_USER_AGENT} Antigravity/{v}"),
-        );
+//         let user_agent = std::env::var(ANTIGRAVITY_VERSION_ENV).map_or_else(
+//             |_| DEFAULT_USER_AGENT.to_string(),
+//             |v| format!("{DEFAULT_USER_AGENT} Antigravity/{v}"),
+//         );
 
-        Self {
-            tls,
-            user_agent,
-            vcr: None,
-        }
-    }
+//         Self {
+//             tls,
+//             user_agent,
+//             vcr: None,
+//         }
+//     }
     pub fn post(&self, url: &str) -> RequestBuilder<'_> {
         RequestBuilder::new(self, Method::Post, url)
     }
