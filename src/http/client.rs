@@ -110,7 +110,7 @@ impl Client {
         }
     }
     
-[cfg(windows)]
+    #[cfg(windows)]
     pub fn new() -> Self {
         let tls = ntls::TlsConnector::new()
             .map(tntls::TlsConnector::from)
