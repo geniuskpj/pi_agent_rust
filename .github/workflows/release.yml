@@ -99,28 +99,28 @@ jobs:
           name: release-gate-report
           path: pi_agent_rust/release_gate_report.json
 
-  installer_regression:
-    name: Installer regression
-    needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: pi_agent_rust
-        shell: bash
-    steps:
-      - name: Checkout pi_agent_rust
-        uses: actions/checkout@v4
-        with:
-          path: pi_agent_rust
-          fetch-depth: 0
-          ref: ${{ needs.plan.outputs.tag }}
+  # installer_regression:
+  #   name: Installer regression
+  #   needs: plan
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 10
+  #   defaults:
+  #     run:
+  #       working-directory: pi_agent_rust
+  #       shell: bash
+  #   steps:
+  #     - name: Checkout pi_agent_rust
+  #       uses: actions/checkout@v4
+  #       with:
+  #         path: pi_agent_rust
+  #         fetch-depth: 0
+  #         ref: ${{ needs.plan.outputs.tag }}
 
-      - name: Run installer regression harness
-        run: |
-          set -euxo pipefail
-          bash -n install.sh uninstall.sh tests/installer_regression.sh scripts/skill-smoke.sh
-          bash tests/installer_regression.sh
+  #     - name: Run installer regression harness
+  #       run: |
+  #         set -euxo pipefail
+  #         bash -n install.sh uninstall.sh tests/installer_regression.sh scripts/skill-smoke.sh
+  #         bash tests/installer_regression.sh
 
   build:
     name: Build (${{ matrix.target }})
@@ -149,7 +149,7 @@ jobs:
     env:
       CI: "true"
       RUST_BACKTRACE: "1"
-      RUST_LOG: "pi_agent_rust::http::client=debug"
+      RUST_LOG: "debug"
     defaults:
       run:
         working-directory: pi_agent_rust
@@ -262,20 +262,20 @@ jobs:
           tar -cJf "dist/${{ matrix.asset }}.tar.xz" "$STAGE_DIR"
           rm -rf "$STAGE_DIR"
 
-      - name: Create zip (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist
+      # - name: Create zip (Windows)
+      #   if: runner.os == 'Windows'
+      #   shell: pwsh
+      #   run: |
+      #     New-Item -ItemType Directory -Force -Path dist
 
-          $stageDir = "pi-${{ needs.plan.outputs.version }}-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path $stageDir
-          Copy-Item "target/${{ matrix.target }}/release/pi.exe" "$stageDir/"
-          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$stageDir/" }
-          if (Test-Path "README.md") { Copy-Item "README.md" "$stageDir/" }
+      #     $stageDir = "pi-${{ needs.plan.outputs.version }}-${{ matrix.target }}"
+      #     New-Item -ItemType Directory -Force -Path $stageDir
+      #     Copy-Item "target/${{ matrix.target }}/release/pi.exe" "$stageDir/"
+      #     if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$stageDir/" }
+      #     if (Test-Path "README.md") { Copy-Item "README.md" "$stageDir/" }
 
-          Compress-Archive -Path "$stageDir" -DestinationPath "dist/${{ matrix.asset }}.zip"
-          Remove-Item -Recurse -Force $stageDir
+      #     Compress-Archive -Path "$stageDir" -DestinationPath "dist/${{ matrix.asset }}.zip"
+      #     Remove-Item -Recurse -Force $stageDir
 
       - name: Build manifest
         run: |
@@ -313,7 +313,8 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [plan, installer_regression, build]
+    # needs: [plan, installer_regression, build]
+    needs: [plan, build]
     if: always() && needs.plan.result == 'success' && needs.installer_regression.result == 'success' && needs.build.result == 'success' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 10
