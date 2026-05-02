@@ -281,33 +281,33 @@ jobs:
         shell: pwsh
         run: Copy-Item "target/${{ matrix.target }}/release/pi.exe" "dist/"
         
-      - name: Build manifest
-        run: |
-          set -euxo pipefail
-          PI_SHA="$(git rev-parse HEAD)"
-          ASUPERSYNC_SHA="$(git -C ../asupersync rev-parse HEAD)"
-          RICH_RUST_SHA="$(git -C ../rich_rust rev-parse HEAD)"
-          CHARMED_RUST_SHA="$(git -C ../charmed_rust rev-parse HEAD)"
-          SQLMODEL_RUST_SHA="$(git -C ../sqlmodel_rust rev-parse HEAD)"
-          RUSTC="$(rustc -Vv | tr '\n' ' ' | sed 's/\"/\\\\\"/g')"
+      # - name: Build manifest
+      #   run: |
+      #     set -euxo pipefail
+      #     PI_SHA="$(git rev-parse HEAD)"
+      #     ASUPERSYNC_SHA="$(git -C ../asupersync rev-parse HEAD)"
+      #     RICH_RUST_SHA="$(git -C ../rich_rust rev-parse HEAD)"
+      #     CHARMED_RUST_SHA="$(git -C ../charmed_rust rev-parse HEAD)"
+      #     SQLMODEL_RUST_SHA="$(git -C ../sqlmodel_rust rev-parse HEAD)"
+      #     RUSTC="$(rustc -Vv | tr '\n' ' ' | sed 's/\"/\\\\\"/g')"
 
-          cat > "dist/build-manifest-${{ matrix.asset }}.json" <<EOF
-          {
-            "tag": "${{ needs.plan.outputs.tag }}",
-            "version": "${{ needs.plan.outputs.version }}",
-            "target": "${{ matrix.target }}",
-            "asset": "${{ matrix.asset }}",
-            "runner_os": "${{ runner.os }}",
-            "pi_agent_rust": "$PI_SHA",
-            "deps": {
-              "asupersync": "$ASUPERSYNC_SHA",
-              "rich_rust": "$RICH_RUST_SHA",
-              "charmed_rust": "$CHARMED_RUST_SHA",
-              "sqlmodel_rust": "$SQLMODEL_RUST_SHA"
-            },
-            "rustc": "$RUSTC"
-          }
-          EOF
+      #     cat > "dist/build-manifest-${{ matrix.asset }}.json" <<EOF
+      #     {
+      #       "tag": "${{ needs.plan.outputs.tag }}",
+      #       "version": "${{ needs.plan.outputs.version }}",
+      #       "target": "${{ matrix.target }}",
+      #       "asset": "${{ matrix.asset }}",
+      #       "runner_os": "${{ runner.os }}",
+      #       "pi_agent_rust": "$PI_SHA",
+      #       "deps": {
+      #         "asupersync": "$ASUPERSYNC_SHA",
+      #         "rich_rust": "$RICH_RUST_SHA",
+      #         "charmed_rust": "$CHARMED_RUST_SHA",
+      #         "sqlmodel_rust": "$SQLMODEL_RUST_SHA"
+      #       },
+      #       "rustc": "$RUSTC"
+      #     }
+      #     EOF
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
