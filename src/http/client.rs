@@ -10,7 +10,10 @@ use asupersync::http::h1::ParsedUrl;
 use asupersync::http::h1::http_client::Scheme;
 use asupersync::io::ext::AsyncWriteExt;
 use asupersync::io::{AsyncRead, AsyncWrite, ReadBuf};
+#[cfg(unix)]
 use asupersync::net::tcp::stream::TcpStream;
+#[cfg(windows)]
+use tokio::net::TcpStream;
 use asupersync::tls::{TlsConnector, TlsConnectorBuilder};
 use futures::Stream;
 use futures::StreamExt;
@@ -41,10 +44,12 @@ const WRITE_ZERO_BACKOFF: std::time::Duration = std::time::Duration::from_millis
 #[cfg(not(test))]
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
-// #[cfg(windows)]
-// use native_tls as ntls;
-// #[cfg(windows)]
-// use tokio_native_tls as tntls;
+#[cfg(windows)]
+use native_tls as ntls;
+#[cfg(windows)]
+use tokio_native_tls as tntls;
+#[cfg(windows)]
+use tokio::net::TcpStream as TokioTcpStream;
 
 
 fn default_request_timeout_from_env() -> Option<std::time::Duration> {
@@ -79,10 +84,10 @@ pub struct Client {
     vcr: Option<VcrRecorder>,
 }
 
-// #[cfg(windows)]
-// type TlsConnectorType = tntls::TlsConnector;
+#[cfg(windows)]
+type TlsConnectorType = tntls::TlsConnector;
 
-// #[cfg(unix)]
+#[cfg(unix)]
 type TlsConnectorType = TlsConnector; // whatever you already use
 
 impl Client {
@@ -105,23 +110,23 @@ impl Client {
         }
     }
     
-// #[cfg(windows)]
-//     pub fn new() -> Self {
-//         let tls = ntls::TlsConnector::new()
-//             .map(tntls::TlsConnector::from)
-//             .map_err(|e| e.to_string());
+#[cfg(windows)]
+    pub fn new() -> Self {
+        let tls = ntls::TlsConnector::new()
+            .map(tntls::TlsConnector::from)
+            .map_err(|e| e.to_string());
 
-//         let user_agent = std::env::var(ANTIGRAVITY_VERSION_ENV).map_or_else(
-//             |_| DEFAULT_USER_AGENT.to_string(),
-//             |v| format!("{DEFAULT_USER_AGENT} Antigravity/{v}"),
-//         );
+        let user_agent = std::env::var(ANTIGRAVITY_VERSION_ENV).map_or_else(
+            |_| DEFAULT_USER_AGENT.to_string(),
+            |v| format!("{DEFAULT_USER_AGENT} Antigravity/{v}"),
+        );
 
-//         Self {
-//             tls,
-//             user_agent,
-//             vcr: None,
-//         }
-//     }
+        Self {
+            tls,
+            user_agent,
+            vcr: None,
+        }
+    }
     pub fn post(&self, url: &str) -> RequestBuilder<'_> {
         RequestBuilder::new(self, Method::Post, url)
     }
@@ -542,9 +547,31 @@ impl Response {
     }
 }
 
+#[cfg(unix)]
 async fn connect_transport(parsed: &ParsedUrl, client: &Client) -> Result<Transport> {
     let addr = (parsed.host.clone(), parsed.port);
     let tcp = TcpStream::connect(addr).await?;
+    match parsed.scheme {
+        Scheme::Http => Ok(Transport::Tcp(tcp)),
+        Scheme::Https => {
+            let tls = client
+                .tls
+                .as_ref()
+                .map_err(|e| Error::api(format!("TLS configuration error: {e}")))?;
+            let tls_stream = tls
+                .clone()
+                .connect(&parsed.host, tcp)
+                .await
+                .map_err(|e| Error::api(format!("TLS connect failed: {e}")))?;
+            Ok(Transport::Tls(Box::new(tls_stream)))
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn connect_transport(parsed: &ParsedUrl, client: &Client) -> Result<Transport> {
+    let addr = format!("{}:{}", parsed.host, parsed.port);
+    let tcp = TokioTcpStream::connect(&addr).await?;
     match parsed.scheme {
         Scheme::Http => Ok(Transport::Tcp(tcp)),
         Scheme::Https => {
@@ -1110,8 +1137,14 @@ async fn read_some<R: AsyncRead + Unpin>(reader: &mut R, dst: &mut [u8]) -> std:
 
 #[derive(Debug)]
 enum Transport {
+    #[cfg(unix)]
     Tcp(TcpStream),
+    #[cfg(windows)]
+    Tcp(TokioTcpStream),
+    #[cfg(unix)]
     Tls(Box<asupersync::tls::TlsStream<TcpStream>>),
+    #[cfg(windows)]
+    Tls(Box<tntls::TlsStream<TokioTcpStream>>),
 }
 
 impl Unpin for Transport {}
@@ -1123,8 +1156,36 @@ impl AsyncRead for Transport {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match &mut *self {
+            #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
+            #[cfg(windows)]
+            Self::Tcp(stream) => {
+                use futures::ready;
+                let mut tokio_buf = vec![0u8; buf.remaining()];
+                let n = ready!(Pin::new(stream).poll_read(cx, &mut tokio_buf));
+                match n {
+                    Ok(n) => {
+                        buf.put_slice(&tokio_buf[..n]);
+                        Poll::Ready(Ok(()))
+                    }
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            }
+            #[cfg(unix)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_read(cx, buf),
+            #[cfg(windows)]
+            Self::Tls(stream) => {
+                use futures::ready;
+                let mut tokio_buf = vec![0u8; buf.remaining()];
+                let n = ready!(Pin::new(&mut **stream).poll_read(cx, &mut tokio_buf));
+                match n {
+                    Ok(n) => {
+                        buf.put_slice(&tokio_buf[..n]);
+                        Poll::Ready(Ok(()))
+                    }
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            }
         }
     }
 }
@@ -1136,21 +1197,39 @@ impl AsyncWrite for Transport {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match &mut *self {
+            #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            #[cfg(windows)]
+            Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            #[cfg(unix)]
+            Self::Tls(stream) => Pin::new(&mut **stream).poll_write(cx, buf),
+            #[cfg(windows)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match &mut *self {
+            #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            #[cfg(windows)]
+            Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            #[cfg(unix)]
+            Self::Tls(stream) => Pin::new(&mut **stream).poll_flush(cx),
+            #[cfg(windows)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match &mut *self {
+            #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            #[cfg(windows)]
+            Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            #[cfg(unix)]
+            Self::Tls(stream) => Pin::new(&mut **stream).poll_shutdown(cx),
+            #[cfg(windows)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_shutdown(cx),
         }
     }
