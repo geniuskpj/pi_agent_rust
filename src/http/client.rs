@@ -13,6 +13,8 @@ use asupersync::io::{AsyncRead, AsyncWrite, ReadBuf};
 #[cfg(unix)]
 use asupersync::net::tcp::stream::TcpStream;
 #[cfg(windows)]
+use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite}
+#[cfg(windows)]
 use tokio::net::TcpStream;
 use asupersync::tls::{TlsConnector, TlsConnectorBuilder};
 use futures::Stream;
@@ -1160,30 +1162,36 @@ impl AsyncRead for Transport {
             Self::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
             #[cfg(windows)]
             Self::Tcp(stream) => {
-                use futures::ready;
+                use tokio::io::AsyncReadExt;
                 let mut tokio_buf = vec![0u8; buf.remaining()];
-                let n = ready!(Pin::new(stream).poll_read(cx, &mut tokio_buf));
-                match n {
-                    Ok(n) => {
+                let mut tokio_read_buf = tokio::io::ReadBuf::new(&mut tokio_buf);
+                let result = Pin::new(stream).poll_read(cx, &mut tokio_read_buf);
+                match result {
+                    Poll::Ready(Ok(())) => {
+                        let n = tokio_read_buf.filled().len();
                         buf.put_slice(&tokio_buf[..n]);
                         Poll::Ready(Ok(()))
                     }
-                    Err(e) => Poll::Ready(Err(e)),
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                    Poll::Pending => Poll::Pending,
                 }
             }
             #[cfg(unix)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_read(cx, buf),
             #[cfg(windows)]
             Self::Tls(stream) => {
-                use futures::ready;
+                use tokio::io::AsyncReadExt;
                 let mut tokio_buf = vec![0u8; buf.remaining()];
-                let n = ready!(Pin::new(&mut **stream).poll_read(cx, &mut tokio_buf));
-                match n {
-                    Ok(n) => {
+                let mut tokio_read_buf = tokio::io::ReadBuf::new(&mut tokio_buf);
+                let result = Pin::new(&mut **stream).poll_read(cx, &mut tokio_read_buf);
+                match result {
+                    Poll::Ready(Ok(())) => {
+                        let n = tokio_read_buf.filled().len();
                         buf.put_slice(&tokio_buf[..n]);
                         Poll::Ready(Ok(()))
                     }
-                    Err(e) => Poll::Ready(Err(e)),
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                    Poll::Pending => Poll::Pending,
                 }
             }
         }
@@ -1200,11 +1208,17 @@ impl AsyncWrite for Transport {
             #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
             #[cfg(windows)]
-            Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Tcp(stream) => {
+                use tokio::io::AsyncWriteExt;
+                Pin::new(stream).poll_write(cx, buf)
+            }
             #[cfg(unix)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_write(cx, buf),
             #[cfg(windows)]
-            Self::Tls(stream) => Pin::new(&mut **stream).poll_write(cx, buf),
+            Self::Tls(stream) => {
+                use tokio::io::AsyncWriteExt;
+                Pin::new(&mut **stream).poll_write(cx, buf)
+            }
         }
     }
 
@@ -1213,11 +1227,17 @@ impl AsyncWrite for Transport {
             #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
             #[cfg(windows)]
-            Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Tcp(stream) => {
+                use tokio::io::AsyncWriteExt;
+                Pin::new(stream).poll_flush(cx)
+            }
             #[cfg(unix)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_flush(cx),
             #[cfg(windows)]
-            Self::Tls(stream) => Pin::new(&mut **stream).poll_flush(cx),
+            Self::Tls(stream) => {
+                use tokio::io::AsyncWriteExt;
+                Pin::new(&mut **stream).poll_flush(cx)
+            }
         }
     }
 
@@ -1226,11 +1246,17 @@ impl AsyncWrite for Transport {
             #[cfg(unix)]
             Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
             #[cfg(windows)]
-            Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Tcp(stream) => {
+                use tokio::io::AsyncWriteExt;
+                Pin::new(stream).poll_shutdown(cx)
+            }
             #[cfg(unix)]
             Self::Tls(stream) => Pin::new(&mut **stream).poll_shutdown(cx),
             #[cfg(windows)]
-            Self::Tls(stream) => Pin::new(&mut **stream).poll_shutdown(cx),
+            Self::Tls(stream) => {
+                use tokio::io::AsyncWriteExt;
+                Pin::new(&mut **stream).poll_shutdown(cx)
+            }
         }
     }
 }
