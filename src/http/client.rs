@@ -91,7 +91,7 @@ type TlsConnectorType = tntls::TlsConnector;
 type TlsConnectorType = TlsConnector; // whatever you already use
 
 impl Client {
-    // #[cfg(unix)]
+    #[cfg(unix)]
     pub fn new() -> Self {
         let tls = TlsConnectorBuilder::new()
             .with_native_roots()
@@ -110,7 +110,7 @@ impl Client {
         }
     }
     
-#[cfg(windows)]
+[cfg(windows)]
     pub fn new() -> Self {
         let tls = ntls::TlsConnector::new()
             .map(tntls::TlsConnector::from)
