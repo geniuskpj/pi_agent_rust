@@ -13,7 +13,7 @@ use asupersync::io::{AsyncRead, AsyncWrite, ReadBuf};
 #[cfg(unix)]
 use asupersync::net::tcp::stream::TcpStream;
 #[cfg(windows)]
-use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite}
+use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite};
 #[cfg(windows)]
 use tokio::net::TcpStream;
 use asupersync::tls::{TlsConnector, TlsConnectorBuilder};
