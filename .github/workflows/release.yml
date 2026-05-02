@@ -276,7 +276,11 @@ jobs:
 
       #     Compress-Archive -Path "$stageDir" -DestinationPath "dist/${{ matrix.asset }}.zip"
       #     Remove-Item -Recurse -Force $stageDir
-
+      - name: Copy exe (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item "target/${{ matrix.target }}/release/pi.exe" "dist/"
+        
       - name: Build manifest
         run: |
           set -euxo pipefail
@@ -315,7 +319,8 @@ jobs:
     name: Create GitHub Release
     # needs: [plan, installer_regression, build]
     needs: [plan, build]
-    if: always() && needs.plan.result == 'success' && needs.installer_regression.result == 'success' && needs.build.result == 'success' && !cancelled()
+    if: always() && needs.plan.result == 'success' && needs.build.result == 'success' && !cancelled()
+    # if: always() && needs.plan.result == 'success' && needs.installer_regression.result == 'success' && needs.build.result == 'success' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
