@@ -19,6 +19,11 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+#[cfg(windows)]
+use tokio::runtime::Handle;
+#[cfg(windows)]
+use tokio::sync::OnceCell; // Ensure you have tokio with "sync" feature
+
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
@@ -48,10 +53,18 @@ impl Default for HttpConnectorConfig {
     }
 }
 
+
+
+
+#[cfg(unix)]
+type ClientType= Client;
+#[cfg(windows)]
+type ClientType= OnceCell<Client>;
+
 #[derive(Debug, Clone)]
 pub struct HttpConnector {
     config: HttpConnectorConfig,
-    client: Client,
+    client: ClientType,
 }
 
 impl HttpConnector {
@@ -61,8 +74,18 @@ impl HttpConnector {
         config.denylist = normalize_allowlist(config.denylist);
         Self {
             config,
-            client: Client::new(),
+            client: ClientType::new(),
         }
+    }
+
+    // Helper to get the client on Windows, ensuring reactor context
+    #[cfg(windows)]
+    async fn get_client(&self) -> &Client {
+        self.client.get_or_init(|| async {
+            // This closure runs inside the async dispatch, 
+            // so the Tokio reactor is guaranteed to be active.
+            Client::new()
+        }).await
     }
 
     #[must_use]
@@ -469,11 +492,14 @@ impl Connector for HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Ok(*payload),
         };
-
+        #[cfg(windows)]
+        let client = self.get_client().await;
+        #[cfg(not(windows))]
+        let client = &self.client;
         let mut builder = if prepared.method == "GET" {
-            self.client.get(&prepared.url)
+            client.get(&prepared.url)
         } else {
-            self.client.post(&prepared.url)
+            client.post(&prepared.url)
         };
 
         for (key, value) in prepared.headers {
@@ -564,11 +590,15 @@ impl HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Err(*payload),
         };
-
+        #[cfg(windows)]
+        let client = self.get_client().await;
+        #[cfg(not(windows))]
+        let client = &self.client;
+        
         let mut builder = if prepared.method == "GET" {
-            self.client.get(&prepared.url)
+            client.get(&prepared.url)
         } else {
-            self.client.post(&prepared.url)
+            client.post(&prepared.url)
         };
 
         for (key, value) in prepared.headers {
