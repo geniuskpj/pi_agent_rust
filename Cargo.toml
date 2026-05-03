@@ -286,7 +286,7 @@ rquickjs = { version = "0.11", features = ["futures", "loader", "bindgen"] }
 [target.'cfg(target_os="windows")'.dependencies]
 native-tls = { version = "0.2.18", features = ["alpn"] }
 tokio-native-tls = "0.3.1"
-tokio = { version = "1.52.1", features = ["net","rt-multi-thread", "macros", "io-util"]}
+tokio = { version = "1.52.1", features = ["net","rt-multi-thread", "macros", "io-util","sync", "rt","time"]}
 
 [features]
 default = ["image-resize", "jemalloc", "clipboard", "wasm-host", "sqlite-sessions"]
