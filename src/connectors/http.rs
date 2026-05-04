@@ -81,14 +81,14 @@ impl HttpConnector {
         Self {
             config,
             client: Client::new(),
-        }
+        };
 
         #[cfg(windows)]    
         Self {
             config,
             client: Client::new(),
             rt,
-        }
+        };
     }
 
     #[must_use]
@@ -516,12 +516,10 @@ impl Connector for HttpConnector {
             builder = builder.no_timeout();
         }
 
-        #[cfg(unix)]
-        let builderHandle=builder.send();
-        #[cfg(windows)]
-        let builderHandle=self.rt.spawn(builder.send());
 
-        let response = match builderHandle.await {
+
+        #[cfg(unix)]
+        let response = match builder.send().await {
             Ok(response) => response,
             Err(err) => {
                 if is_timeout_error(&err) {
@@ -529,6 +527,20 @@ impl Connector for HttpConnector {
                 }
                 return Ok(io_error(&call.call_id, err.to_string()));
             }
+        };
+
+        #[cfg(windows)]
+        let builderHandle=self.rt.spawn(builder.send());
+        #[cfg(windows)]
+        let response = match builderHandle.await {
+            Ok(Ok(res)) => res,
+            Ok(Err(err)) => {
+                if is_timeout_error(&err) {
+                    return Ok(timeout_error(&call.call_id, err.to_string()));
+                }
+                return Ok(io_error(&call.call_id, err.to_string()));
+            }
+            Err(join_err) => return Ok(io_error(&call.call_id, join_err.to_string())),
         };
 
         let status = response.status();
@@ -615,11 +627,19 @@ impl HttpConnector {
         } else {
             builder = builder.no_timeout();
         }
+        
         #[cfg(unix)]
-        let builderHandle=builder.send();
+        let send_result = builder.send().await;
+
         #[cfg(windows)]
-        let builderHandle=self.rt.spawn(builder.send());
-        match builderHandle.await {
+        let send_result = match self.rt.spawn(builder.send()).await {
+            Ok(result) => result,
+            Err(join_err) => {
+                return Err(io_error(&call.call_id, join_err.to_string()));
+            }
+        };
+
+        match send_result {
             Ok(response) => Ok(response),
             Err(err) => {
                 if is_timeout_error(&err) {
@@ -629,5 +649,6 @@ impl HttpConnector {
                 }
             }
         }
+
     }
 }
