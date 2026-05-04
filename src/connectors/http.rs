@@ -562,7 +562,10 @@ impl Connector for HttpConnector {
             } else {
                 builder = builder.no_timeout();
             }
-            let builderHandle=self.rt.spawn(async move {builder.send().await});
+            let builderHandle=self.rt.spawn(async move {
+                let res=builder.send().await;
+                    res
+            });
             let response = match builderHandle.await {
                 Ok(Ok(res)) => res,
                 Ok(Err(err)) => {
@@ -686,7 +689,10 @@ impl HttpConnector {
             } else {
                 builder = builder.no_timeout();
             }
-            let send_result = match self.rt.spawn(async move {builder.send().await}).await {
+            let send_result = match self.rt.spawn(async move {
+                let res=builder.send().await;
+                res
+            }).await {
                 Ok(result) => result,
                 Err(join_err) => {
                     return Err(io_error(&call.call_id, join_err.to_string()));
