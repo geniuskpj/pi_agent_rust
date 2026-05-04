@@ -169,6 +169,7 @@ impl Method {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct RequestBuilder<'a> {
     client: &'a Client,
     method: Method,
