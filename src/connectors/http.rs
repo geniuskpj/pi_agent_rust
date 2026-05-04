@@ -19,6 +19,9 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+#[cfg(windows)]
+use tokio::runtime::{Runtime, Builder};
+
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
@@ -48,20 +51,43 @@ impl Default for HttpConnectorConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+// #[derive(Debug, Clone)]
+#[cfg(unix)]
 pub struct HttpConnector {
     config: HttpConnectorConfig,
     client: Client,
 }
+#[cfg(windows)]
+pub struct HttpConnector {
+    config: HttpConnectorConfig,
+    client: Client,
+    rt: Runtime,
+}
+
 
 impl HttpConnector {
     #[must_use]
     pub fn new(mut config: HttpConnectorConfig) -> Self {
         config.allowlist = normalize_allowlist(config.allowlist);
         config.denylist = normalize_allowlist(config.denylist);
+
+        #[cfg(windows)]
+        let rt= Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        
+        #[cfg(unix)]    
         Self {
             config,
             client: Client::new(),
+        }
+
+        #[cfg(windows)]    
+        Self {
+            config,
+            client: Client::new(),
+            rt,
         }
     }
 
@@ -462,6 +488,10 @@ impl HttpConnector {
 impl Connector for HttpConnector {
     fn capability(&self) -> &'static str {
         "http"
+    }
+    #[cfg(windows)]
+    fn dispatch_sync(&self,call: &HostCallPayload)->Result<HostResultPayload> {
+        self.rt.block_on(self.dispatch(call))
     }
 
     async fn dispatch(&self, call: &HostCallPayload) -> Result<HostResultPayload> {
