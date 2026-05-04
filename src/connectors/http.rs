@@ -489,10 +489,6 @@ impl Connector for HttpConnector {
     fn capability(&self) -> &'static str {
         "http"
     }
-    #[cfg(windows)]
-    fn dispatch_sync(&self,call: &HostCallPayload)->Result<HostResultPayload> {
-        self.rt.block_on(self.dispatch(call))
-    }
 
     async fn dispatch(&self, call: &HostCallPayload) -> Result<HostResultPayload> {
         let prepared = match self.prepare_request(call) {
@@ -520,7 +516,12 @@ impl Connector for HttpConnector {
             builder = builder.no_timeout();
         }
 
-        let response = match builder.send().await {
+        #[cfg(unix)]
+        let builderHandle=builder.send()
+        #[cfg(windows)]
+        let builderHandle=self.rt.spawn(builder.send())
+
+        let response = match builderHandle.await {
             Ok(response) => response,
             Err(err) => {
                 if is_timeout_error(&err) {
@@ -614,8 +615,11 @@ impl HttpConnector {
         } else {
             builder = builder.no_timeout();
         }
-
-        match builder.send().await {
+        #[cfg(unix)]
+        let builderHandle=builder.send()
+        #[cfg(windows)]
+        let builderHandle=self.rt.spawn(builder.send())
+        match builderHandle.await {
             Ok(response) => Ok(response),
             Err(err) => {
                 if is_timeout_error(&err) {
