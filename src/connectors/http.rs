@@ -541,7 +541,7 @@ impl Connector for HttpConnector {
         
         
         #[cfg(windows)]
-        {
+        let response={
             let client= self.client.clone();
             let mut builder = if prepared.method == "GET" {
                 client.get(&prepared.url)
@@ -566,7 +566,7 @@ impl Connector for HttpConnector {
                 let res=builder.send().await;
                     res
             });
-            let response = match builderHandle.await {
+            match builderHandle.await {
                 Ok(Ok(res)) => res,
                 Ok(Err(err)) => {
                     if is_timeout_error(&err) {
@@ -576,7 +576,7 @@ impl Connector for HttpConnector {
                 }
                 Err(join_err) => return Ok(io_error(&call.call_id, join_err.to_string())),
             };
-        }
+        };
         
 
         let status = response.status();
