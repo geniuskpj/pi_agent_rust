@@ -536,7 +536,7 @@ impl Connector for HttpConnector {
         };
 
         #[cfg(windows)]
-        let builderC=builder.Clone();
+        let builderC=builder.clone();
         let builderHandle=self.rt.spawn(async move {builderC.send().await});
         #[cfg(windows)]
         let response = match builderHandle.await {
@@ -639,7 +639,7 @@ impl HttpConnector {
         let send_result = builder.send().await;
 
         #[cfg(windows)]
-        let builderC=builder.Clone();
+        let builderC=builder.clone();
         let send_result = match self.rt.spawn(async move {builderC.send()}.await).await {
             Ok(result) => result,
             Err(join_err) => {
