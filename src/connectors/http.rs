@@ -639,8 +639,8 @@ impl HttpConnector {
         let send_result = builder.send().await;
 
         #[cfg(windows)]
-        let builderC=builder.clone();
-        let send_result = match self.rt.spawn(async move {builderC.send()}.await).await {
+        //let builderC=builder.clone();
+        let send_result = match self.rt.spawn(async move {builder.send().await}).await {
             Ok(result) => result,
             Err(join_err) => {
                 return Err(io_error(&call.call_id, join_err.to_string()));
