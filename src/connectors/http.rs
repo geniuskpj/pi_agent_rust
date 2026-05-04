@@ -70,25 +70,31 @@ impl HttpConnector {
     pub fn new(mut config: HttpConnectorConfig) -> Self {
         config.allowlist = normalize_allowlist(config.allowlist);
         config.denylist = normalize_allowlist(config.denylist);
+        
+        
+        #[cfg(unix)]    
+        {
+            Self {
+                config,
+                client: Client::new(),
+            }
+        }
 
         #[cfg(windows)]
-        let rt= Builder::new_multi_thread()
+        {
+            let rt= Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
-        
-        #[cfg(unix)]    
-        Self {
-            config,
-            client: Client::new(),
-        };
 
-        #[cfg(windows)]    
-        Self {
-            config,
-            client: Client::new(),
-            rt,
-        };
+            Self {
+                config,
+                client: Client::new(),
+                rt,
+            }
+        
+        }
+        
     }
 
     #[must_use]
