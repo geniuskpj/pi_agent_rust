@@ -501,54 +501,80 @@ impl Connector for HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Ok(*payload),
         };
-
-        let mut builder = if prepared.method == "GET" {
-            self.client.get(&prepared.url)
-        } else {
-            self.client.post(&prepared.url)
-        };
-
-        for (key, value) in prepared.headers {
-            builder = builder.header(&key, value);
-        }
-
-        if let Some(body) = prepared.body {
-            builder = builder.body(body);
-        }
-
-        if let Some(timeout_ms) = prepared.timeout_ms {
-            builder = builder.timeout(Duration::from_millis(timeout_ms));
-        } else {
-            builder = builder.no_timeout();
-        }
-
-
-
         #[cfg(unix)]
-        let response = match builder.send().await {
-            Ok(response) => response,
-            Err(err) => {
-                if is_timeout_error(&err) {
-                    return Ok(timeout_error(&call.call_id, err.to_string()));
-                }
-                return Ok(io_error(&call.call_id, err.to_string()));
+        {
+            let mut builder = if prepared.method == "GET" {
+                self.client.get(&prepared.url)
+            } else {
+                self.client.post(&prepared.url)
+            };
+    
+            for (key, value) in prepared.headers {
+                builder = builder.header(&key, value);
             }
-        };
+    
+            if let Some(body) = prepared.body {
+                builder = builder.body(body);
+            }
+    
+            if let Some(timeout_ms) = prepared.timeout_ms {
+                builder = builder.timeout(Duration::from_millis(timeout_ms));
+            } else {
+                builder = builder.no_timeout();
+            }
+            
+            let response = match builder.send().await {
+                Ok(response) => response,
+                Err(err) => {
+                    if is_timeout_error(&err) {
+                        return Ok(timeout_error(&call.call_id, err.to_string()));
+                    }
+                    return Ok(io_error(&call.call_id, err.to_string()));
+                }
+            };
 
+        }
+
+
+
+
+        
+        
         #[cfg(windows)]
-        let builderC=builder.clone();
-        let builderHandle=self.rt.spawn(async move {builderC.send().await});
-        #[cfg(windows)]
-        let response = match builderHandle.await {
-            Ok(Ok(res)) => res,
-            Ok(Err(err)) => {
-                if is_timeout_error(&err) {
-                    return Ok(timeout_error(&call.call_id, err.to_string()));
-                }
-                return Ok(io_error(&call.call_id, err.to_string()));
+        {
+            let client= self.client.clone();
+            let mut builder = if prepared.method == "GET" {
+                client.get(&prepared.url)
+            } else {
+                client.post(&prepared.url)
+            };
+    
+            for (key, value) in prepared.headers {
+                builder = builder.header(&key, value);
             }
-            Err(join_err) => return Ok(io_error(&call.call_id, join_err.to_string())),
-        };
+    
+            if let Some(body) = prepared.body {
+                builder = builder.body(body);
+            }
+    
+            if let Some(timeout_ms) = prepared.timeout_ms {
+                builder = builder.timeout(Duration::from_millis(timeout_ms));
+            } else {
+                builder = builder.no_timeout();
+            }
+            let builderHandle=self.rt.spawn(async move {builder.send().await});
+            let response = match builderHandle.await {
+                Ok(Ok(res)) => res,
+                Ok(Err(err)) => {
+                    if is_timeout_error(&err) {
+                        return Ok(timeout_error(&call.call_id, err.to_string()));
+                    }
+                    return Ok(io_error(&call.call_id, err.to_string()));
+                }
+                Err(join_err) => return Ok(io_error(&call.call_id, join_err.to_string())),
+            };
+        }
+        
 
         let status = response.status();
         let headers = response.headers().to_vec();
@@ -614,38 +640,61 @@ impl HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Err(*payload),
         };
-
-        let mut builder = if prepared.method == "GET" {
-            self.client.get(&prepared.url)
-        } else {
-            self.client.post(&prepared.url)
-        };
-
-        for (key, value) in prepared.headers {
-            builder = builder.header(&key, value);
-        }
-
-        if let Some(body) = prepared.body {
-            builder = builder.body(body);
-        }
-
-        if let Some(timeout_ms) = prepared.timeout_ms {
-            builder = builder.timeout(Duration::from_millis(timeout_ms));
-        } else {
-            builder = builder.no_timeout();
-        }
-        
         #[cfg(unix)]
-        let send_result = builder.send().await;
+        {
+            let mut builder = if prepared.method == "GET" {
+                self.client.get(&prepared.url)
+            } else {
+                self.client.post(&prepared.url)
+            };
+    
+            for (key, value) in prepared.headers {
+                builder = builder.header(&key, value);
+            }
+    
+            if let Some(body) = prepared.body {
+                builder = builder.body(body);
+            }
+    
+            if let Some(timeout_ms) = prepared.timeout_ms {
+                builder = builder.timeout(Duration::from_millis(timeout_ms));
+            } else {
+                builder = builder.no_timeout();
+            }
+            let send_result = builder.send().await;
+        }
 
         #[cfg(windows)]
-        //let builderC=builder.clone();
-        let send_result = match self.rt.spawn(async move {builder.send().await}).await {
-            Ok(result) => result,
-            Err(join_err) => {
-                return Err(io_error(&call.call_id, join_err.to_string()));
+        {
+            let client=self.client.clone();
+            let mut builder = if prepared.method == "GET" {
+                client.get(&prepared.url)
+            } else {
+                client.post(&prepared.url)
+            };
+    
+            for (key, value) in prepared.headers {
+                builder = builder.header(&key, value);
             }
-        };
+    
+            if let Some(body) = prepared.body {
+                builder = builder.body(body);
+            }
+    
+            if let Some(timeout_ms) = prepared.timeout_ms {
+                builder = builder.timeout(Duration::from_millis(timeout_ms));
+            } else {
+                builder = builder.no_timeout();
+            }
+            let send_result = match self.rt.spawn(async move {builder.send().await}).await {
+                Ok(result) => result,
+                Err(join_err) => {
+                    return Err(io_error(&call.call_id, join_err.to_string()));
+                }
+            };
+        }
+        //let builderC=builder.clone();
+        
 
         match send_result {
             Ok(response) => Ok(response),
