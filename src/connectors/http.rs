@@ -517,9 +517,9 @@ impl Connector for HttpConnector {
         }
 
         #[cfg(unix)]
-        let builderHandle=builder.send()
+        let builderHandle=builder.send();
         #[cfg(windows)]
-        let builderHandle=self.rt.spawn(builder.send())
+        let builderHandle=self.rt.spawn(builder.send());
 
         let response = match builderHandle.await {
             Ok(response) => response,
@@ -616,9 +616,9 @@ impl HttpConnector {
             builder = builder.no_timeout();
         }
         #[cfg(unix)]
-        let builderHandle=builder.send()
+        let builderHandle=builder.send();
         #[cfg(windows)]
-        let builderHandle=self.rt.spawn(builder.send())
+        let builderHandle=self.rt.spawn(builder.send());
         match builderHandle.await {
             Ok(response) => Ok(response),
             Err(err) => {
