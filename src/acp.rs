@@ -45,6 +45,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+#[cfg(windows)]
+use tokio::runtime::{Handle};
 // ============================================================================
 // JSON-RPC 2.0 types
 // ============================================================================
@@ -196,13 +198,19 @@ struct AcpSessionState {
 // ACP Server
 // ============================================================================
 
+
+#[cfg(unix)]
+type handleType=RuntimeHandle;
+#[cfg(windows)]
+type handleType=Handle;
+
 /// Options for starting the ACP server.
 #[derive(Clone)]
 pub struct AcpOptions {
     pub config: Config,
     pub available_models: Vec<ModelEntry>,
     pub auth: AuthStorage,
-    pub runtime_handle: RuntimeHandle,
+    pub runtime_handle: handleType,
 }
 
 /// Run the ACP server over stdio.
