@@ -5,7 +5,12 @@ use super::conversation::{
 use super::ext_session::{format_extension_ui_prompt, parse_extension_ui_response};
 use super::*;
 use crate::extension_events::{BeforeAgentStartOutcome, apply_before_agent_start_response};
-
+#[cfg(windows)]
+use tokio::runtime::{Handle};
+#[cfg(unix)]
+type handleType=asupersync::runtime::RuntimeHandle;
+#[cfg(windows)]
+type handleType=Handle;
 pub(super) fn extension_commands_for_catalog(
     manager: &ExtensionManager,
 ) -> Vec<crate::autocomplete::NamedEntry> {
@@ -2130,7 +2135,7 @@ mod stream_delta_batcher_tests {
         })
     }
 
-    fn runtime_handle() -> asupersync::runtime::RuntimeHandle {
+    fn runtime_handle() -> handleType {
         runtime().handle()
     }
 
