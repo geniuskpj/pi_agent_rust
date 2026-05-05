@@ -6392,7 +6392,7 @@ impl AgentSession {
             Error::session(format!("Background compaction runtime init failed: {e}"))
         })?;
         #[cfg(windows)]
-         Builder::new()
+         let runtime = Builder::new_current_thread()
             .build()
             .map_err(|e| {
             Error::session(format!("Background compaction runtime init failed: {e}"))
