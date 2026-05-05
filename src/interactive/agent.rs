@@ -11,6 +11,11 @@ use tokio::runtime::{Handle};
 type handleType=asupersync::runtime::RuntimeHandle;
 #[cfg(windows)]
 type handleType=Handle;
+
+#[cfg(unix)]
+type RuntimeType =asupersync::runtime::Runtime;
+#[cfg(windows)]
+type RuntimeType = tokio::runtime::Runtime;
 pub(super) fn extension_commands_for_catalog(
     manager: &ExtensionManager,
 ) -> Vec<crate::autocomplete::NamedEntry> {
@@ -2125,13 +2130,19 @@ mod stream_delta_batcher_tests {
         }
     }
 
-    fn runtime() -> &'static asupersync::runtime::Runtime {
-        static RT: OnceLock<asupersync::runtime::Runtime> = OnceLock::new();
+    fn runtime() -> &'static RuntimeType {
+        static RT: OnceLock<RuntimeType> = OnceLock::new();
         RT.get_or_init(|| {
+            #[cfg(unix)]
             RuntimeBuilder::multi_thread()
                 .blocking_threads(1, 8)
                 .build()
                 .expect("build runtime")
+            #[cfg(windows)]
+            Builder::new_multi_thread()
+                .max_blocking_threads(8)
+                .build()
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         })
     }
 
