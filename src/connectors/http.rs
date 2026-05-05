@@ -19,9 +19,6 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-#[cfg(windows)]
-use tokio::runtime::{Runtime, Builder};
-
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
@@ -51,50 +48,21 @@ impl Default for HttpConnectorConfig {
     }
 }
 
-// #[derive(Debug, Clone)]
-#[cfg(unix)]
+#[derive(Debug, Clone)]
 pub struct HttpConnector {
     config: HttpConnectorConfig,
     client: Client,
 }
-#[cfg(windows)]
-pub struct HttpConnector {
-    config: HttpConnectorConfig,
-    client: Client,
-    rt: Runtime,
-}
-
 
 impl HttpConnector {
     #[must_use]
     pub fn new(mut config: HttpConnectorConfig) -> Self {
         config.allowlist = normalize_allowlist(config.allowlist);
         config.denylist = normalize_allowlist(config.denylist);
-        
-        
-        #[cfg(unix)]    
-        {
-            Self {
-                config,
-                client: Client::new(),
-            }
+        Self {
+            config,
+            client: Client::new(),
         }
-
-        #[cfg(windows)]
-        {
-            let rt= Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-            Self {
-                config,
-                client: Client::new(),
-                rt,
-            }
-        
-        }
-        
     }
 
     #[must_use]
@@ -501,67 +469,28 @@ impl Connector for HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Ok(*payload),
         };
-       let send_result: std::result::Result<crate::http::client::Response, Error> = {
-            #[cfg(unix)]
-            {
-                let mut builder = if prepared.method == "GET" {
-                    self.client.get(&prepared.url)
-                } else {
-                    self.client.post(&prepared.url)
-                };
-    
-                for (key, value) in prepared.headers {
-                    builder = builder.header(&key, value);
-                }
-    
-                if let Some(body) = prepared.body {
-                    builder = builder.body(body);
-                }
-    
-                if let Some(timeout_ms) = prepared.timeout_ms {
-                    builder = builder.timeout(Duration::from_millis(timeout_ms));
-                } else {
-                    builder = builder.no_timeout();
-                }
-    
-                builder.send().await
-            }
-    
-            #[cfg(windows)]
-            {
-                let client = self.client.clone();
-    
-                
-    
-                match self.rt.spawn(async move { 
-                    let mut builder = if prepared.method == "GET" {
-                        client.get(&prepared.url)
-                    } else {
-                        client.post(&prepared.url)
-                    };
-        
-                    for (key, value) in prepared.headers {
-                        builder = builder.header(&key, value);
-                    }
-        
-                    if let Some(body) = prepared.body {
-                        builder = builder.body(body);
-                    }
-        
-                    if let Some(timeout_ms) = prepared.timeout_ms {
-                        builder = builder.timeout(Duration::from_millis(timeout_ms));
-                    } else {
-                        builder = builder.no_timeout();
-                    }
-                    builder.send().await 
-                }).await {
-                    Ok(result) => result,
-                    Err(join_err) => Err(Error::Api(join_err.to_string())),
-                }
-            }
+
+        let mut builder = if prepared.method == "GET" {
+            self.client.get(&prepared.url)
+        } else {
+            self.client.post(&prepared.url)
         };
-        
-        let response = match send_result {
+
+        for (key, value) in prepared.headers {
+            builder = builder.header(&key, value);
+        }
+
+        if let Some(body) = prepared.body {
+            builder = builder.body(body);
+        }
+
+        if let Some(timeout_ms) = prepared.timeout_ms {
+            builder = builder.timeout(Duration::from_millis(timeout_ms));
+        } else {
+            builder = builder.no_timeout();
+        }
+
+        let response = match builder.send().await {
             Ok(response) => response,
             Err(err) => {
                 if is_timeout_error(&err) {
@@ -570,8 +499,8 @@ impl Connector for HttpConnector {
                 return Ok(io_error(&call.call_id, err.to_string()));
             }
         };
+
         let status = response.status();
-        // #[cfg(unix)]
         let headers = response.headers().to_vec();
         let mut stream = response.bytes_stream();
         let mut body_bytes = Vec::new();
@@ -635,69 +564,28 @@ impl HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Err(*payload),
         };
-        let send_result: std::result::Result<crate::http::client::Response, Error> = {
-                #[cfg(unix)]
-                {
-                    let mut builder = if prepared.method == "GET" {
-                        self.client.get(&prepared.url)
-                    } else {
-                        self.client.post(&prepared.url)
-                    };
-        
-                    for (key, value) in prepared.headers {
-                        builder = builder.header(&key, value);
-                    }
-        
-                    if let Some(body) = prepared.body {
-                        builder = builder.body(body);
-                    }
-        
-                    if let Some(timeout_ms) = prepared.timeout_ms {
-                        builder = builder.timeout(Duration::from_millis(timeout_ms));
-                    } else {
-                        builder = builder.no_timeout();
-                    }
-        
-                    builder.send().await
-                }
-        
-                #[cfg(windows)]
-                {
-                    let client = self.client.clone();
-        
-                    
-        
-                    match self.rt.spawn(async move {
-                        let mut builder = if prepared.method == "GET" {
-                            client.get(&prepared.url)
-                        } else {
-                            client.post(&prepared.url)
-                        };
-            
-                        for (key, value) in prepared.headers {
-                            builder = builder.header(&key, value);
-                        }
-            
-                        if let Some(body) = prepared.body {
-                            builder = builder.body(body);
-                        }
-            
-                        if let Some(timeout_ms) = prepared.timeout_ms {
-                            builder = builder.timeout(Duration::from_millis(timeout_ms));
-                        } else {
-                            builder = builder.no_timeout();
-                        }
-                        builder.send().await 
-                    }).await {
-                        Ok(result) => result,
-                        Err(join_err) => Err(Error::Api(join_err.to_string())),
-                    }
-                }
-            };
 
-        
+        let mut builder = if prepared.method == "GET" {
+            self.client.get(&prepared.url)
+        } else {
+            self.client.post(&prepared.url)
+        };
 
-        match send_result {
+        for (key, value) in prepared.headers {
+            builder = builder.header(&key, value);
+        }
+
+        if let Some(body) = prepared.body {
+            builder = builder.body(body);
+        }
+
+        if let Some(timeout_ms) = prepared.timeout_ms {
+            builder = builder.timeout(Duration::from_millis(timeout_ms));
+        } else {
+            builder = builder.no_timeout();
+        }
+
+        match builder.send().await {
             Ok(response) => Ok(response),
             Err(err) => {
                 if is_timeout_error(&err) {
@@ -707,6 +595,5 @@ impl HttpConnector {
                 }
             }
         }
-
     }
 }
