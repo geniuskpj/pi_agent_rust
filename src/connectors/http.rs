@@ -560,7 +560,14 @@ impl Connector for HttpConnector {
         
 
         let status = response.status();
+        #[cfg(unix)]
         let headers = response.headers().to_vec();
+        #[cfg(windows)]
+        let headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         let mut stream = response.bytes_stream();
         let mut body_bytes = Vec::new();
 
