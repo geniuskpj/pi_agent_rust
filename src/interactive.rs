@@ -1664,7 +1664,7 @@ pub async fn run_interactive(
     resource_cli: ResourceCliOptions,
     extensions: Option<ExtensionManager>,
     cwd: PathBuf,
-    runtime_handle: handleType,
+    runtime_handle: HandleType,
 ) -> anyhow::Result<()> {
     let should_check_for_updates = config.should_check_for_updates();
     let show_hardware_cursor = config.show_hardware_cursor.unwrap_or_else(|| {
@@ -2288,7 +2288,7 @@ pub struct PiApp {
 
     // Async channel for agent events
     event_tx: mpsc::Sender<PiMsg>,
-    runtime_handle: handleType,
+    runtime_handle: HandleType,
 
     // Extension session state
     extension_streaming: Arc<AtomicBool>,
@@ -2408,7 +2408,7 @@ impl PiApp {
         available_models: Vec<ModelEntry>,
         pending_inputs: Vec<PendingInput>,
         event_tx: mpsc::Sender<PiMsg>,
-        runtime_handle: handleType,
+        runtime_handle: HandleType,
         save_enabled: bool,
         persist_startup_settings: bool,
         extensions: Option<ExtensionManager>,
