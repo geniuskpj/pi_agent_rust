@@ -558,16 +558,24 @@ impl Connector for HttpConnector {
             }
         };
         
-
+        let response = match send_result {
+            Ok(response) => response,
+            Err(err) => {
+                if is_timeout_error(&err) {
+                    return Ok(timeout_error(&call.call_id, err.to_string()));
+                }
+                return Ok(io_error(&call.call_id, err.to_string()));
+            }
+        };
         let status = response.status();
-        #[cfg(unix)]
+        // #[cfg(unix)]
         let headers = response.headers().to_vec();
-        #[cfg(windows)]
-        let headers: Vec<(String, String)> = response
-            .headers()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+        // #[cfg(windows)]
+        // let headers: Vec<(String, String)> = response
+        //     .headers()
+        //     .iter()
+        //     .map(|(k, v)| (k.to_string(), v.to_string()))
+        //     .collect();
         let mut stream = response.bytes_stream();
         let mut body_bytes = Vec::new();
 
