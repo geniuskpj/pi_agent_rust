@@ -531,27 +531,30 @@ impl Connector for HttpConnector {
             {
                 let client = self.client.clone();
     
-                let mut builder = if prepared.method == "GET" {
-                    client.get(&prepared.url)
-                } else {
-                    client.post(&prepared.url)
-                };
+                
     
-                for (key, value) in prepared.headers {
-                    builder = builder.header(&key, value);
-                }
-    
-                if let Some(body) = prepared.body {
-                    builder = builder.body(body);
-                }
-    
-                if let Some(timeout_ms) = prepared.timeout_ms {
-                    builder = builder.timeout(Duration::from_millis(timeout_ms));
-                } else {
-                    builder = builder.no_timeout();
-                }
-    
-                match self.rt.spawn(async move { builder.send().await }).await {
+                match self.rt.spawn(async move { 
+                    let mut builder = if prepared.method == "GET" {
+                        client.get(&prepared.url)
+                    } else {
+                        client.post(&prepared.url)
+                    };
+        
+                    for (key, value) in prepared.headers {
+                        builder = builder.header(&key, value);
+                    }
+        
+                    if let Some(body) = prepared.body {
+                        builder = builder.body(body);
+                    }
+        
+                    if let Some(timeout_ms) = prepared.timeout_ms {
+                        builder = builder.timeout(Duration::from_millis(timeout_ms));
+                    } else {
+                        builder = builder.no_timeout();
+                    }
+                    builder.send().await 
+                }).await {
                     Ok(result) => result,
                     Err(join_err) => Err(Error::Api(join_err.to_string())),
                 }
@@ -570,12 +573,6 @@ impl Connector for HttpConnector {
         let status = response.status();
         // #[cfg(unix)]
         let headers = response.headers().to_vec();
-        // #[cfg(windows)]
-        // let headers: Vec<(String, String)> = response
-        //     .headers()
-        //     .iter()
-        //     .map(|(k, v)| (k.to_string(), v.to_string()))
-        //     .collect();
         let mut stream = response.bytes_stream();
         let mut body_bytes = Vec::new();
 
@@ -668,27 +665,30 @@ impl HttpConnector {
                 {
                     let client = self.client.clone();
         
-                    let mut builder = if prepared.method == "GET" {
-                        client.get(&prepared.url)
-                    } else {
-                        client.post(&prepared.url)
-                    };
+                    
         
-                    for (key, value) in prepared.headers {
-                        builder = builder.header(&key, value);
-                    }
-        
-                    if let Some(body) = prepared.body {
-                        builder = builder.body(body);
-                    }
-        
-                    if let Some(timeout_ms) = prepared.timeout_ms {
-                        builder = builder.timeout(Duration::from_millis(timeout_ms));
-                    } else {
-                        builder = builder.no_timeout();
-                    }
-        
-                    match self.rt.spawn(async move { builder.send().await }).await {
+                    match self.rt.spawn(async move {
+                        let mut builder = if prepared.method == "GET" {
+                            client.get(&prepared.url)
+                        } else {
+                            client.post(&prepared.url)
+                        };
+            
+                        for (key, value) in prepared.headers {
+                            builder = builder.header(&key, value);
+                        }
+            
+                        if let Some(body) = prepared.body {
+                            builder = builder.body(body);
+                        }
+            
+                        if let Some(timeout_ms) = prepared.timeout_ms {
+                            builder = builder.timeout(Duration::from_millis(timeout_ms));
+                        } else {
+                            builder = builder.no_timeout();
+                        }
+                        builder.send().await 
+                    }).await {
                         Ok(result) => result,
                         Err(join_err) => Err(Error::Api(join_err.to_string())),
                     }
