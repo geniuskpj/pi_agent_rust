@@ -2134,15 +2134,21 @@ mod stream_delta_batcher_tests {
         static RT: OnceLock<RuntimeType> = OnceLock::new();
         RT.get_or_init(|| {
             #[cfg(unix)]
-            RuntimeBuilder::multi_thread()
+            {
+                RuntimeBuilder::multi_thread()
                 .blocking_threads(1, 8)
                 .build()
                 .expect("build runtime")
+            }
+            
             #[cfg(windows)]
-            Builder::new_multi_thread()
-                .max_blocking_threads(8)
-                .build()
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            {
+                Builder::new_multi_thread()
+                    .enable_all()
+                    .max_blocking_threads(8)
+                    .build()
+                    .expect("build runtime")
+            }
         })
     }
 
