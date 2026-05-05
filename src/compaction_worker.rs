@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 #[cfg(windows)]
 use tokio::runtime::{Runtime,Handle};
+#[cfg(windows)]
+use tokio::runtime::JoinHandle as tokJoinHandle;
 #[cfg(unix)]
 type handleType=RuntimeHandle;
 #[cfg(windows)]
@@ -41,8 +43,14 @@ impl Default for CompactionQuota {
 
 type CompactionOutcome = Result<CompactionResult>;
 
+#[cfg(unix)]
+type joinType=JoinHandle;
+#[cfg(windows)]
+type joinType=tokJoinHandle;
+
+
 struct PendingCompaction {
-    join: JoinHandle<CompactionOutcome>,
+    join: joinType<CompactionOutcome>,
     abort_tx: Option<oneshot::Sender<()>>,
     started_at: Instant,
 }
