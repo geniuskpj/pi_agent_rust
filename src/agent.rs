@@ -6382,7 +6382,7 @@ impl AgentSession {
         Ok(())
     }
 
-    fn compaction_runtime_handle(&mut self) -> Result<RuntimeHandle> {
+    fn compaction_runtime_handle(&mut self) -> Result<handleType> {
         if let Some(runtime_handle) = self.runtime_handle.clone() {
             return Ok(runtime_handle);
         }
