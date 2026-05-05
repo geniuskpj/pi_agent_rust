@@ -46,7 +46,7 @@ type CompactionOutcome = Result<CompactionResult>;
 #[cfg(unix)]
 type joinType=JoinHandle<CompactionOutcome>;
 #[cfg(windows)]
-type joinType=tokJoinHandle<Result>;
+type joinType=tokJoinHandle<CompactionOutcome>;
 
 
 struct PendingCompaction {
