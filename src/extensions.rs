@@ -56,6 +56,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
+#[cfg(windows)]
+use tokio::runtime::{Handle};
+#[cfg(unix)]
+type handleType=asupersync::runtime::RuntimeHandle;
+#[cfg(windows)]
+type handleType=Handle;
 
 struct CancelGuard(Arc<std::sync::atomic::AtomicBool>);
 impl Drop for CancelGuard {
@@ -29412,7 +29418,7 @@ impl EventCoalescer {
     pub fn dispatch_agent_event_lazy(
         &self,
         event: &AgentEvent,
-        runtime_handle: &asupersync::runtime::RuntimeHandle,
+        runtime_handle: &handleType,
     ) {
         let Some(event_name) = extension_event_name_from_agent(event) else {
             return;
