@@ -58,7 +58,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
 #[cfg(windows)]
-use tokio::runtime::{Handle};
+use tokio::runtime::{Handle,Builder};
 
 const MAX_CONCURRENT_TOOLS: usize = 8;
 /// Maximum messages in steering queue to prevent unbounded growth
@@ -6387,7 +6387,14 @@ impl AgentSession {
             return Ok(runtime_handle);
         }
 
+        #[cfg(unix)]
         let runtime = RuntimeBuilder::new().build().map_err(|e| {
+            Error::session(format!("Background compaction runtime init failed: {e}"))
+        })?;
+        #[cfg(windows)]
+         Builder::new()
+            .build()
+            .map_err(|e| {
             Error::session(format!("Background compaction runtime init failed: {e}"))
         })?;
         let runtime_handle = runtime.handle();
