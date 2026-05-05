@@ -12,7 +12,7 @@ use futures::channel::oneshot;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 #[cfg(windows)]
-use tokio::runtime::{Runtime};
+use tokio::runtime::{Runtime,Handle};
 #[cfg(unix)]
 type handleType=RuntimeHandle;
 #[cfg(windows)]
