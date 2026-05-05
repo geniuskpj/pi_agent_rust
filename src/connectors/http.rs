@@ -638,63 +638,63 @@ impl HttpConnector {
             Ok(prepared) => prepared,
             Err(payload) => return Err(*payload),
         };
-        #[cfg(unix)]
-        {
-            let mut builder = if prepared.method == "GET" {
-                self.client.get(&prepared.url)
-            } else {
-                self.client.post(&prepared.url)
-            };
-    
-            for (key, value) in prepared.headers {
-                builder = builder.header(&key, value);
-            }
-    
-            if let Some(body) = prepared.body {
-                builder = builder.body(body);
-            }
-    
-            if let Some(timeout_ms) = prepared.timeout_ms {
-                builder = builder.timeout(Duration::from_millis(timeout_ms));
-            } else {
-                builder = builder.no_timeout();
-            }
-            let send_result = builder.send().await;
-        }
-
-        #[cfg(windows)]
-        {
-            let client=self.client.clone();
-            let mut builder = if prepared.method == "GET" {
-                client.get(&prepared.url)
-            } else {
-                client.post(&prepared.url)
-            };
-    
-            for (key, value) in prepared.headers {
-                builder = builder.header(&key, value);
-            }
-    
-            if let Some(body) = prepared.body {
-                builder = builder.body(body);
-            }
-    
-            if let Some(timeout_ms) = prepared.timeout_ms {
-                builder = builder.timeout(Duration::from_millis(timeout_ms));
-            } else {
-                builder = builder.no_timeout();
-            }
-            let send_result = match self.rt.spawn(async move {
-                let res=builder.send().await;
-                res
-            }).await {
-                Ok(result) => result,
-                Err(join_err) => {
-                    return Err(io_error(&call.call_id, join_err.to_string()));
+        let send_result: std::result::Result<crate::http::client::Response, Error> = {
+                #[cfg(unix)]
+                {
+                    let mut builder = if prepared.method == "GET" {
+                        self.client.get(&prepared.url)
+                    } else {
+                        self.client.post(&prepared.url)
+                    };
+        
+                    for (key, value) in prepared.headers {
+                        builder = builder.header(&key, value);
+                    }
+        
+                    if let Some(body) = prepared.body {
+                        builder = builder.body(body);
+                    }
+        
+                    if let Some(timeout_ms) = prepared.timeout_ms {
+                        builder = builder.timeout(Duration::from_millis(timeout_ms));
+                    } else {
+                        builder = builder.no_timeout();
+                    }
+        
+                    builder.send().await
+                }
+        
+                #[cfg(windows)]
+                {
+                    let client = self.client.clone();
+        
+                    let mut builder = if prepared.method == "GET" {
+                        client.get(&prepared.url)
+                    } else {
+                        client.post(&prepared.url)
+                    };
+        
+                    for (key, value) in prepared.headers {
+                        builder = builder.header(&key, value);
+                    }
+        
+                    if let Some(body) = prepared.body {
+                        builder = builder.body(body);
+                    }
+        
+                    if let Some(timeout_ms) = prepared.timeout_ms {
+                        builder = builder.timeout(Duration::from_millis(timeout_ms));
+                    } else {
+                        builder = builder.no_timeout();
+                    }
+        
+                    match self.rt.spawn(async move { builder.send().await }).await {
+                        Ok(result) => result,
+                        Err(join_err) => Err(Error::Api(join_err.to_string())),
+                    }
                 }
             };
-        }
-        //let builderC=builder.clone();
+
         
 
         match send_result {
