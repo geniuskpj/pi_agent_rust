@@ -11,6 +11,9 @@ use futures::FutureExt;
 use futures::channel::oneshot;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use tokio::runtime::{Runtime};
+
 
 /// Quota controls that bound background compaction resource usage.
 #[derive(Debug, Clone)]
@@ -117,11 +120,14 @@ impl CompactionWorkerState {
         let pending = self.pending.take()?;
         Some(pending.join.await)
     }
-
+    #[cfg(unix)]
+    type handleType=RuntimeHandle;
+    #[cfg(windows)]
+    type handleType=Handle;
     /// Spawn a background compaction on the provided runtime.
     pub fn start(
         &mut self,
-        runtime_handle: &RuntimeHandle,
+        runtime_handle: &handleType,
         preparation: CompactionPreparation,
         provider: Arc<dyn Provider>,
         api_key: String,
