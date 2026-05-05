@@ -60,6 +60,8 @@ use tracing_subscriber::EnvFilter;
 
 #[cfg(windows)]
 use tokio::runtime::{Builder,Handle};
+#[cfg(windows)]
+use tokio::runtime::Runtime as tokRuntime;
 
 const EXIT_CODE_FAILURE: i32 = 1;
 const EXIT_CODE_USAGE: i32 = 2;
@@ -1354,12 +1356,12 @@ async fn run(
                 Ok(runtime) => {
                     tracing::info!(
                         event = "pi.extension_runtime.prewarm.success",
-                        runtime = runtime.runtime_name(),
+                        // runtime = runtime.runtime_name(),
                         "Pre-warmed extension runtime ready"
                     );
                     Some(PreWarmedExtensionRuntime {
                         manager: mgr,
-                        runtime,
+                        runtime:runtime?,
                         tools,
                     })
                 }
