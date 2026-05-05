@@ -130,9 +130,14 @@ impl CompactionWorkerState {
 
         let pending = self.pending.take()?;
         #[cfg(unix)]
-        Some(pending.join.await)
+        {
+            Some(pending.join.await)
+        }
+        
         #[cfg(windows)]
-        Some(pendin.join.await??)
+        {
+            Some(pendin.join.await??)
+        }
     }
 
     /// Spawn a background compaction on the provided runtime.
