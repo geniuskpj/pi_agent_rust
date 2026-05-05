@@ -60,7 +60,7 @@ use tracing::warn;
 #[cfg(windows)]
 use tokio::runtime::{Handle,Builder};
 #[cfg(windows)]
-use tokio::runtime::Runtime as tokRuntime
+use tokio::runtime::Runtime as tokRuntime;
 
 const MAX_CONCURRENT_TOOLS: usize = 8;
 /// Maximum messages in steering queue to prevent unbounded growth
