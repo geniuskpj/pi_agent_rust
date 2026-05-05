@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use tokio::runtime::{Runtime,Handle};
 #[cfg(windows)]
-use tokio::runtime::JoinHandle as tokJoinHandle;
+use tokio::task::JoinHandle as tokJoinHandle;
 #[cfg(unix)]
 type handleType=RuntimeHandle;
 #[cfg(windows)]
