@@ -136,7 +136,7 @@ impl CompactionWorkerState {
         
         #[cfg(windows)]
         {
-            Some(pendin.join.await??)
+            Some(pending.join.await??)
         }
     }
 
