@@ -59,7 +59,7 @@ use sha2::{Digest, Sha256};
 use tracing_subscriber::EnvFilter;
 
 #[cfg(windows)]
-use tokio::runtime::{Builder};
+use tokio::runtime::{Builder,Handle};
 
 const EXIT_CODE_FAILURE: i32 = 1;
 const EXIT_CODE_USAGE: i32 = 2;
@@ -953,11 +953,17 @@ fn print_resolved_repair_policy(resolved: &pi::config::ResolvedRepairPolicy) -> 
     Ok(())
 }
 
+
+#[cfg(unix)]
+type handleType=RuntimeHandle
+#[cfg(windows)]
+type handleType=Handle
+
 #[allow(clippy::too_many_lines)]
 async fn run(
     mut cli: cli::Cli,
     extension_flags: Vec<cli::ExtensionCliFlag>,
-    runtime_handle: RuntimeHandle,
+    runtime_handle:handleType ,
 ) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
