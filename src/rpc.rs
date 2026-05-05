@@ -46,6 +46,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+#[cfg(windows)]
+use tokio::runtime::{Handle};
 #[cfg(unix)]
 type handleType=RuntimeHandle;
 #[cfg(windows)]
