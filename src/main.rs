@@ -58,6 +58,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tracing_subscriber::EnvFilter;
 
+#[cfg(windows)]
+use tokio::runtime::{Builder};
+
 const EXIT_CODE_FAILURE: i32 = 1;
 const EXIT_CODE_USAGE: i32 = 2;
 const USAGE_ERROR_PATTERNS: &[&str] = &[
@@ -483,13 +486,26 @@ fn main_impl() -> Result<()> {
     // Run the application
     let reactor = create_reactor()?;
     let exit_after_runtime = cli.print || matches!(cli.mode.as_deref(), Some("text" | "json"));
+    #[cfg(unix)]
     let runtime = RuntimeBuilder::multi_thread()
         .blocking_threads(1, 2)
         .enable_parking(false)
         .with_reactor(reactor)
         .build()
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    #[cfg(windows)]
+    let runtime = Builder::new_multi_thread()
+    .enable_all()
+    // closest Tokio equivalent of `blocking_threads(1, 2)` is max blocking threads
+    .max_blocking_threads(2)
+    // optional: set async worker threads if you want to control them
+    // .worker_threads(num_cpus::get())
+    .build()
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    #[cfg(unix)]
     let handle = runtime.handle();
+    #[cfg(windows)]
+    let handle = runtime.handle().clone();
     let result = runtime.block_on(run(cli, extension_flags, handle));
     if exit_after_runtime {
         match result {
