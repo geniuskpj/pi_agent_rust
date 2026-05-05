@@ -59,6 +59,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
 #[cfg(windows)]
 use tokio::runtime::{Handle,Builder};
+#[cfg(windows)]
+use tokio::runtime::Runtime as tokRuntime
 
 const MAX_CONCURRENT_TOOLS: usize = 8;
 /// Maximum messages in steering queue to prevent unbounded growth
@@ -2493,6 +2495,11 @@ impl Drop for AtomicBoolGuard {
 type handleType=RuntimeHandle;
 #[cfg(windows)]
 type handleType=Handle;
+
+#[cfg(unix)]
+type runtimeType=Runtime;
+#[cfg(windows)]
+type runtimeType=tokRuntime;
     
 pub struct AgentSession {
     pub agent: Agent,
@@ -2509,7 +2516,7 @@ pub struct AgentSession {
     extension_queue_modes: Option<Arc<StdMutex<ExtensionQueueModeState>>>,
     extension_injected_queue: Option<Arc<StdMutex<ExtensionInjectedQueue>>>,
     compaction_settings: ResolvedCompactionSettings,
-    compaction_runtime: Option<Runtime>,
+    compaction_runtime: Option<runtimeType>,
     runtime_handle: Option<handleType>,
     compaction_worker: CompactionWorkerState,
     model_registry: Option<ModelRegistry>,
