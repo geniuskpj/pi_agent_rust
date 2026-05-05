@@ -46,6 +46,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+#[cfg(unix)]
+type handleType=RuntimeHandle;
+#[cfg(windows)]
+type handleType=Handle;
 
 #[derive(Clone)]
 pub struct RpcOptions {
@@ -55,7 +59,7 @@ pub struct RpcOptions {
     pub scoped_models: Vec<RpcScopedModel>,
     pub cli_api_key: Option<String>,
     pub auth: AuthStorage,
-    pub runtime_handle: RuntimeHandle,
+    pub runtime_handle: handleType,
 }
 
 #[derive(Debug, Clone)]
@@ -216,7 +220,7 @@ fn resolve_extension_command(
 
 fn rpc_agent_event_handler(
     out_tx: std::sync::mpsc::SyncSender<String>,
-    runtime_handle: RuntimeHandle,
+    runtime_handle: handleType,
     extensions: Option<ExtensionManager>,
 ) -> impl Fn(AgentEvent) + Send + Sync + 'static {
     let coalescer = extensions.map(crate::extensions::EventCoalescer::new);
@@ -2257,7 +2261,7 @@ async fn run_extension_command(
     is_streaming: Arc<AtomicBool>,
     abort_handle_slot: Arc<Mutex<Option<AbortHandle>>>,
     out_tx: std::sync::mpsc::SyncSender<String>,
-    runtime_handle: RuntimeHandle,
+    runtime_handle: handleType,
     command_name: String,
     args: String,
     cx: AgentCx,
@@ -2381,7 +2385,7 @@ fn agent_event(event: AgentEvent) -> String {
 }
 
 fn rpc_emit_extension_ui_request(
-    runtime_handle: &RuntimeHandle,
+    runtime_handle: &handleType,
     ui_state: Arc<Mutex<RpcUiBridgeState>>,
     manager: ExtensionManager,
     out_tx_ui: std::sync::mpsc::SyncSender<String>,
