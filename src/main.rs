@@ -955,9 +955,9 @@ fn print_resolved_repair_policy(resolved: &pi::config::ResolvedRepairPolicy) -> 
 
 
 #[cfg(unix)]
-type handleType=RuntimeHandle
+type handleType=RuntimeHandle;
 #[cfg(windows)]
-type handleType=Handle
+type handleType=Handle;
 
 #[allow(clippy::too_many_lines)]
 async fn run(
@@ -4372,7 +4372,7 @@ async fn run_rpc_mode(
     scoped_models: Vec<pi::rpc::RpcScopedModel>,
     cli_api_key: Option<String>,
     auth: AuthStorage,
-    runtime_handle: RuntimeHandle,
+    runtime_handle: handleType,
 ) -> Result<()> {
     use futures::FutureExt;
 
@@ -4444,7 +4444,7 @@ async fn run_print_mode(
     initial: Option<InitialMessage>,
     messages: Vec<String>,
     resources: &ResourceLoader,
-    runtime_handle: RuntimeHandle,
+    runtime_handle: handleType,
     config: &Config,
 ) -> Result<()> {
     if mode != "text" && mode != "json" {
@@ -4943,7 +4943,7 @@ async fn run_interactive_mode(
     resources: ResourceLoader,
     resource_cli: ResourceCliOptions,
     cwd: PathBuf,
-    runtime_handle: RuntimeHandle,
+    runtime_handle: handleType,
 ) -> Result<()> {
     let mut pending = Vec::new();
     if let Some(initial) = initial {
