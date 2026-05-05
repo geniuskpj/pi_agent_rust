@@ -6404,7 +6404,10 @@ impl AgentSession {
             .map_err(|e| {
             Error::session(format!("Background compaction runtime init failed: {e}"))
         })?;
+        #[cfg(unix)]
         let runtime_handle = runtime.handle();
+        #[cfg(windows)]
+        let runtime_handle = runitime.handle().clone();
         self.compaction_runtime = Some(runtime);
         self.runtime_handle = Some(runtime_handle.clone());
         Ok(runtime_handle)
