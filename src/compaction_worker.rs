@@ -44,13 +44,13 @@ impl Default for CompactionQuota {
 type CompactionOutcome = Result<CompactionResult>;
 
 #[cfg(unix)]
-type joinType=JoinHandle;
+type joinType=JoinHandle<CompactionOutcome>;
 #[cfg(windows)]
-type joinType=tokJoinHandle;
+type joinType=tokJoinHandle<Result>;
 
 
 struct PendingCompaction {
-    join: joinType<CompactionOutcome>,
+    join: joinType,
     abort_tx: Option<oneshot::Sender<()>>,
     started_at: Instant,
 }
