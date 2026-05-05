@@ -57,6 +57,8 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
+#[cfg(windows)]
+use tokio::runtime::{Handle};
 
 const MAX_CONCURRENT_TOOLS: usize = 8;
 /// Maximum messages in steering queue to prevent unbounded growth
@@ -2487,7 +2489,11 @@ impl Drop for AtomicBoolGuard {
         self.0.store(false, Ordering::SeqCst);
     }
 }
-
+#[cfg(unix)]
+type handleType=RuntimeHandle;
+#[cfg(windows)]
+type handleType=Handle;
+    
 pub struct AgentSession {
     pub agent: Agent,
     pub session: Arc<Mutex<Session>>,
@@ -2504,7 +2510,7 @@ pub struct AgentSession {
     extension_injected_queue: Option<Arc<StdMutex<ExtensionInjectedQueue>>>,
     compaction_settings: ResolvedCompactionSettings,
     compaction_runtime: Option<Runtime>,
-    runtime_handle: Option<RuntimeHandle>,
+    runtime_handle: Option<handleType>,
     compaction_worker: CompactionWorkerState,
     model_registry: Option<ModelRegistry>,
     auth_storage: Option<AuthStorage>,
@@ -5919,7 +5925,7 @@ impl AgentSession {
     }
 
     #[must_use]
-    pub fn with_runtime_handle(mut self, runtime_handle: RuntimeHandle) -> Self {
+    pub fn with_runtime_handle(mut self, runtime_handle: handleType) -> Self {
         self.compaction_runtime = None;
         self.runtime_handle = Some(runtime_handle);
         self
