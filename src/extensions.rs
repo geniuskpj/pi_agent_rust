@@ -29260,7 +29260,7 @@ impl EventCoalescer {
         &self,
         event: ExtensionEventName,
         data: CoalescedPayload,
-        runtime_handle: &asupersync::runtime::RuntimeHandle,
+        runtime_handle: &handleType,
     ) {
         let event_name_str = event.to_string();
 
